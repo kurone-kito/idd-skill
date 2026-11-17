@@ -6494,6 +6494,34 @@ test('rework: the heartbeat re-read stops the run when the source body changes',
   }
 });
 
+/** One publication-intent record of a sibling token in the set's journal. */
+function siblingRecord(
+  scenario: ReworkScenario,
+  record: {
+    at: number;
+    token: string;
+    state: 'pending' | 'member' | 'cleanup' | 'abandoned';
+    issue: string;
+    target?: string;
+    session?: string;
+    set?: string;
+    anchor?: string;
+    minimizedReason?: string;
+  },
+): void {
+  scenario.comments.push({
+    issue: 2674,
+    at: record.at,
+    ...(record.minimizedReason === undefined
+      ? {}
+      : { minimizedReason: record.minimizedReason }),
+    body: [
+      `<!-- idd-skill-authoring-publication-intent: target=${record.target ?? 'target-sibling'}; anchor=${record.anchor ?? ANCHOR_REF}; set=${record.set ?? REWORK_SET}; session=${record.session ?? REWORK_SESSION}; token=${record.token}; journal=o/r#2674; issue=${record.issue}; actor=kurone-kito; state=${record.state} -->`,
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+    ].join('\n'),
+  });
+}
+
 interface RefusalCase {
   name: string;
   scenario: () => ReworkScenario;
@@ -7138,6 +7166,93 @@ const REFUSALS: RefusalCase[] = [
     reason:
       /latest record of the publication token token-hidden of the set set-rework, comment \d+, is minimized as outdated/,
   },
+  {
+    name: 'a sibling token whose records name two different sets',
+    scenario: () => {
+      const scenario = reworkScenario();
+      siblingRecord(scenario, {
+        at: 46,
+        token: 'token-straddle',
+        state: 'pending',
+        issue: 'none',
+      });
+      siblingRecord(scenario, {
+        at: 47,
+        token: 'token-straddle',
+        state: 'pending',
+        issue: 'o/r#5009',
+        set: 'set-elsewhere',
+      });
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-straddle name different sets or anchors/,
+  },
+  {
+    name: 'a sibling token whose later records name another anchor',
+    scenario: () => {
+      const scenario = reworkScenario();
+      siblingRecord(scenario, {
+        at: 46,
+        token: 'token-moved',
+        state: 'pending',
+        issue: 'none',
+      });
+      siblingRecord(scenario, {
+        at: 47,
+        token: 'token-moved',
+        state: 'pending',
+        issue: 'o/r#5010',
+        anchor: 'o/r#4999',
+      });
+      siblingRecord(scenario, {
+        at: 48,
+        token: 'token-moved',
+        state: 'member',
+        issue: 'o/r#5010',
+      });
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-moved name different sets or anchors/,
+  },
+  {
+    name: 'sibling records of one token that disagree on their session',
+    scenario: () => {
+      const scenario = reworkScenario();
+      siblingRecord(scenario, {
+        at: 46,
+        token: 'token-sessions',
+        state: 'pending',
+        issue: 'none',
+      });
+      siblingRecord(scenario, {
+        at: 47,
+        token: 'token-sessions',
+        state: 'pending',
+        issue: 'o/r#5011',
+        session: 'session-other',
+      });
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-sessions of the set set-rework disagree on their target or session/,
+  },
+  {
+    name: 'a sibling record with an unreadable minimization state',
+    scenario: () => {
+      const scenario = reworkScenario();
+      siblingRecord(scenario, {
+        at: 46,
+        token: 'token-unreadable',
+        state: 'pending',
+        issue: 'none',
+        minimizedReason: '',
+      });
+      return scenario;
+    },
+    reason: /has no readable minimization state/,
+  },
 ];
 
 for (const refusal of REFUSALS) {
@@ -7179,6 +7294,60 @@ for (const refusal of REFUSALS) {
     }
   });
 }
+
+test('rework: a settled sibling written under a resumed session does not block the set', () => {
+  const scenario = reworkScenario();
+  for (const [at, state, issue] of [
+    [46, 'pending', 'none'],
+    [47, 'pending', 'o/r#5012'],
+    [48, 'member', 'o/r#5012'],
+  ] as const) {
+    siblingRecord(scenario, {
+      at,
+      token: 'token-resumed-child',
+      state,
+      issue,
+      session: 'session-resumed',
+    });
+  }
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a hidden earlier record of a settled sibling does not block the set', () => {
+  const scenario = reworkScenario();
+  siblingRecord(scenario, {
+    at: 46,
+    token: 'token-hidden-early',
+    state: 'pending',
+    issue: 'none',
+    minimizedReason: 'outdated',
+  });
+  siblingRecord(scenario, {
+    at: 47,
+    token: 'token-hidden-early',
+    state: 'pending',
+    issue: 'o/r#5013',
+  });
+  siblingRecord(scenario, {
+    at: 48,
+    token: 'token-hidden-early',
+    state: 'member',
+    issue: 'o/r#5013',
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    fixture.restore();
+  }
+});
 
 test('rework: a plain anchor keeps the original check and its messages', () => {
   const fixture = setup({

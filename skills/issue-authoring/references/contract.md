@@ -4113,11 +4113,11 @@ claim of the confirmation review is released:
      the same record order and ends settled (`member`, or `cleanup` then
      `abandoned`). Each of its records names the journal it was read from, its
      actor is its author, its minimization state is readable, the token's
-     records agree on one target and one session, and the latest record is not
-     minimized as outdated. A token that ends at `cleanup`, or at `pending`
-     after an issue was attached, or whose records break those rules, is a
-     created but unfinished child that must be reconciled before another child
-     (preventive; no observed incident yet). A
+     records agree on one target, one session, and one set and anchor, and
+     the latest record is not minimized as outdated. A token that ends at
+     `cleanup`, or at `pending` after an issue was attached, or whose records
+     break those rules, is a created but unfinished child that must be
+     reconciled before another child (preventive; no observed incident yet). A
      token that never got an issue cannot be closed by any record, so the
      helper lists the repository's issues updated since a minute before the
      token's first record (one paginated call that filters inside `gh`, with no

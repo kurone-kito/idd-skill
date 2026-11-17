@@ -3200,6 +3200,33 @@ test('a verified rework-authored history ends the old bundle without confirming 
   assert.equal(read.ok ? '' : read.reason, 'rework-already-authored');
 });
 
+test('a recorded rework authoring with another replay failure stays a replay refusal', () => {
+  const { selected } = oneCompletedDecision();
+  const authored = record('rework-2', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+  // The authoring answers no request, so the replay refuses the history for
+  // that cause; the history is not reported as already authored.
+  const read = readReworkHandoff(
+    handoffInput([
+      recordComment('1', selected, 1),
+      recordComment('2', authored, 2),
+    ]),
+  );
+  assert.equal(read.ok, false);
+  assert.equal(
+    read.ok ? '' : read.reason,
+    'replay-invalid',
+    JSON.stringify(read),
+  );
+});
+
 test('a history that records a rework authoring is named, even when no evidence is supplied', () => {
   const { comments } = reworkRequestedHistory();
   const sourceAfter: ProvisionalDecisionSource = {

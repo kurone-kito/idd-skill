@@ -652,17 +652,21 @@ is never rewritten); the handoff's own hold (token = handoff id, target and
 anchor = the handoff's anchor) replays to member in the journals, with its
 member record after the generation's opening; and, on the first read, every
 other token of the set replays in record order and ends settled (member, or
-cleanup then abandoned), and no issue updated since a minute before the first
-record of a token that never got an issue carries that token (one listing,
-filtered inside gh, finds it). The
+cleanup then abandoned) with records that name the journal they are in, an
+actor that is their author, one target, one session, one set and anchor, a
+readable minimization state, and a latest record not minimized as outdated, and
+no issue updated since a minute before the first record of a token that never
+got an issue carries that token (one listing, filtered inside gh, finds it). The
 provisional records, the claim lineage and the stale age come from the
 default-branch trusted policy, never the local file, without the environment
 actor list or the user-global layer, and an untrusted or edited record marker
 refuses the history, as Discover does; the trusted default branch must also see
 no active claim. The same checks run again right before the first write, at
 each heartbeat read and before member, so a changed owner, handoff, request or
-source stops the run. The report's anchor object then carries a rework object with the
-handoff id, its downstream results and the owner facts the guarded
+source stops the run. A handoff that did not apply is reported in a
+reworkHandoff object with its reason, its issue codes and, for a refused record
+marker, the comment. The report's anchor object then carries a rework object
+with the handoff id, its downstream results and the owner facts the guarded
 rework-authored request takes. The handoff is not ownership: adoption (label,
 owner acquire marker, hold records, the reviewed body rewrite) stays the
 authoring session's own work (contract.md, "Rework adoption of a retained
@@ -1801,9 +1805,9 @@ function followsComment(
  * trusted record fails closed. Each record is held to the identity checks of
  * {@link replayAnchorHold}: it names the journal it was read from, its actor is
  * its author, its minimization state is readable, a token's records agree on
- * one target and one session, and the latest record is not minimized as
- * outdated. The session is not tied to the handoff's, because a child
- * published after a resume carries the resumed session.
+ * one target and one session and name one set and anchor, and the latest record
+ * is not minimized as outdated. The session is not tied to the handoff's,
+ * because a child published after a resume carries the resumed session.
  */
 function checkSettledSetRecords(input: {
   journals: readonly {
@@ -1835,6 +1839,10 @@ function checkSettledSetRecords(input: {
     }[]
   >();
   const stop = (problem: string) => ({ problem, unattached: [] });
+  // Whether the records of a token name this set and anchor: a token whose
+  // records name both this set and another one is a journal that disagrees
+  // with itself, as `replayAnchorHold` refuses for the hold token.
+  const identities = new Map<string, boolean>();
   for (const journal of input.journals) {
     for (const comment of journal.comments) {
       if (
@@ -1855,11 +1863,17 @@ function checkSettledSetRecords(input: {
         }
         continue;
       }
-      if (
-        intent.set !== input.set ||
-        !sameIssueRef(intent.anchor, input.anchorRef) ||
-        intent.token === input.holdToken
-      ) {
+      const ours =
+        intent.set === input.set &&
+        sameIssueRef(intent.anchor, input.anchorRef);
+      const seen = identities.get(intent.token);
+      if (seen !== undefined && seen !== ours) {
+        return stop(
+          `the records of the publication token ${intent.token} name different sets or anchors, so a child create may be unreconciled`,
+        );
+      }
+      identities.set(intent.token, ours);
+      if (!ours || intent.token === input.holdToken) {
         continue;
       }
       const where = `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref}`;
