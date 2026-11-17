@@ -3652,7 +3652,7 @@ test('lint.yml selects Node 22 from .node-version after the floor check', () => 
   );
   assert.equal(
     readSharedSetupNodePin(),
-    '820762786026740c76f36085b0efc47a31fe5020',
+    '949feb2413d6458794dcd2491c4babbbce0c15c1',
     'lint.yml: the Node 22 setup must use the repository shared setup-node pin',
   );
   // The three steps must be adjacent and in order: floor, setup, assertion.
@@ -3672,7 +3672,7 @@ test('lint.yml selects Node 22 from .node-version after the floor check', () => 
   );
   assert.match(
     setupStep,
-    /^\s*uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0$/mu,
+    /^\s*uses: actions\/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7\.1\.0$/mu,
   );
   const withBlock = setupStep.split(/^ {8}with:\s*$/mu)[1] ?? '';
   const withKeys = [...withBlock.matchAll(/^ {10}([A-Za-z][\w-]*)\s*:/gmu)].map(
