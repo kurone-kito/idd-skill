@@ -2492,7 +2492,7 @@ function evaluateReworkAnchor(input: {
  * under a handoff that names `set`. It decides nothing about trust: it only
  * keeps an anchor whose records claim a handoff for its open set off the
  * ordinary path when the rework check cannot verify them. A record that
- * parses must name the set in its handoff. One the parser cannot read
+ * parses must name the set in its handoff. One that the parser cannot read
  * (truncated, a shape the record schema refuses, or a duplicate key) cannot say
  * what it asks for, so its text decides: it counts when it holds the event type
  * and the set id, each as a whole quoted string.
