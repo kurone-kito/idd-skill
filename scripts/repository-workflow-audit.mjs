@@ -1719,16 +1719,40 @@ const PNPM_BOUNDARY_WORKFLOW_CALL_INPUTS = {
     type: 'string',
   },
 };
-// The four shards, in order, and the check-project groups each one runs.
+// The test group is split into three parts (issue #5263). Each part runs its
+// own list of files, `test-files`, in place of `pnpm run check test`, so the
+// three parts together own the test group once.
+const PNPM_BOUNDARY_TEST_PARTS = ['test-1', 'test-2', 'test-3'];
+// Static lint runs on Node 22 only (issue #5263). Its include entry names this
+// version and a shard value that no axis combination has, so GitHub adds
+// exactly one lint job, pinned to Node 22 in every lane the node-version
+// expression can yield, and the matrix needs no exclude.
+const PNPM_BOUNDARY_LINT_SHARD = 'lint';
+const PNPM_BOUNDARY_LINT_NODE_VERSION = '22.x';
+// The six shards, in order, and the check-project groups each one runs. The
+// lint shard is not on the matrix's shard axis (see above); the other five are.
 // The audit also checks them against check-project's own group list, so a new
 // group that no shard runs is reported.
 const PNPM_BOUNDARY_SHARDS = [
-  { shard: 'lint', checkGroups: 'lint' },
+  { shard: PNPM_BOUNDARY_LINT_SHARD, checkGroups: 'lint' },
   { shard: 'typecheck', checkGroups: 'typecheck' },
-  { shard: 'test', checkGroups: 'test' },
+  ...PNPM_BOUNDARY_TEST_PARTS.map((shard) => ({ shard, checkGroups: 'test' })),
   { shard: 'distribution', checkGroups: 'build:check audit' },
 ];
 const PNPM_BOUNDARY_SHARD_RUN = `pnpm run check \${{ matrix.check-groups }}`;
+// The check-groups step runs for every shard that is not a test part, and the
+// test-part step for every test part, so exactly one of them runs.
+const PNPM_BOUNDARY_SHARD_IF = `\${{ !startsWith(matrix.shard, 'test-') }}`;
+const PNPM_BOUNDARY_TEST_PART_IF = `\${{ startsWith(matrix.shard, 'test-') }}`;
+const PNPM_BOUNDARY_TEST_PART_ENV = {
+  TEST_FILES: `\${{ matrix.test-files }}`,
+};
+// package.json's `test:scripts` with its glob replaced by the part's files.
+// The list reaches the shell through TEST_FILES, never through the script.
+const PNPM_BOUNDARY_TEST_PART_RUN =
+  'pnpm exec node --test --import ./tests/isolate-state.mts $TEST_FILES';
+const PNPM_BOUNDARY_TEST_FILE_PATTERN =
+  /^tests\/[A-Za-z0-9][\w.-]*\.test\.mts$/;
 const PNPM_BOUNDARY_FULL_RUN = `\${{ inputs.lint-command || 'pnpm run check' }}`;
 const PNPM_BOUNDARY_BOUNDARY_RUN = `\${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}`;
 const PNPM_BOUNDARY_BOUNDARY_IF = `\${{ matrix.shard == 'distribution' }}`;
@@ -1811,10 +1835,10 @@ function checkSingleRunStep(path, jobId, steps, expected, report) {
 }
 // RWA008: the shards of pnpm-boundary.yml (#4993). The two suite jobs select
 // complementary modes, the shards partition check-project's groups exactly
-// once per supported Node version (the test group is excluded on Node 26.x,
-// decision #5182), no job can cancel a sibling or hide a
-// failure, the aggregate reads both results, and the manual Node 22 floor lane
-// selects only its matching version column.
+// once per supported Node version (the lint shard runs on Node 22 only, and
+// the test group is split into three file lists, issue #5263), no job can
+// cancel a sibling or hide a failure, the aggregate reads both results, and
+// the manual Node 22 floor lane selects only its matching version column.
 function checkPnpmBoundaryShards(root, report) {
   const path = `${WORKFLOWS_DIRECTORY}/pnpm-boundary.yml`;
   const text = readRequiredText(root, path, RWA008, report);
@@ -1963,9 +1987,11 @@ function checkPnpmBoundaryWorkflow(path, workflow, report) {
       {
         run: isGroup ? PNPM_BOUNDARY_SHARD_RUN : PNPM_BOUNDARY_FULL_RUN,
         marker: /pnpm run check|inputs\.lint-command/,
+        ...(isGroup ? { ifValue: PNPM_BOUNDARY_SHARD_IF } : {}),
       },
       report,
     );
+    checkPnpmBoundaryTestPartStep(path, jobId, steps, isGroup, report);
     checkSingleRunStep(
       path,
       jobId,
@@ -1987,22 +2013,54 @@ function checkPnpmBoundaryWorkflow(path, workflow, report) {
     checkPnpmBoundaryAggregateStep(path, aggregate, report);
   }
 }
-/**
- * The Node 26.x lane skips the test group (decision #5182), so the matrix must
- * exclude exactly that combination: one entry, `node-version: 26.x` with
- * `shard: test`. Any other exclude, or none, is a violation.
- */
-function pnpmBoundaryTestExcludeMatches(exclude) {
-  if (!Array.isArray(exclude) || exclude.length !== 1) {
-    return false;
-  }
-  const entry = asMapping(exclude[0]);
-  return (
-    entry !== undefined &&
-    Object.keys(entry).length === 2 &&
-    entry['node-version'] === '26.x' &&
-    entry.shard === 'test'
+// The step that runs a test part (issue #5263). The group job has exactly one,
+// and the full run has none, because its single `lint-command` step already
+// runs the whole suite.
+function checkPnpmBoundaryTestPartStep(path, jobId, steps, isGroup, report) {
+  const matching = steps.filter(
+    (step) =>
+      typeof step.run === 'string' && /node --test|\$TEST_FILES/.test(step.run),
   );
+  if (!isGroup) {
+    if (matching.length !== 0) {
+      report(
+        RWA008,
+        path,
+        `${jobId} must not run a test part -- its lint-command step runs the whole suite once`,
+      );
+    }
+    return;
+  }
+  const step = matching[0];
+  const env = asMapping(step?.env);
+  if (
+    matching.length !== 1 ||
+    step.run !== PNPM_BOUNDARY_TEST_PART_RUN ||
+    step.if !== PNPM_BOUNDARY_TEST_PART_IF ||
+    env === undefined ||
+    Object.keys(env).length !== 1 ||
+    env.TEST_FILES !== PNPM_BOUNDARY_TEST_PART_ENV.TEST_FILES
+  ) {
+    report(
+      RWA008,
+      path,
+      `${jobId} must run \`${PNPM_BOUNDARY_TEST_PART_RUN}\` in exactly one step with if: ${PNPM_BOUNDARY_TEST_PART_IF} and env: TEST_FILES: ${PNPM_BOUNDARY_TEST_PART_ENV.TEST_FILES} -- the same command as the test:scripts script, on the part's own files`,
+    );
+  }
+}
+/**
+ * The paths of one test part's `test-files`: a block scalar with one
+ * `tests/<name>.test.mts` path per line, and no empty line. Returns
+ * `undefined` for any other value.
+ */
+function pnpmBoundaryTestFilePaths(value) {
+  if (typeof value !== 'string' || value === '') {
+    return undefined;
+  }
+  const paths = value.split('\n');
+  return paths.every((entry) => PNPM_BOUNDARY_TEST_FILE_PATTERN.test(entry))
+    ? paths
+    : undefined;
 }
 function checkPnpmBoundaryMatrix(path, group, report) {
   const strategy = asMapping(group.strategy);
@@ -2015,15 +2073,20 @@ function checkPnpmBoundaryMatrix(path, group, report) {
   }
   const matrix = asMapping(strategy?.matrix);
   const shardAxis = matrix?.shard;
-  const expectedShards = PNPM_BOUNDARY_SHARDS.map(({ shard }) => shard);
+  const expectedShards = PNPM_BOUNDARY_SHARDS.map(({ shard }) => shard).filter(
+    (shard) => shard !== PNPM_BOUNDARY_LINT_SHARD,
+  );
   const include = matrix?.include;
   const entries = Array.isArray(include) ? include.map(asMapping) : undefined;
+  const isTestPart = (shard) => PNPM_BOUNDARY_TEST_PARTS.includes(shard);
   const shardsMatch =
     matrix !== undefined &&
+    // No exclude: static lint reaches Node 22 only through its include entry
+    // (issue #5263), and the Node 26.x test exclude of decision #5182 is gone,
+    // so every job comes from the axes and the include list.
     Object.keys(matrix).every((key) =>
-      ['node-version', 'shard', 'include', 'exclude'].includes(key),
+      ['node-version', 'shard', 'include'].includes(key),
     ) &&
-    pnpmBoundaryTestExcludeMatches(matrix.exclude) &&
     matrix['node-version'] === PNPM_BOUNDARY_NODE_VERSION_MATRIX &&
     Array.isArray(shardAxis) &&
     shardAxis.length === expectedShards.length &&
@@ -2032,31 +2095,59 @@ function checkPnpmBoundaryMatrix(path, group, report) {
     entries.length === PNPM_BOUNDARY_SHARDS.length &&
     entries.every((entry, index) => {
       const expected = PNPM_BOUNDARY_SHARDS[index];
+      const lint = expected.shard === PNPM_BOUNDARY_LINT_SHARD;
+      const part = isTestPart(expected.shard);
       return (
         entry !== undefined &&
-        Object.keys(entry).length === 2 &&
+        Object.keys(entry).length === (lint || part ? 3 : 2) &&
         entry.shard === expected.shard &&
-        entry['check-groups'] === expected.checkGroups
+        entry['check-groups'] === expected.checkGroups &&
+        (lint
+          ? entry['node-version'] === PNPM_BOUNDARY_LINT_NODE_VERSION
+          : !Object.hasOwn(entry, 'node-version')) &&
+        (part
+          ? pnpmBoundaryTestFilePaths(entry['test-files']) !== undefined
+          : !Object.hasOwn(entry, 'test-files'))
       );
     });
   if (!shardsMatch) {
     report(
       RWA008,
       path,
-      `${PNPM_BOUNDARY_GROUP_JOB}'s matrix must use the supported Node version selector, the four shard axis values, and the exact check-group include list ${PNPM_BOUNDARY_SHARDS.map(({ shard, checkGroups }) => `${shard}: ${checkGroups}`).join('; ')}`,
+      `${PNPM_BOUNDARY_GROUP_JOB}'s matrix must use the supported Node version selector, the five shard axis values (every shard except lint), no exclude, and the exact check-group include list ${PNPM_BOUNDARY_SHARDS.map(({ shard, checkGroups }) => `${shard}: ${checkGroups}`).join('; ')}. The lint entry names node-version ${PNPM_BOUNDARY_LINT_NODE_VERSION}, and each test part also lists its test-files as one tests/<name>.test.mts path per line`,
     );
   }
-  // Every check-project group runs in exactly one shard per Node version. The
-  // shard table above is checked against check-project's own list, so the
-  // partition stays complete when check-project gains or loses a group. The
-  // test group has no Node 26.x shard (the exclude above, decision #5182).
-  const known = defaultCheckGroups(undefined).map(({ id }) => id);
-  const counts = new Map(known.map((id) => [id, 0]));
-  for (const { checkGroups } of PNPM_BOUNDARY_SHARDS) {
-    for (const id of checkGroups.split(' ')) {
-      counts.set(id, (counts.get(id) ?? 0) + 1);
+  // A file in two parts would run twice and could not keep both parts within
+  // their measured duration, so each path is listed once across the parts.
+  const listed = new Set();
+  for (const entry of entries ?? []) {
+    for (const listedPath of pnpmBoundaryTestFilePaths(entry?.['test-files']) ??
+      []) {
+      if (listed.has(listedPath)) {
+        report(
+          RWA008,
+          path,
+          `${listedPath} is listed in more than one test part, or twice in one -- each test file belongs to exactly one part`,
+        );
+      }
+      listed.add(listedPath);
     }
   }
+  // Every check-project group is owned by exactly one shard per Node version.
+  // The shard table above is checked against check-project's own list, so the
+  // partition stays complete when check-project gains or loses a group. The
+  // lint shard has one Node 22 lane (its include entry), and the three test
+  // parts together own the test group once.
+  const known = defaultCheckGroups(undefined).map(({ id }) => id);
+  const owners = new Map(known.map((id) => [id, new Set()]));
+  for (const { shard, checkGroups } of PNPM_BOUNDARY_SHARDS) {
+    for (const id of checkGroups.split(' ')) {
+      const set = owners.get(id) ?? new Set();
+      set.add(isTestPart(shard) ? 'the test parts' : shard);
+      owners.set(id, set);
+    }
+  }
+  const counts = new Map([...owners].map(([id, set]) => [id, set.size]));
   for (const [id, count] of counts) {
     if (!known.includes(id)) {
       report(
