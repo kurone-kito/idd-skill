@@ -1769,37 +1769,38 @@ const NODE_TEST_COMMAND =
 const TEXT_PRINTING_COMMAND = /^echo$/;
 
 /** Returns the index of the quote that closes the span opened at `start`, or
- * -1 when the line ends first. A backslash escapes only in double quotes. */
-function shellQuoteEnd(line: string, start: number): number {
-  const quote = line.charAt(start);
+ * -1 when the text ends first. A backslash escapes only in double quotes. */
+function shellQuoteEnd(shell: string, start: number): number {
+  const quote = shell.charAt(start);
   let index = start + 1;
-  while (index < line.length) {
-    if (line.charAt(index) === quote) {
+  while (index < shell.length) {
+    if (shell.charAt(index) === quote) {
       return index;
     }
-    index += quote === '"' && line.charAt(index) === '\\' ? 2 : 1;
+    index += quote === '"' && shell.charAt(index) === '\\' ? 2 : 1;
   }
   return -1;
 }
 
-/** Returns whether the output of an `echo` on the line may become code: the
- * line pipes, redirects output, or opens a group or a command substitution
- * outside quotes (`echo 'node --test' | bash`, `echo 'node --test' > run.sh`,
- * `x=$(true; echo 'node --test'); eval "$x"`), or holds a `$'...'` or
- * `$"..."` quote, whose end this loop cannot find. A comment is not skipped,
- * so a pipe in a comment only keeps more text, which fails loudly. */
-function echoOutputMayRun(line: string): boolean {
+/** Returns whether the output of an `echo` in the shell text may become code:
+ * the text pipes, redirects output, or opens a group or a command
+ * substitution outside quotes (`echo 'node --test' | bash`,
+ * `echo 'node --test' > run.sh`, `x=$(true; echo 'node --test'); eval "$x"`),
+ * or holds a `$'...'` or `$"..."` quote, whose end this loop cannot find. A
+ * comment is not skipped, so a pipe in a comment only keeps more text, which
+ * fails loudly. */
+function echoOutputMayRun(shell: string): boolean {
   let index = 0;
-  while (index < line.length) {
-    const char = line.charAt(index);
+  while (index < shell.length) {
+    const char = shell.charAt(index);
     if (char === '\\') {
       index += 2;
     } else if (char === '"' || char === "'") {
-      const end = shellQuoteEnd(line, index);
+      const end = shellQuoteEnd(shell, index);
       if (end === -1) {
         return false;
       }
-      if (line.charAt(index - 1) === '$') {
+      if (shell.charAt(index - 1) === '$') {
         return true;
       }
       index = end + 1;
@@ -1807,8 +1808,8 @@ function echoOutputMayRun(line: string): boolean {
       char === '>' ||
       char === '(' ||
       (char === '|' &&
-        line.charAt(index - 1) !== '|' &&
-        line.charAt(index + 1) !== '|')
+        shell.charAt(index - 1) !== '|' &&
+        shell.charAt(index + 1) !== '|')
     ) {
       return true;
     } else {
@@ -1818,92 +1819,92 @@ function echoOutputMayRun(line: string): boolean {
   return false;
 }
 
-/** Returns the part of one shell line that can start a command, so that
+/** Returns the part of a step's shell text that can start a command, so that
  * `NODE_TEST_COMMAND` does not match text that only mentions `node --test`
  * (issue #5269; observed 2026-11-16 in the review of pull request #5268: the
  * false match on `echo "node --test"` and `echo ok # node --test`).
  *
- * One pass over the line. The default is to keep text, so a shape that the
- * scan does not know fails loudly instead of passing. Only two things are
- * removed:
- * - An unquoted `#` at the start of a word drops the rest of the line. A
+ * One pass over the whole `run` value, so a quote, a group, or a substitution
+ * that spans lines is seen as the shell sees it. The default is to keep text,
+ * so a shape that the scan does not know fails loudly instead of passing. Only
+ * two things are removed:
+ * - An unquoted `#` at the start of a word drops the rest of its line. A
  *   backslash makes the next character literal, so it never opens or closes
  *   a quote and never makes a following `#` start a comment, and the word
- *   start is read from the original line, never from the output.
+ *   start is read from the original text, never from the output.
  * - A quoted argument that holds whitespace or `;&|` becomes one space when
- *   the current simple command, the text since the last `;`, `&`, `|`, or
- *   `(`, starts with `echo`. Any other quoted span is kept with its quotes,
- *   because it can be code: `bash -c '...'`, `eval "$CMD"`, `CMD='...'`,
- *   `for c in '...'`, `node -e '...'`.
+ *   the current simple command, the text since the last `;`, `&`, `|`, `(`,
+ *   or newline, starts with `echo`. Any other quoted span is kept with its
+ *   quotes, because it can be code: `bash -c '...'`, `eval "$CMD"`,
+ *   `CMD='...'`, `for c in '...'`, `node -e '...'`.
  *
  * A quoted span with no whitespace or `;&|`, an empty one included, is
  * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
- * all still match. A line that holds a `${{` removes nothing, because GitHub
+ * all still match. A step that holds a `${{` removes nothing, because GitHub
  * Actions substitutes the expression, quotes and all, before the shell reads
- * the line; nor does a line that pipes, redirects output, or opens a group or
- * substitution, because the output of an `echo` there can become code. Such
- * a line only unquotes spans in place.
- * The rest of the line is kept verbatim from a backtick, from a `$'...'` or
- * `$"..."` quote, from a double-quoted span with a `$(` or backtick in it,
- * and from a quote that never closes.
+ * the text; nor does a step that pipes, redirects output, or opens a group or
+ * substitution anywhere, because the output of an `echo` there can become
+ * code. Such a step only unquotes spans in place. The rest of the text is
+ * kept verbatim from a backtick, from a `$'...'` or `$"..."` quote, from a
+ * double-quoted span with a `$(` or backtick in it, and from a quote that
+ * never closes.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
  * command but `echo` (`grep -q "node --test" f`), which includes an `echo`
  * after `then` or `{` or after a `>&` redirection, because the first word
- * since the last `;`, `&`, `|`, or `(` names the command; a `#` inside a kept
- * quoted span or after a backtick (`bash -c 'echo ok # node --test'`); and
- * any line with a `${{`, a pipe, a redirection, or a `(`. These pass, as a
- * false acceptance, although they can run the test runner: a group, pipe, or
- * substitution that spans lines (`x=$(` then `echo '...'` then `)`); a word
- * that an expansion or an escape builds, such as `node$IFS--test` or
- * `node\ --test` (the raw-line check missed them too); a `#` inside
- * `${...}`; a quoted variable glued to `node`; a comment that ends in a
- * backslash (the backslash-newline join runs first, as it always did); and a
- * command between two quotes on a line that starts inside a quote opened on
- * an earlier line, when that line starts with `echo`. The scan reads one line
- * alone, so it reads such a line as if it started outside a quote. */
-function executableShellText(line: string): string {
-  // GitHub Actions substitutes a `${{ ... }}` expression, quotes and all,
-  // before the shell reads the line, so a line with one removes nothing. Nor
-  // does a line where the output of an `echo` can become code.
-  const keepAll = line.includes('${{') || echoOutputMayRun(line);
+ * since the last `;`, `&`, `|`, `(`, or newline names the command; a `#`
+ * inside a kept quoted span or after a backtick
+ * (`bash -c 'echo ok # node --test'`); and any step with a `${{`, a pipe, a
+ * redirection, or a `(`. These pass, as a false acceptance, although they can
+ * run the test runner: a word that an expansion or an escape builds, such as
+ * `node$IFS--test` or `node\ --test` (the raw-line check missed them too); a
+ * `#` inside `${...}`; a quoted variable glued to `node`; and a comment that
+ * ends in a backslash (the backslash-newline join runs first, as it always
+ * did). A heredoc body is read as shell text, as are its quotes. */
+function executableShellText(shell: string): string {
+  const keepAll = shell.includes('${{') || echoOutputMayRun(shell);
   let text = '';
   let index = 0;
   let afterEscape = false;
   let commandStart = 0;
-  while (index < line.length) {
-    const char = line.charAt(index);
+  while (index < shell.length) {
+    const char = shell.charAt(index);
     if (char === '\\') {
-      text += line.slice(index, index + 2);
+      text += shell.slice(index, index + 2);
       index += 2;
       afterEscape = true;
       continue;
     }
     const startsWord =
-      index === 0 || (!afterEscape && /[\s;&|(]/.test(line.charAt(index - 1)));
+      index === 0 || (!afterEscape && /[\s;&|(]/.test(shell.charAt(index - 1)));
     afterEscape = false;
     if (char === '#' && startsWord && !keepAll) {
-      break;
+      const lineEnd = shell.indexOf('\n', index);
+      if (lineEnd === -1) {
+        break;
+      }
+      index = lineEnd;
+      continue;
     }
     if (char === '`') {
-      return text + line.slice(index);
+      return text + shell.slice(index);
     }
     if (char !== '"' && char !== "'") {
       text += char;
       index += 1;
-      if (/[;&|(]/.test(char)) {
+      if (/[;&|(\n]/.test(char)) {
         commandStart = text.length;
       }
       continue;
     }
-    const end = shellQuoteEnd(line, index);
+    const end = shellQuoteEnd(shell, index);
     if (end === -1 || text.endsWith('$')) {
-      return text + line.slice(index);
+      return text + shell.slice(index);
     }
-    const body = line.slice(index + 1, end);
+    const body = shell.slice(index + 1, end);
     if (char === '"' && /\$\(|`/.test(body)) {
-      return text + line.slice(index);
+      return text + shell.slice(index);
     }
     const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
     if (/^[^\s;&|]*$/.test(body)) {
@@ -1911,7 +1912,7 @@ function executableShellText(line: string): string {
     } else if (!keepAll && TEXT_PRINTING_COMMAND.test(command)) {
       text += ' ';
     } else {
-      text += line.slice(index, end + 1);
+      text += shell.slice(index, end + 1);
     }
     index = end + 1;
   }
@@ -1960,10 +1961,10 @@ function assertJobTimeoutMinutes(
   );
 }
 
-/** Requires that no `run` line of the job's steps starts the Node test
- * runner. Backslash-newline continuations are joined first. Each line is
- * reduced by `executableShellText`, so a comment or a quoted argument that
- * only mentions `node --test` does not count. */
+/** Requires that no `run` value of the job's steps starts the Node test
+ * runner. Backslash-newline continuations are joined first. Each value is
+ * reduced whole by `executableShellText`, so a comment or a quoted argument
+ * that only mentions `node --test` does not count. */
 function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
   const { steps } = parsedWorkflowJob(workflow, jobId);
   assert.ok(
@@ -1974,11 +1975,18 @@ function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
     if (!isWorkflowMapping(step) || typeof step.run !== 'string') {
       continue;
     }
-    for (const line of step.run.replace(/\\\n/g, ' ').split('\n')) {
-      assert.doesNotMatch(
-        executableShellText(line),
-        NODE_TEST_COMMAND,
-        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${line.trim()}`,
+    const text = executableShellText(step.run.replace(/\\\n/g, ' '));
+    const found = NODE_TEST_COMMAND.exec(text);
+    if (found) {
+      const lineEnd = text.indexOf('\n', found.index);
+      const offending = text
+        .slice(
+          text.lastIndexOf('\n', found.index) + 1,
+          lineEnd === -1 ? undefined : lineEnd,
+        )
+        .trim();
+      assert.fail(
+        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${offending}`,
       );
     }
   }
@@ -2010,9 +2018,10 @@ function withLintStep(workflow: string, step: string): string {
   );
 }
 
-/** Builds a minimal workflow whose lint job has one step that runs `line`.
- * The line sits in a block scalar so the shell sees it byte for byte: the YAML
- * reader would strip a trailing ` # ...` from a plain scalar before then. */
+/** Builds a minimal workflow whose lint job has one step that runs `line`,
+ * which may hold several lines. The text sits in a block scalar so the shell
+ * sees it byte for byte: the YAML reader would strip a trailing ` # ...` from
+ * a plain scalar before then. */
 function lintWorkflowWithRunLine(line: string): string {
   return [
     'jobs:',
@@ -2021,7 +2030,7 @@ function lintWorkflowWithRunLine(line: string): string {
     '    steps:',
     '      - name: Run one line',
     '        run: |',
-    `          ${line}`,
+    ...line.split('\n').map((text) => `          ${text}`),
   ].join('\n');
 }
 
@@ -2120,7 +2129,10 @@ test('the lint job node --test guard ignores quoted and commented text but still
   const withRunLine = (line: string): string =>
     withLintStep(
       workflow,
-      `      - name: Mention node --test\n        run: |\n          ${line}\n`,
+      `      - name: Mention node --test\n        run: |\n${line
+        .split('\n')
+        .map((text) => `          ${text}`)
+        .join('\n')}\n`,
     );
 
   // Text that only mentions node --test passes, in the live lint job and in a
@@ -2132,6 +2144,8 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo "a" "node --test" "b"',
     'echo "a b" "node --test"',
     'echo "node --test" || true',
+    'echo "node --test"\necho ok # node --test',
+    'echo ok # node --test\necho "node --test"',
     'echo "a > b" "node --test"',
     'echo "a | b" "node --test"',
     "echo 'node --test' \\| true",
@@ -2199,6 +2213,13 @@ test('the lint job node --test guard ignores quoted and commented text but still
     "bash <(true; echo 'node --test')",
     "echo 'node --test #' $'\\'' | bash",
     "echo ok; bash -c 'node --test'",
+    "echo ok\nbash -c 'node --test'",
+    'echo ok # note\nnode --test tests/',
+    'x=$(\n  echo \'node --test tests/\'\n)\neval "$x"',
+    "echo '\n#'; node --test tests/",
+    "{\n  echo 'node --test'\n} | bash",
+    "echo 'start\nend' && node --test tests/ && echo 'x'",
+    'bash <<EOF\nnode --test tests/\nEOF',
     "echo ok && bash -c 'node --test'",
     "echo ok | bash -c 'node --test'",
     "echo $(bash -c 'node --test')",
