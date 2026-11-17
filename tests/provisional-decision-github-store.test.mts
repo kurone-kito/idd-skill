@@ -102,6 +102,10 @@ interface FakeState {
   /** Another actor closes the issue with this reason just before gh does. */
   raceOnClose?: string;
   pageCalls?: number;
+  /** On this paginated comment read (1-based), these comments appear first. */
+  injectOnPage?: { call: number; comments: FakeComment[] };
+  /** After the first issue read is served, these comments appear. */
+  injectAfterIssueRead?: FakeComment[];
   calls: { args: string[]; input: string }[];
 }
 
@@ -182,6 +186,9 @@ if (endpoint.includes('/comments')) {
   }
   if (args.includes('--paginate')) {
     state.pageCalls = (state.pageCalls || 0) + 1;
+    if (state.injectOnPage && state.injectOnPage.call === state.pageCalls) {
+      state.comments.push(...state.injectOnPage.comments);
+    }
     if (state.failures.pages || state.failures.failPagesOn === state.pageCalls) fail(503, 'unavailable');
     reply(state.comments.map((c) => JSON.stringify(commentRow(c))).join('\\n'));
   }
@@ -198,6 +205,10 @@ const issue = {
   labels: [],
 };
 if (state.issue.pullRequest) issue.pull_request = { url: 'https://example.test/pr' };
+if (state.injectAfterIssueRead) {
+  state.comments.push(...state.injectAfterIssueRead);
+  state.injectAfterIssueRead = undefined;
+}
 reply(JSON.stringify(issue));
 `;
 
@@ -823,14 +834,22 @@ test('the source is not closed once it is closed, retitled, or its body changed'
 });
 
 test('the source is not closed after another session took the coordination claim', async () => {
-  for (const [name, seed] of [
-    ['a fresh claim after the release', withReplacedClaim],
-    ['a stale takeover', withStaleTakeover],
+  for (const [name, seed, message] of [
+    [
+      'a fresh claim after the release',
+      withReplacedClaim,
+      /not the active claim/,
+    ],
+    [
+      'a stale takeover',
+      withStaleTakeover,
+      /claim lineage could not be verified: takeover-accepted/,
+    ],
   ] as const) {
     await withFake(seed, async ({ fake, store }) => {
       await assert.rejects(
         store.closeSourceIssue(expectedClose()),
-        /not the active claim|claim lineage could not be verified/,
+        message,
         name,
       );
       assert.deepEqual(fake.writes(), [], name);
@@ -903,6 +922,65 @@ test('a close another actor made just before is reported, not claimed as ours', 
   );
 });
 
+test('the claim is the last check before the close: a takeover after the issue read is caught', async () => {
+  await withFake(
+    (state) => {
+      withClaim(state);
+      // The takeover lands right after the store has read the issue.
+      state.injectAfterIssueRead = [
+        {
+          id: '2',
+          body: renderUnclaimedByMarker({
+            agentId: coordAgent,
+            claimId: coordClaim,
+            timestamp: '2026-11-03T11:30:00Z',
+          }),
+          user: trustedLogin,
+          createdAt: '2026-11-03T11:30:00Z',
+        },
+        {
+          ...claimComment(
+            'codex-other-agent',
+            'claim-4536-other',
+            'issue/4536-other-session',
+            '2026-11-03T11:40:00Z',
+          ),
+          id: '3',
+        },
+      ];
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.closeSourceIssue(expectedClose()),
+        /not the active claim/,
+      );
+      assert.deepEqual(fake.writes(), []);
+      assert.equal(fake.state().issue.state, 'open');
+    },
+  );
+});
+
+test('a trusted actor written with spaces or capitals in the policy is trusted, as the planner trusts it', async () => {
+  await withFake(
+    (state) => {
+      state.comments.push({
+        id: '7',
+        body: recordBody,
+        user: trustedLogin,
+        createdAt: '2026-11-03T11:00:05Z',
+      });
+    },
+    async ({ fake, store }) => {
+      assert.equal(
+        (await store.appendRecordBody(recordId, recordBody)).result,
+        'existed',
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    { policy: { trustedMarkerActors: ['  Kurone-KITO '] } as IddConfig },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // releaseCoordinationClaim
 // ---------------------------------------------------------------------------
@@ -931,14 +1009,22 @@ test('the coordination claim is released with a dated unclaim marker', async () 
 });
 
 test('the coordination claim is not released once another session took it', async () => {
-  for (const [name, seed] of [
-    ['a fresh claim after the release', withReplacedClaim],
-    ['a stale takeover', withStaleTakeover],
+  for (const [name, seed, message] of [
+    [
+      'a fresh claim after the release',
+      withReplacedClaim,
+      /not the active claim/,
+    ],
+    [
+      'a stale takeover',
+      withStaleTakeover,
+      /claim lineage could not be verified: takeover-accepted/,
+    ],
   ] as const) {
     await withFake(seed, async ({ fake, store }) => {
       await assert.rejects(
         store.releaseCoordinationClaim(coordinationClaim),
-        /not the active claim|claim lineage could not be verified/,
+        message,
         name,
       );
       assert.deepEqual(fake.writes(), [], name);
@@ -1153,10 +1239,26 @@ function loadSeed(seed: SeedStore): (state: FakeState) => void {
 function trustSnapshot(
   master: 'enabled' | 'disabled',
   config: IddConfig | null = policy,
+  unreadable?: string,
 ): TrustedAutoDecideSnapshot {
   const classes = Object.fromEntries(
     AUTO_DECIDE_CLASSES.map((cls) => [cls, 'class-off']),
   ) as TrustedAutoDecideReport['classes'];
+  if (unreadable !== undefined) {
+    return {
+      report: {
+        status: 'unreadable',
+        source: 'repository',
+        ref: 'main',
+        master: 'unreadable',
+        classes: Object.fromEntries(
+          AUTO_DECIDE_CLASSES.map((cls) => [cls, 'unreadable']),
+        ) as TrustedAutoDecideReport['classes'],
+        error: unreadable,
+      },
+      policyConfig: null,
+    };
+  }
   return {
     report: {
       status: 'readable',
@@ -1189,6 +1291,8 @@ async function runCommand(
     master?: 'enabled' | 'disabled';
     /** The trusted config the Nth trust read returns (the first read is 1). */
     trustAt?: (read: number) => IddConfig | null;
+    /** Make every trust read an unreadable report that carries this error. */
+    unreadable?: string;
   } = {},
 ): Promise<CliRun> {
   requestCount += 1;
@@ -1205,6 +1309,7 @@ async function runCommand(
       return trustSnapshot(
         options.master ?? 'enabled',
         options.trustAt ? options.trustAt(reads) : policy,
+        options.unreadable,
       );
     },
     createStore: (input) => ({
@@ -1457,6 +1562,15 @@ test('a trusted policy change before any write blocks that write', async () => {
       exit: 3,
       closed: false,
       released: false,
+      writes: [],
+    },
+    {
+      write: 'record append',
+      unchangedReads: 2,
+      exit: 3,
+      closed: false,
+      released: false,
+      writes: ['POST'],
     },
     {
       write: 'source close',
@@ -1464,6 +1578,7 @@ test('a trusted policy change before any write blocks that write', async () => {
       exit: 3,
       closed: false,
       released: false,
+      writes: ['POST', 'POST'],
     },
     {
       write: 'claim release',
@@ -1471,6 +1586,7 @@ test('a trusted policy change before any write blocks that write', async () => {
       exit: 2,
       closed: true,
       released: false,
+      writes: ['POST', 'POST', 'issue close'],
     },
   ] as const;
   for (const item of cases) {
@@ -1498,6 +1614,7 @@ test('a trusted policy change before any write blocks that write', async () => {
         new RegExp(`trusted policy changed before the ${item.write}`),
         name,
       );
+      assert.deepEqual(fake.writes(), item.writes, name);
       const state = fake.state();
       assert.equal(state.issue.state === 'closed', item.closed, name);
       assert.equal(
@@ -1511,17 +1628,79 @@ test('a trusted policy change before any write blocks that write', async () => {
   }
 });
 
+test('a takeover between the final plan and an answer append blocks the append', async () => {
+  const seed = await seedBundle();
+  await withFake(loadSeed(seed), async ({ fake }) => {
+    const dry = await runCommand(seed, resolveRequest);
+    // The apply run reads the history to plan, plans again, and then the
+    // command re-reads it before the append: that is the third read.
+    fake.update((state) => {
+      state.injectOnPage = {
+        call: (state.pageCalls ?? 0) + 3,
+        comments: [
+          {
+            id: '4001',
+            body: renderUnclaimedByMarker({
+              agentId: coordAgent,
+              claimId: coordClaim,
+              timestamp: '2026-11-03T11:30:00Z',
+            }),
+            user: trustedLogin,
+            createdAt: '2026-11-03T11:30:00Z',
+          },
+          {
+            ...claimComment(
+              'codex-other-agent',
+              'claim-4536-other',
+              'issue/4536-other-session',
+              '2026-11-03T11:40:00Z',
+            ),
+            id: '4002',
+          },
+        ],
+      };
+    });
+    const blocked = await runCommand(
+      seed,
+      {
+        ...resolveRequest,
+        input: conversationYes,
+        answeredPresentationSha256: dry.report.presentationSha256,
+      },
+      { apply: true },
+    );
+    assert.equal(
+      exitCodeOf(blocked.outcome),
+      3,
+      JSON.stringify(blocked.report),
+    );
+    assert.match(
+      String(blocked.report.reason),
+      /coordination claim is no longer the active claim/,
+    );
+    assert.deepEqual(fake.writes(), []);
+  });
+});
+
 test('an unreadable or absent trusted policy is a recovery hold before any read of the issue', async () => {
   const seed = await seedBundle();
   await withFake(loadSeed(seed), async ({ fake }) => {
-    const held = await runCommand(seed, resolveRequest, {
-      trustAt: () => null,
+    for (const options of [
+      { trustAt: () => null },
+      { unreadable: 'trusted policy fails the schema' },
+    ]) {
+      const held = await runCommand(seed, resolveRequest, options);
+      assert.equal(exitCodeOf(held.outcome), 3);
+      assert.equal(held.report.state, 'refused');
+      assert.equal(held.report.action, 'recovery-hold');
+      assert.match(String(held.report.reason), /trusted repository policy/);
+      assert.deepEqual(fake.state().calls, []);
+    }
+    // An unreadable policy names why; an absent document names no reason.
+    const why = await runCommand(seed, resolveRequest, {
+      unreadable: 'trusted policy fails the schema',
     });
-    assert.equal(exitCodeOf(held.outcome), 3);
-    assert.equal(held.report.state, 'refused');
-    assert.equal(held.report.action, 'recovery-hold');
-    assert.match(String(held.report.reason), /trusted repository policy/);
-    assert.deepEqual(fake.state().calls, []);
+    assert.match(String(why.report.reason), /fails the schema/);
   });
 });
 

@@ -744,6 +744,9 @@ test('a malformed resolve request is a fix-input refusal naming the field, befor
     assert.equal(report.state, 'refused', name);
     assert.equal(report.action, 'fix-input', name);
     assert.equal(report.apply, false, name);
+    // The resolve shape, whichever check refused it.
+    assert.deepEqual(report.steps, [], name);
+    assert.deepEqual(report.recordIds, [], name);
     assert.match(String(report.reason), reason, name);
     assert.deepEqual(h.trustReads, [], name);
     assert.deepEqual(h.created, [], name);

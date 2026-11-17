@@ -19,6 +19,7 @@ import {
   classifyCiChecks,
   isCompletedCiTimestamp,
   renderUnclaimedByMarker,
+  resolveTrustedMarkerActors,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
@@ -334,13 +335,10 @@ export function createGithubProvisionalDecisionStore(input) {
   const scopedRepository =
     host === 'github.com' ? repository : `${host}/${repository}`;
   const policy = input.policy === undefined ? loadIddConfig() : input.policy;
+  // The planner's own normalizer (trimmed, lowercased), so an actor the planner
+  // trusts is never marked untrusted here.
   const trusted = new Set(
-    (Array.isArray(policy?.trustedMarkerActors)
-      ? policy.trustedMarkerActors
-      : []
-    )
-      .filter((login) => typeof login === 'string')
-      .map((login) => login.toLowerCase()),
+    resolveTrustedMarkerActors({ config: policy }).actors,
   );
   async function readHistory() {
     const firstPage = ghApiJsonWithHeaders(`${commentsPath}?per_page=1`);
@@ -591,6 +589,10 @@ export function createGithubProvisionalDecisionStore(input) {
       );
     },
     async closeSourceIssue(expected) {
+      // The single-call issue read goes first and the slower history read last,
+      // so the claim check is the final guard before the close. GitHub offers
+      // no conditional write, so a short window remains either way.
+      assertSourceExpected(readIssueObject(), expected, 'close the source');
       const history = await readCompleteHistory('close the source');
       const active = readActiveClaimFromHistory(history, { policy });
       if (!sameClaim(active, expected.claim)) {
@@ -598,9 +600,6 @@ export function createGithubProvisionalDecisionStore(input) {
           'cannot close the source: the coordination claim is not the active claim',
         );
       }
-      // The issue read comes last, right before the close, to keep the window
-      // between check and write short; GitHub offers no conditional write.
-      assertSourceExpected(readIssueObject(), expected, 'close the source');
       ghText([
         'issue',
         'close',

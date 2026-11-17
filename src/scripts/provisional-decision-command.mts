@@ -35,6 +35,7 @@ import {
   type ProvisionalResolutionResult,
   type ProvisionalResolutionStore,
   type ProvisionalResolveRequest,
+  readActiveClaimFromHistory,
   runProvisionalDecisionCommand,
   runProvisionalResolution,
 } from './provisional-decision.mts';
@@ -88,9 +89,9 @@ Request fields by "type":
                   downstreamResults (optional array of strings)
 
 The resolve action asks whether the implemented choices were acceptable and acts
-only on an actual answer. A dry run reports the presentation, its digest, and
-needsUserAnswer; show the presentation and ask only when needsUserAnswer is
-true. Without an actual answer, --apply only releases the coordination claim
+only on an actual answer. A dry run reports the next step and needsUserAnswer,
+and the presentation and its digest when there is one; show the presentation
+and ask only when needsUserAnswer is true. Without an actual answer, --apply only releases the coordination claim
 and leaves the source pending, so run the dry run first. The action reads no
 opt-in switch, so it still works when dangerouslyAutoDecide is off, but it needs
 a readable trusted repository policy. The rework-authored request is not run by
@@ -112,8 +113,9 @@ needsUserAnswer, presentation, presentationSha256, and warnings. Both carry
 apply.
 Exit codes: 0 planned, applied, or refused with action none (nothing to do
 yet); 2 reconciled (the record already exists, a resolve run finds everything
-done, or a resolve step that nextStep names must run again; read state and
-action on stdout) or a usage error (message on stderr); 3 recovery-hold (inspect before any retry); 4
+done, or a resolve step that nextStep names is still to do: read its reason,
+then run again; read state and action on stdout) or a usage error (message on
+stderr); 3 recovery-hold (inspect before any retry); 4
 fix-input (correct the request or the issue, then re-run).
 `;
 
@@ -885,10 +887,34 @@ function policyFingerprint(snapshot: TrustedAutoDecideSnapshot): string | null {
 function policyCheckedResolutionStore(
   store: ProvisionalResolutionStore,
   stillTrusted: () => boolean,
+  claim: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  },
 ): ProvisionalResolutionStore {
   const check = (write: string) => {
     if (!stillTrusted()) {
       throw new Error(`the trusted policy changed before the ${write}`);
+    }
+  };
+  // Every answer and record append happens under the coordination claim. The
+  // store re-checks the claim for the close and the release itself; the
+  // appends carry no claim, so this re-read, right before the write, keeps a
+  // displaced session from appending after a takeover. The rework-authored
+  // append is not run by this command: it needs the claim released.
+  const requireActiveClaim = async () => {
+    const history = await store.readHistory();
+    if (!history.complete) {
+      throw new Error('cannot append after incomplete history');
+    }
+    const active = readActiveClaimFromHistory(history, store);
+    if (
+      active?.claimId !== claim.claimId ||
+      active.agentId !== claim.agentId ||
+      active.branch !== claim.branch
+    ) {
+      throw new Error('the coordination claim is no longer the active claim');
     }
   };
   return {
@@ -903,10 +929,12 @@ function policyCheckedResolutionStore(
     },
     async appendRecordBody(recordId, body) {
       check('record append');
+      await requireActiveClaim();
       return store.appendRecordBody(recordId, body);
     },
     async appendAnswerBody(body) {
       check('answer append');
+      await requireActiveClaim();
       return store.appendAnswerBody(body);
     },
     async appendReworkAuthoredBody(recordId, body, expected) {
@@ -1002,6 +1030,11 @@ async function runResolveAction(
     }),
     () =>
       policyFingerprint(deps.readTrust({ owner, repo })) === startFingerprint,
+    {
+      claimId: request.claimId,
+      agentId: request.agentId,
+      branch: request.branch,
+    },
   );
   const result = await runProvisionalResolution(request, store, {
     apply: args.apply,
@@ -1032,12 +1065,25 @@ export async function runProvisionalDecisionCommandCli(
     return 0;
   }
 
-  let shape: { readonly type: RequestType; readonly raw: RawRequest };
+  let rawJson: unknown;
   try {
-    shape = validateRequestShape(readRequestJson(args.requestPath));
+    rawJson = readRequestJson(args.requestPath);
   } catch (error) {
     if (error instanceof RequestInputError) {
       return requestInputOutcome(error, args.apply, deps);
+    }
+    throw error;
+  }
+  // A resolve request is refused in the resolve shape, whichever check fails.
+  const wantsResolve = isPlainObject(rawJson) && rawJson.type === 'resolve';
+  let shape: { readonly type: RequestType; readonly raw: RawRequest };
+  try {
+    shape = validateRequestShape(rawJson);
+  } catch (error) {
+    if (error instanceof RequestInputError) {
+      return wantsResolve
+        ? resolutionRefusalOutcome('fix-input', error.message, args.apply, deps)
+        : requestInputOutcome(error, args.apply, deps);
     }
     throw error;
   }
