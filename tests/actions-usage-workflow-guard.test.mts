@@ -1984,10 +1984,13 @@ function assertJobTimeoutMinutes(
 }
 
 /** Requires that no `run` value of the job's steps starts the Node test
- * runner. Backslash-newline continuations are joined first, with nothing between the
- * lines, as the shell joins them. Each value is
- * reduced whole by `executableShellText`, so a comment or a quoted argument
- * that only mentions `node --test` does not count. */
+ * runner. Backslash-newline continuations are joined first, with nothing
+ * between the lines, as the shell joins them. Each value is reduced whole by
+ * `executableShellText`, so a comment or a quoted argument that only mentions
+ * `node --test` does not count. A failure names the lines of the joined value
+ * that hold `--test`, as they were before the reduction and with a continued
+ * command on one line, as the shell reads it; a match with no such line (a text
+ * that a quote spans) falls back to the reduced line. */
 function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
   const { steps } = parsedWorkflowJob(workflow, jobId);
   assert.ok(
@@ -1998,18 +2001,23 @@ function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
     if (!isWorkflowMapping(step) || typeof step.run !== 'string') {
       continue;
     }
-    const text = executableShellText(step.run.replace(/\\\n/g, ''));
+    const joined = step.run.replace(/\\\n/g, '');
+    const text = executableShellText(joined);
     const found = NODE_TEST_COMMAND.exec(text);
     if (found) {
       const lineEnd = text.indexOf('\n', found.index);
-      const offending = text
+      const reduced = text
         .slice(
           text.lastIndexOf('\n', found.index) + 1,
           lineEnd === -1 ? undefined : lineEnd,
         )
         .trim();
+      const original = joined
+        .split('\n')
+        .filter((runLine) => runLine.includes('--test'))
+        .map((runLine) => runLine.trim());
       assert.fail(
-        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${offending}`,
+        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${(original.length > 0 ? original : [reduced]).join(' | ')}`,
       );
     }
   }
@@ -2208,6 +2216,15 @@ test('the lint job node --test guard ignores quoted and commented text but still
       `accepted ${description}`,
     );
   }
+  assert.throws(
+    () =>
+      assertJobRunsNoNodeTest(
+        lintWorkflowWithRunLine('node --test tests/ # restore this step'),
+        'lint',
+      ),
+    /: node --test tests\/ # restore this step$/,
+    'the failure message must name the original run line, comment included',
+  );
   const bashCommandString = withRunLine("bash -c 'node --test tests/'");
   assert.throws(
     () => assertJobRunsNoNodeTest(bashCommandString, 'lint'),
