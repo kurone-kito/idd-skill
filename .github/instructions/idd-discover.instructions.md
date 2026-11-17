@@ -95,8 +95,8 @@ routing:
    check runs before step 2, so an authoring-held roadmap is never routed
    into step 2's traversal. If it carries
    `labels.blockedByHumanLabelName` (default `status:blocked-by-human`),
-   `labels.needsDecisionLabelName` (default `status:needs-decision`, unless a
-   non-roadmap target has A3's `decisionSource`),
+   `labels.needsDecisionLabelName` (default `status:needs-decision`; a
+   non-roadmap `decisionSource` continues),
    `labels.authoringOnlyLabelName` (default `status:authoring-only`), or
    `autoDecide.confirmationLabelName` (default
    `status:needs-confirmation`, any case), also stop without claiming:
@@ -207,7 +207,7 @@ them, manually omit those recorded leaf numbers. (c)/(d), orphan-first: none.
 Search all open issues in the repository. Collect every issue that does
 NOT contain an `idd-skill-roadmap-id` marker (not itself
 a roadmap) or an `idd-skill-blocked-by` marker, AND
-otherwise passes A3's own readiness bullets (do not re-derive them).
+otherwise passes A3's own readiness bullets (do not re-derive).
 
 Apply the configured policy before passing A0-O candidates to A3.5:
 
@@ -405,9 +405,9 @@ never A3's zero-survivor decision tree below.
 From A2, keep only issues that satisfy **all** of the following:
 
 - No configured blocked-by-human, authoring-only, or confirmation label;
-  needs-decision only as a helper-reported `decisionSource` (floor-exempt;
-  [auto-decide](../../docs/idd-workflow.md#auto-decide-at-a-stop)), else
-  excluded. List each `confirmationQueue` source; none is startable
+  needs-decision only as a helper-reported `decisionSource`
+  ([auto-decide](../../docs/idd-workflow.md#auto-decide-at-a-stop)), else
+  excluded. List `confirmationQueue` sources; none is startable
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
@@ -629,7 +629,8 @@ the **highest authored autopilot-suitability score** (the
 `<!-- idd-skill-autopilot-suitability: N -->` footer, or the
 `discover-roadmap-graph` node's `autopilotSuitability`), tie-broken by
 **lowest issue number**. In autopilot runs, skip scores below
-`autopilotSuitability.floor` (default `3`) as human-oriented; a missing
+`autopilotSuitability.floor` (default `3`) as human-oriented, except a
+`decisionSource`, which A4.5 assesses; a missing
 or out-of-range score defaults to the floor and is never skipped
 (subject to the scored-vs-unscored tie-breaker below; an `L`-effort orphan
 candidate under `effortL: refuse` is the exception, see A0-O). Advisory only —
