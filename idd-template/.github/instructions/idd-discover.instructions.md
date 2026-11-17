@@ -90,8 +90,8 @@ routing:
    check runs before step 2, so an authoring-held roadmap is never routed
    into step 2's traversal. If it carries
    `labels.blockedByHumanLabelName` (default `status:blocked-by-human`),
-   `labels.needsDecisionLabelName` (default `status:needs-decision`; a
-   non-roadmap `decisionSource` continues),
+   `labels.needsDecisionLabelName` (default `status:needs-decision`; not
+   for a non-roadmap A3 `decisionSource`),
    `labels.authoringOnlyLabelName` (default `status:authoring-only`), or
    `autoDecide.confirmationLabelName` (default
    `status:needs-confirmation`, any case), also stop without claiming:
