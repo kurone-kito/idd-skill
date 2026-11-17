@@ -1003,8 +1003,8 @@ coordination claim (`claimId`, `agentId`, `branch`), the decisions of the
 current bundle (`decisionGenerations`), and optionally what the user did
 (`input`) with the digest it answered (`answeredPresentationSha256`) and the
 later results that relied on the prior ones (`downstreamResults`). A dry run
-reports the next step and, while a user answer is still needed, the
-presentation and its digest. `--apply` without an answer only releases the
+reports the next step and `needsUserAnswer`, and the presentation and its
+digest when there is one. `--apply` without an answer only releases the
 coordination claim, so run the dry run first. The
 action reads no opt-in switch, so confirmation and rework still work after
 `dangerouslyAutoDecide` is turned off, but the command needs a readable
@@ -1118,18 +1118,19 @@ with the normal unclaim.
 The command's GitHub store takes a record or an answer as already written only
 when its comment is unedited and its author is a trusted marker actor or this
 run posted it. An untrusted comment that pre-posts a deterministic record ID is
-therefore ignored and cannot stall the resolution (observed 2026-11-17 in the
-review of pull request `#5264`; no incident recorded). The decision
-transitions keep their own rule: their planner holds while an untrusted or
-edited comment carries the ID of the record it would write. The command
-re-reads the claim right before every answer or record append. The close
-re-reads the issue and then the claim, and the release re-reads the claim,
-just before the write, and the close reads the closed state back. GitHub
-offers no conditional write, so a close that another actor made with another
-reason before the `gh` close call is reported and never overwritten, while a
-foreign close inside that call cannot be told from this one (preventive; no
-observed incident yet). Neither write invalidates the Discover hints, which
-age out or refresh like any other raw write.
+therefore ignored and cannot stall the resolution (observed in the
+review of pull request `#5264`, 2026-11-16 to 2026-11-17 UTC; no incident
+recorded). The decision transitions keep their own rule: their planner holds
+while an untrusted or edited comment carries the ID of the record it would
+write. The store checks the claim against the history it has just read, right
+before every answer or record append that writes. The close re-reads the issue
+and then the claim, and the release re-reads the claim, just before the write,
+and the close reads the closed state back. GitHub offers no conditional
+write, so a close that another actor made with another reason before the `gh`
+close call is reported and never overwritten, while a foreign close inside
+that call cannot be told from this one (preventive; no observed incident yet).
+Neither write invalidates the Discover hints, which age out or refresh like
+any other raw write.
 
 An alternate preference persists the answer and one `rework-requested`
 record for the one decision it names. The record carries a `handoff` with

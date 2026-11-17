@@ -366,6 +366,18 @@ export function createGithubProvisionalDecisionStore(input: {
   readonly repository: string;
   readonly issueNumber: number;
   readonly policy?: IddConfig | null;
+  /**
+   * The coordination claim a resolution holds. When set, an answer or record
+   * append that would write needs it to be the active claim, checked against
+   * the history read right before the post. The appends carry no claim of
+   * their own, and the rework-authored append needs the claim released, so
+   * neither it nor the decision transitions (which leave this unset) check it.
+   */
+  readonly coordinationClaim?: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  };
 }): ProvisionalResolutionStore {
   const { repository, issueNumber } = input;
   if (
@@ -549,15 +561,33 @@ export function createGithubProvisionalDecisionStore(input: {
     return { id, url: text(posted.html_url) };
   }
 
+  /** Throw unless the held coordination claim, if any, is the active claim. */
+  function requireCoordinationClaim(
+    history: ProvisionalDecisionHistoryRead,
+  ): void {
+    const held = input.coordinationClaim;
+    if (held === undefined) return;
+    if (!sameClaim(readActiveClaimFromHistory(history, { policy }), held)) {
+      throw new Error(
+        'cannot append: the coordination claim is not the active claim',
+      );
+    }
+  }
+
   /**
    * Return the identical comment a lookup counts, or post `body` once and read
-   * it back. `guard` runs after the history read and before any write, so a
-   * refusal writes nothing.
+   * it back. `guard` runs after the history read and before any return or
+   * write, so a refusal writes nothing. `beforePost` runs the same way but
+   * only when a write follows, so an identical comment that already landed is
+   * still returned.
    */
   async function appendOnce(
     matches: (comment: ProvisionalDecisionHistoryComment) => boolean,
     body: string,
-    guard?: () => void,
+    guards: {
+      readonly guard?: () => void;
+      readonly beforePost?: (history: ProvisionalDecisionHistoryRead) => void;
+    } = {},
   ): Promise<{
     readonly result: 'created' | 'existed';
     readonly record: { readonly id: string; readonly url: string };
@@ -566,13 +596,14 @@ export function createGithubProvisionalDecisionStore(input: {
     const existing = before.comments.find(
       (comment) => countsAsLanded(comment) && matches(comment),
     );
-    guard?.();
+    guards.guard?.();
     if (existing) {
       return {
         result: 'existed',
         record: { id: existing.id, url: existing.url },
       };
     }
+    guards.beforePost?.(before);
     const { id, url } = await postComment(body);
     const after = await readHistory();
     if (
@@ -646,7 +677,9 @@ export function createGithubProvisionalDecisionStore(input: {
       };
     },
     async appendRecordBody(recordId, body) {
-      return appendOnce(recordMatcher(recordId), body);
+      return appendOnce(recordMatcher(recordId), body, {
+        beforePost: requireCoordinationClaim,
+      });
     },
     async readSourceState() {
       return sourceStateOf(readIssueObject());
@@ -657,12 +690,18 @@ export function createGithubProvisionalDecisionStore(input: {
           comment.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER) &&
           sameProvisionalAnswerBody(comment.body, body),
         body,
+        { beforePost: requireCoordinationClaim },
       );
     },
     async appendReworkAuthoredBody(recordId, body, expected) {
-      return appendOnce(recordMatcher(recordId), body, () =>
-        assertSourceExpected(readIssueObject(), expected, 'append the record'),
-      );
+      return appendOnce(recordMatcher(recordId), body, {
+        guard: () =>
+          assertSourceExpected(
+            readIssueObject(),
+            expected,
+            'append the record',
+          ),
+      });
     },
     async closeSourceIssue(expected) {
       // The single-call issue read goes first and the slower history read last,

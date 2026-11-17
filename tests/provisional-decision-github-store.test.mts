@@ -253,7 +253,10 @@ async function withFake(
     store: ReturnType<typeof createGithubProvisionalDecisionStore>;
     statePath: string;
   }) => Promise<void>,
-  options: { policy?: IddConfig | null } = {},
+  options: {
+    policy?: IddConfig | null;
+    coordinationClaim?: typeof coordinationClaim;
+  } = {},
 ): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), 'idd-provisional-fake-'));
   const statePath = join(directory, 'state.json');
@@ -315,6 +318,9 @@ async function withFake(
       repository,
       issueNumber,
       policy: options.policy === undefined ? policy : options.policy,
+      ...(options.coordinationClaim
+        ? { coordinationClaim: options.coordinationClaim }
+        : {}),
     });
     await run({ fake, store, statePath });
   } finally {
@@ -634,6 +640,64 @@ test('an incomplete history prevents every write', async () => {
       assert.deepEqual(fake.writes(), []);
     },
   );
+});
+
+test('an append under a held coordination claim needs it to be the active claim, unless the comment already landed', async () => {
+  // Active claim: the append writes.
+  await withFake(
+    withClaim,
+    async ({ fake, store }) => {
+      assert.equal(
+        (await store.appendRecordBody(recordId, recordBody)).result,
+        'created',
+      );
+      assert.deepEqual(fake.writes(), ['POST']);
+    },
+    { coordinationClaim },
+  );
+  // Another session took the claim: neither append writes.
+  await withFake(
+    withReplacedClaim,
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendRecordBody(recordId, recordBody),
+        /not the active claim/,
+      );
+      await assert.rejects(
+        store.appendAnswerBody('text'),
+        /not the active claim/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    { coordinationClaim },
+  );
+  // The comment already landed: it is returned, and nothing is checked or written.
+  await withFake(
+    (state) => {
+      withReplacedClaim(state);
+      state.comments.push({
+        id: '7',
+        body: recordBody,
+        user: trustedLogin,
+        createdAt: '2026-11-03T11:50:00Z',
+      });
+    },
+    async ({ fake, store }) => {
+      assert.equal(
+        (await store.appendRecordBody(recordId, recordBody)).result,
+        'existed',
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    { coordinationClaim },
+  );
+  // No held claim (the decision transitions): the append is not claim-checked.
+  await withFake(withReplacedClaim, async ({ store }) => {
+    assert.equal(
+      (await store.appendRecordBody(recordId, recordBody)).result,
+      'created',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1628,58 +1692,65 @@ test('a trusted policy change before any write blocks that write', async () => {
   }
 });
 
-test('a takeover between the final plan and an answer append blocks the append', async () => {
+test('a takeover right before an answer or a record append blocks that append', async () => {
   const seed = await seedBundle();
-  await withFake(loadSeed(seed), async ({ fake }) => {
-    const dry = await runCommand(seed, resolveRequest);
-    // The apply run reads the history to plan, plans again, and then the
-    // command re-reads it before the append: that is the third read.
-    fake.update((state) => {
-      state.injectOnPage = {
-        call: (state.pageCalls ?? 0) + 3,
-        comments: [
-          {
-            id: '4001',
-            body: renderUnclaimedByMarker({
-              agentId: coordAgent,
-              claimId: coordClaim,
-              timestamp: '2026-11-03T11:30:00Z',
-            }),
-            user: trustedLogin,
-            createdAt: '2026-11-03T11:30:00Z',
-          },
-          {
-            ...claimComment(
-              'codex-other-agent',
-              'claim-4536-other',
-              'issue/4536-other-session',
-              '2026-11-03T11:40:00Z',
-            ),
-            id: '4002',
-          },
-        ],
-      };
+  // Each write reads the history to plan, plans again, and then the store
+  // reads it once more right before it posts: that read carries the claim
+  // check. The answer is the first write (the third read of the run), and the
+  // confirmation record the second (the seventh, after the answer's read-back
+  // and the next two plans).
+  const cases = [
+    { write: 'answer', read: 3, writes: [] },
+    { write: 'record', read: 7, writes: ['POST'] },
+  ] as const;
+  for (const item of cases) {
+    await withFake(loadSeed(seed), async ({ fake }) => {
+      const dry = await runCommand(seed, resolveRequest);
+      fake.update((state) => {
+        state.injectOnPage = {
+          call: (state.pageCalls ?? 0) + item.read,
+          comments: [
+            {
+              id: '4001',
+              body: renderUnclaimedByMarker({
+                agentId: coordAgent,
+                claimId: coordClaim,
+                timestamp: '2026-11-03T11:30:00Z',
+              }),
+              user: trustedLogin,
+              createdAt: '2026-11-03T11:30:00Z',
+            },
+            {
+              ...claimComment(
+                'codex-other-agent',
+                'claim-4536-other',
+                'issue/4536-other-session',
+                '2026-11-03T11:40:00Z',
+              ),
+              id: '4002',
+            },
+          ],
+        };
+      });
+      const blocked = await runCommand(
+        seed,
+        {
+          ...resolveRequest,
+          input: conversationYes,
+          answeredPresentationSha256: dry.report.presentationSha256,
+        },
+        { apply: true },
+      );
+      const name = `${item.write}: ${JSON.stringify(blocked.report)}`;
+      assert.equal(exitCodeOf(blocked.outcome), 3, name);
+      assert.match(
+        String(blocked.report.reason),
+        /coordination claim is not the active claim/,
+        name,
+      );
+      assert.deepEqual(fake.writes(), item.writes, name);
     });
-    const blocked = await runCommand(
-      seed,
-      {
-        ...resolveRequest,
-        input: conversationYes,
-        answeredPresentationSha256: dry.report.presentationSha256,
-      },
-      { apply: true },
-    );
-    assert.equal(
-      exitCodeOf(blocked.outcome),
-      3,
-      JSON.stringify(blocked.report),
-    );
-    assert.match(
-      String(blocked.report.reason),
-      /coordination claim is no longer the active claim/,
-    );
-    assert.deepEqual(fake.writes(), []);
-  });
+  }
 });
 
 test('an unreadable or absent trusted policy is a recovery hold before any read of the issue', async () => {
