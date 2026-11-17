@@ -19,6 +19,9 @@
 // installed pnpm-boundary test shards still run it) and cut the timeout from
 // 30 to 10 minutes, and issue #5266 added this guard so a later edit cannot
 // restore the step or the old budget while every other guard still passes.
+// Issue #5269 narrowed the `node --test` match to text that can run: observed
+// 2026-11-16 in the review of pull request #5268, the guard rejected a step
+// that only quotes or comments the text, such as `echo "node --test"`.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -1754,9 +1757,189 @@ const LINT_JOB_TIMEOUT_MINUTES = '10';
  * `--test`, possibly after other options. The lookbehind keeps a property
  * access such as `process.versions.node` from starting a match. A script
  * argument that happens to be spelled `--test...` also matches, which only
- * fails loudly. */
+ * fails loudly. The pattern knows nothing about quotes or comments, so it is
+ * applied to `executableShellText(shell)`, never to a raw line (issue #5269). */
 const NODE_TEST_COMMAND =
   /(?<![\w.-])node(?:@[\w.]+)?(?:\.exe)?\s(?:[^\n;&|]*\s)?--test(?!\w)/;
+
+/** The command whose quoted arguments are only text that it prints. A quoted
+ * argument of any other command can be code (`bash -c`, `eval`, a
+ * stored `CMD='...'`, `node -e`, `ssh host '...'`), so the guard keeps it and
+ * fails closed (issue #5269). */
+const TEXT_PRINTING_COMMAND = /^echo$/;
+
+/** Returns the index of the quote that closes the span opened at `start`, or
+ * -1 when the text ends first. A backslash escapes only in double quotes. */
+function shellQuoteEnd(shell: string, start: number): number {
+  const quote = shell.charAt(start);
+  let index = start + 1;
+  while (index < shell.length) {
+    if (shell.charAt(index) === quote) {
+      return index;
+    }
+    index += quote === '"' && shell.charAt(index) === '\\' ? 2 : 1;
+  }
+  return -1;
+}
+
+/** Returns whether the output of an `echo` in the shell text may become code:
+ * the text pipes, redirects output, or opens a group or a command
+ * substitution outside quotes (`echo 'node --test' | bash`,
+ * `echo 'node --test' > run.sh`, `x=$(true; echo 'node --test'); eval "$x"`),
+ * or holds a `$'...'` or `$"..."` quote, whose end this loop cannot find. It
+ * skips a comment with the same word-start rule as the scan, so a quote
+ * character in a comment cannot pair with a later quote and hide a pipe. */
+function echoOutputMayRun(shell: string): boolean {
+  let index = 0;
+  let afterEscape = false;
+  while (index < shell.length) {
+    const char = shell.charAt(index);
+    if (char === '\\') {
+      index += 2;
+      afterEscape = true;
+      continue;
+    }
+    const startsWord =
+      index === 0 ||
+      (!afterEscape && /[ \t\n;&|(]/.test(shell.charAt(index - 1)));
+    afterEscape = false;
+    if (char === '#' && startsWord) {
+      const lineEnd = shell.indexOf('\n', index);
+      if (lineEnd === -1) {
+        return false;
+      }
+      index = lineEnd;
+    } else if (char === '"' || char === "'") {
+      const end = shellQuoteEnd(shell, index);
+      if (end === -1) {
+        return false;
+      }
+      if (shell.charAt(index - 1) === '$') {
+        return true;
+      }
+      index = end + 1;
+    } else if (char === '|' && shell.charAt(index + 1) === '|') {
+      index += 2;
+    } else if (char === '>' || char === '(' || char === '|') {
+      return true;
+    } else {
+      index += 1;
+    }
+  }
+  return false;
+}
+
+/** Returns the part of a step's shell text that can start a command, so that
+ * `NODE_TEST_COMMAND` does not match text that only mentions `node --test`
+ * (issue #5269; observed 2026-11-16 in the review of pull request #5268: the
+ * false match on `echo "node --test"` and `echo ok # node --test`).
+ *
+ * One pass over the whole `run` value, so a quote, a group, or a substitution
+ * that spans lines is seen as the shell sees it. The default is to keep text,
+ * so a shape that the scan does not know fails loudly instead of passing. Only
+ * two things are removed:
+ * - An unquoted `#` at the start of a word drops the rest of its line, except
+ *   in a step with a `${{`, where only a comment that starts its line and
+ *   holds no `${{` is dropped: an expression can end a comment early by
+ *   adding a newline. A backslash makes the next character literal, so it
+ *   never opens or closes a quote and never makes a following `#` start a
+ *   comment, and the word start is read from the original text, never from
+ *   the output.
+ * - A quoted argument that holds whitespace or `;&|` becomes one space when
+ *   the current simple command, the text since the last `;`, `&`, `|`, `(`,
+ *   or newline, starts with `echo`. Any other quoted span is kept with its
+ *   quotes, because it can be code: `bash -c '...'`, `eval "$CMD"`,
+ *   `CMD='...'`, `for c in '...'`, `node -e '...'`.
+ *
+ * A quoted span with no whitespace or `;&|`, an empty one included, is
+ * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
+ * all still match. A step that holds a `${{` removes no `echo` argument,
+ * because GitHub Actions substitutes the expression, quotes and all, before
+ * the shell reads the text; nor does a step that pipes, redirects output, or
+ * opens a group or substitution anywhere, because the output of an `echo`
+ * there can become code. Such a step only unquotes spans in place. The rest
+ * of the text is kept verbatim from a backtick, from a `$'...'` or `$"..."`
+ * quote, from a double-quoted span with a `$(` or backtick in it, and from a
+ * quote that never closes.
+ *
+ * Known limits. These fail loudly, as a false rejection: text that stays
+ * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
+ * command but `echo` (`grep -q "node --test" f`), which includes an `echo`
+ * after `then` or `{` or after a `>&` redirection, because the first word
+ * since the last `;`, `&`, `|`, `(`, or newline names the command; a `#`
+ * inside a kept quoted span or after a backtick
+ * (`bash -c 'echo ok # node --test'`); and any step with a `${{`, a pipe, a
+ * redirection, or a `(`. These pass, as a false acceptance, although they can
+ * run the test runner: a word that an expansion or an escape builds, such as
+ * `node$IFS--test` or `node\ --test` (the raw-line check missed them too); a
+ * `#` inside `${...}`; a quoted variable glued to `node`; and a comment that
+ * ends in a backslash (the backslash-newline join runs first, as it always
+ * did). A heredoc body is read as shell text, as are its quotes. */
+function executableShellText(shell: string): string {
+  const hasExpression = shell.includes('${{');
+  const keepAll = hasExpression || echoOutputMayRun(shell);
+  let text = '';
+  let index = 0;
+  let afterEscape = false;
+  let commandStart = 0;
+  while (index < shell.length) {
+    const char = shell.charAt(index);
+    if (char === '\\') {
+      text += shell.slice(index, index + 2);
+      index += 2;
+      afterEscape = true;
+      continue;
+    }
+    const startsWord =
+      index === 0 ||
+      (!afterEscape && /[ \t\n;&|(]/.test(shell.charAt(index - 1)));
+    afterEscape = false;
+    if (char === '#' && startsWord) {
+      const lineEnd = shell.indexOf('\n', index);
+      const commentEnd = lineEnd === -1 ? shell.length : lineEnd;
+      const startsLine = text.slice(text.lastIndexOf('\n') + 1).trim() === '';
+      if (
+        !hasExpression ||
+        (startsLine && !shell.slice(index, commentEnd).includes('${{'))
+      ) {
+        if (lineEnd === -1) {
+          break;
+        }
+        index = lineEnd;
+        continue;
+      }
+    }
+    if (char === '`') {
+      return text + shell.slice(index);
+    }
+    if (char !== '"' && char !== "'") {
+      text += char;
+      index += 1;
+      if (/[;&|(\n]/.test(char)) {
+        commandStart = text.length;
+      }
+      continue;
+    }
+    const end = shellQuoteEnd(shell, index);
+    if (end === -1 || text.endsWith('$')) {
+      return text + shell.slice(index);
+    }
+    const body = shell.slice(index + 1, end);
+    if (char === '"' && /\$\(|`/.test(body)) {
+      return text + shell.slice(index);
+    }
+    const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
+    if (/^[^\s;&|]*$/.test(body)) {
+      text += body;
+    } else if (!keepAll && TEXT_PRINTING_COMMAND.test(command)) {
+      text += ' ';
+    } else {
+      text += shell.slice(index, end + 1);
+    }
+    index = end + 1;
+  }
+  return text;
+}
 
 function isWorkflowMapping(
   value: WorkflowYamlValue | undefined,
@@ -1800,9 +1983,14 @@ function assertJobTimeoutMinutes(
   );
 }
 
-/** Requires that no `run` line of the job's steps starts the Node test
- * runner. Backslash-newline continuations are joined first and whole-line
- * shell comments are skipped. */
+/** Requires that no `run` value of the job's steps starts the Node test
+ * runner. Backslash-newline continuations are joined first, with nothing
+ * between the lines, as the shell joins them. Each value is reduced whole by
+ * `executableShellText`, so a comment or a quoted argument that only mentions
+ * `node --test` does not count. A failure names the lines of the joined value
+ * that hold `--test`, as they were before the reduction and with a continued
+ * command on one line, as the shell reads it; a match with no such line (a text
+ * that a quote spans) falls back to the reduced line. */
 function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
   const { steps } = parsedWorkflowJob(workflow, jobId);
   assert.ok(
@@ -1813,14 +2001,23 @@ function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
     if (!isWorkflowMapping(step) || typeof step.run !== 'string') {
       continue;
     }
-    for (const line of step.run.replace(/\\\n/g, ' ').split('\n')) {
-      if (line.trimStart().startsWith('#')) {
-        continue;
-      }
-      assert.doesNotMatch(
-        line,
-        NODE_TEST_COMMAND,
-        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${line.trim()}`,
+    const joined = step.run.replace(/\\\n/g, '');
+    const text = executableShellText(joined);
+    const found = NODE_TEST_COMMAND.exec(text);
+    if (found) {
+      const lineEnd = text.indexOf('\n', found.index);
+      const reduced = text
+        .slice(
+          text.lastIndexOf('\n', found.index) + 1,
+          lineEnd === -1 ? undefined : lineEnd,
+        )
+        .trim();
+      const original = joined
+        .split('\n')
+        .filter((runLine) => runLine.includes('--test'))
+        .map((runLine) => runLine.trim());
+      assert.fail(
+        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${(original.length > 0 ? original : [reduced]).join(' | ')}`,
       );
     }
   }
@@ -1837,13 +2034,81 @@ function replaceOnce(text: string, from: string, to: string): string {
   return text.replace(from, () => to);
 }
 
+/** The lint job step that the step-restoring mutations are inserted ahead of. */
+const LINT_NEXT_STEP = '      - name: Run workshop integrity check\n';
+
+/** Returns the workflow with `step` (whole YAML text, newline-terminated)
+ * inserted ahead of `LINT_NEXT_STEP`. The edit touches only the lint job's own
+ * text, so a second job that repeats the anchor cannot make it ambiguous. */
+function withLintStep(workflow: string, step: string): string {
+  const lintJob = extractJobBody(workflow, 'lint');
+  return replaceOnce(
+    workflow,
+    lintJob,
+    replaceOnce(lintJob, LINT_NEXT_STEP, `${step}${LINT_NEXT_STEP}`),
+  );
+}
+
+/** Builds a minimal workflow whose lint job has one step that runs `line`,
+ * which may hold several lines. The text sits in a block scalar so the shell
+ * sees it byte for byte: the YAML reader would strip a trailing ` # ...` from
+ * a plain scalar before then. */
+function lintWorkflowWithRunLine(line: string): string {
+  return [
+    'jobs:',
+    '  lint:',
+    '    timeout-minutes: 10',
+    '    steps:',
+    '      - name: Run one line',
+    '        run: |',
+    ...line.split('\n').map((text) => `          ${text}`),
+  ].join('\n');
+}
+
+/** Steps that restore the removed test suite in each shape the guard must keep
+ * rejecting (issues #5182 and #5266). */
+const RESTORED_NODE_TEST_STEPS = [
+  [
+    'the removed suite step under its old name',
+    '      - name: Run bare-Node test suite\n        run: node --test --import ./tests/isolate-state.mts tests/*.test.mts\n',
+  ],
+  [
+    'a node --test line inside a run block',
+    '      - name: Run unit tests\n        run: |\n          echo start\n          node --test tests/*.test.mts\n',
+  ],
+  [
+    'node --test after other options',
+    '      - name: Run unit tests\n        run: node --import ./tests/isolate-state.mts --test tests/*.test.mts\n',
+  ],
+  [
+    'node --test on a continued line',
+    '      - name: Run unit tests\n        run: |\n          node \\\n            --test tests/*.test.mts\n',
+  ],
+  [
+    'a flow-mapping step',
+    '      - { name: Run unit tests, run: node --test tests/ }\n',
+  ],
+  [
+    'node --test through an absolute path',
+    '      - name: Run unit tests\n        run: /usr/bin/node --test tests/*.test.mts\n',
+  ],
+  [
+    'node.exe with other options before --test',
+    '      - name: Run unit tests\n        run: node.exe --import ./tests/isolate-state.mts --test tests/\n',
+  ],
+  [
+    'node --test through a versioned npx command',
+    '      - name: Run unit tests\n        run: npx node@22 --test tests/*.test.mts\n',
+  ],
+] as const;
+
 test('lint.yml keeps the lint job timeout at 10 minutes and runs no node --test step', () => {
   const workflow = readWorkflow('lint.yml');
   assertJobTimeoutMinutes(workflow, 'lint', LINT_JOB_TIMEOUT_MINUTES);
   assertJobRunsNoNodeTest(workflow, 'lint');
 });
 
-test('changing the lint job timeout or restoring a node --test step is rejected', () => {
+test('changing the lint job timeout is rejected', () => {
   const workflow = readWorkflow('lint.yml');
   const lintJob = extractJobBody(workflow, 'lint');
   // Each mutation edits only the lint job's own text, so a second job that
@@ -1851,7 +2116,6 @@ test('changing the lint job timeout or restoring a node --test step is rejected'
   const mutateLintJob = (mutate: (jobBody: string) => string): string =>
     replaceOnce(workflow, lintJob, mutate(lintJob));
   const timeoutLine = '    timeout-minutes: 10\n    steps:\n';
-  const nextStep = '      - name: Run workshop integrity check\n';
   const timeoutMutations = [
     [
       'a longer timeout',
@@ -1888,49 +2152,202 @@ test('changing the lint job timeout or restoring a node --test step is rejected'
       `accepted ${description}`,
     );
   }
+});
 
-  const restoredSteps = [
-    [
-      'the removed suite step under its old name',
-      '      - name: Run bare-Node test suite\n        run: node --test --import ./tests/isolate-state.mts tests/*.test.mts\n',
-    ],
-    [
-      'a node --test line inside a run block',
-      '      - name: Run unit tests\n        run: |\n          echo start\n          node --test tests/*.test.mts\n',
-    ],
-    [
-      'node --test after other options',
-      '      - name: Run unit tests\n        run: node --import ./tests/isolate-state.mts --test tests/*.test.mts\n',
-    ],
-    [
-      'node --test on a continued line',
-      '      - name: Run unit tests\n        run: |\n          node \\\n            --test tests/*.test.mts\n',
-    ],
-    [
-      'a flow-mapping step',
-      '      - { name: Run unit tests, run: node --test tests/ }\n',
-    ],
-    [
-      'node --test through an absolute path',
-      '      - name: Run unit tests\n        run: /usr/bin/node --test tests/*.test.mts\n',
-    ],
-    [
-      'node.exe with other options before --test',
-      '      - name: Run unit tests\n        run: node.exe --import ./tests/isolate-state.mts --test tests/\n',
-    ],
-    [
-      'node --test through a versioned npx command',
-      '      - name: Run unit tests\n        run: npx node@22 --test tests/*.test.mts\n',
-    ],
-  ] as const;
-  for (const [description, step] of restoredSteps) {
-    const mutated = mutateLintJob((job) =>
-      replaceOnce(job, nextStep, `${step}${nextStep}`),
+test('the lint job node --test guard ignores quoted and commented text but still rejects the restored and running shapes', () => {
+  const workflow = readWorkflow('lint.yml');
+  const noNodeTest = /lint job must not run the test suite with node --test/;
+  const withRunLine = (line: string): string =>
+    withLintStep(
+      workflow,
+      `      - name: Mention node --test\n        run: |\n${line
+        .split('\n')
+        .map((text) => `          ${text}`)
+        .join('\n')}\n`,
     );
+
+  // Text that only mentions node --test passes, in the live lint job and in a
+  // minimal one (issue #5269).
+  const mentionedLines = [
+    'echo "node --test"',
+    'echo ok # node --test',
+    'echo "" "node --test"',
+    'echo "a" "node --test" "b"',
+    'echo "a b" "node --test"',
+    'echo "node --test" || true',
+    'echo "node --test"\necho ok # node --test',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ${{ github.sha }}\n  # node --test tests/',
+    "echo 'first\nnode --test tests/\nlast'",
+    'echo "first\nnode --test tests/\nlast"',
+    'true\necho "node --test"',
+    'echo a | cat\n# node --test tests/',
+    'echo "a b" > out\n  # node --test tests/',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '# node --test tests/\necho ${{ github.sha }}',
+    'echo ok # node --test\necho "node --test"',
+    'echo "a > b" "node --test"',
+    'echo "a | b" "node --test"',
+    "echo 'node --test' \\| true",
+    "echo ok # don't run node --test",
+    'echo "node --test" && echo ok',
+    'echo "" # node --test',
+    "echo 'node --test'",
+    'echo "node --test" # node --test',
+    'echo "a;node" --test',
+    "echo '$(node --test)'",
+    'echo ok;# node --test',
+    'echo a\\ b # node --test',
+    'node --version # node --test',
+    '# node --test tests/',
+  ] as const;
+  for (const line of mentionedLines) {
+    assertJobRunsNoNodeTest(withRunLine(line), 'lint');
+    assertJobRunsNoNodeTest(lintWorkflowWithRunLine(line), 'lint');
+  }
+
+  // Every restored-step row keeps failing, and so does a node --test that sits
+  // in a quoted shell command string.
+  for (const [description, step] of RESTORED_NODE_TEST_STEPS) {
+    const mutated = withLintStep(workflow, step);
     assert.throws(
       () => assertJobRunsNoNodeTest(mutated, 'lint'),
-      /lint job must not run the test suite with node --test/,
+      noNodeTest,
       `accepted ${description}`,
+    );
+  }
+  assert.throws(
+    () =>
+      assertJobRunsNoNodeTest(
+        lintWorkflowWithRunLine('node --test tests/ # restore this step'),
+        'lint',
+      ),
+    /: node --test tests\/ # restore this step$/,
+    'the failure message must name the original run line, comment included',
+  );
+  const bashCommandString = withRunLine("bash -c 'node --test tests/'");
+  assert.throws(
+    () => assertJobRunsNoNodeTest(bashCommandString, 'lint'),
+    noNodeTest,
+    "accepted bash -c 'node --test tests/' in the live lint job",
+  );
+
+  // Shapes that run node --test, hide it behind quoting or escaping tricks, or
+  // keep it in a quoted argument of a command other than echo keep
+  // failing in a minimal lint job. The last kind is a deliberate loud
+  // rejection: that argument can be code. The scanner reads each run value whole.
+  const runningLines = [
+    'node --test tests/*.test.mts',
+    'node --import ./tests/isolate-state.mts --test tests/*.test.mts',
+    '/usr/bin/node --test tests/*.test.mts',
+    'npx node@22 --test tests/*.test.mts',
+    "bash -c 'node --test tests/'",
+    'echo "x" && node --test tests/',
+    'echo `node --test`',
+    'echo `echo a #b` ; node --test',
+    'CMD=\'node --test tests/\'; eval "$CMD"',
+    'CMD+=\'node --test\'; eval "$CMD"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion under test, not a forgotten template placeholder.
+    'CMD[0]=\'node --test\'; eval "${CMD[0]}"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion under test, not a forgotten template placeholder.
+    'CMD=("node --test"); eval "${CMD[*]}"',
+    'printf -v CMD \'node --test\'; eval "$CMD"',
+    'for CMD in \'node --test\'; do eval "$CMD"; done',
+    'export CMD="node --test"',
+    'grep -q "node --test" tests/x',
+    "echo 'node --test' | bash",
+    "echo 'node --test' > run.sh",
+    'x=$(echo \'node --test\'); eval "$x"',
+    'x=$(true; echo \'node --test\'); eval "$x"',
+    "bash <(true; echo 'node --test')",
+    "echo 'node --test #' $'\\'' | bash",
+    "echo ok; bash -c 'node --test'",
+    "echo ok\nbash -c 'node --test'",
+    "echo 'node --test' a\\ # | bash",
+    "echo 'node --test' a#b | bash",
+    "echo 'node --test' a\u00a0# | bash",
+    "echo 'node --test\n' \\|| bash",
+    'FOO=1\u00a0# node --test tests/',
+    'FOO=1\\\n# node --test tests/',
+    '# don\'t run this\necho "node --test tests/" | bash',
+    "true # it's\necho 'node --test tests/' > run.sh",
+    '# say "hi\nx=$(echo \'node --test tests/\'); eval "$x"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ok # node --test tests/ ${{ github.sha }}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '# ${{ github.sha }} node --test tests/',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ok # node --test tests/\necho ${{ github.sha }}',
+    'echo ok # note\nnode --test tests/',
+    'x=$(\n  echo \'node --test tests/\'\n)\neval "$x"',
+    "echo '\n#'; node --test tests/",
+    "{\n  echo 'node --test'\n} | bash",
+    "echo 'start\nend' && node --test tests/ && echo 'x'",
+    'bash <<EOF\nnode --test tests/\nEOF',
+    "echo ok && bash -c 'node --test'",
+    "echo ok | bash -c 'node --test'",
+    "echo $(bash -c 'node --test')",
+    'echo=\'node --test\'; eval "$echo"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "\\${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo "${{ \'node --test\' }}"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo ${{ '; node --test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "node '--test' tests/ ${{ github.sha }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '"node" --test ${{ github.sha }}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "node ${{ '--test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ok # node --test ${{ x }}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo \\${{ '; node --test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo 'x ${{ '''' }} ; node --test ; echo 'y'",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo ok && ${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ runner.os == 'Windows' && 'node.exe --test tests/' || 'node --test tests/' }}",
+    'node --te""st',
+    'n""ode --test',
+    "bash -\\c 'node --test tests/'",
+    "ev\\al 'node --test'",
+    'echo "$(node --test)"',
+    'echo "$(echo "x"; node --test)"',
+    'echo "`node --test`"',
+    '"node" --test',
+    "node '--test' tests/",
+    'node --import "./a b.mts" --test tests/',
+    'sh -c "node --test"',
+    "bash -ce 'node --test'",
+    "bash -c -x 'node --test tests/'",
+    "bash --command 'node --test tests/'",
+    "bash -c 2>&1 'node --test tests/'",
+    "bash<<<'node --test tests/'",
+    'cmd /c "node --test tests/"',
+    'echo $"node --test"',
+    "bash -c $'node --test tests/'",
+    "pwsh -Command 'node --test tests/'",
+    "echo $'\\'' ; node --test ; echo $'\\''",
+    "bash <<< 'node --test tests/'",
+    "eval 'node --test'",
+    'echo "a \\" b" ; node --test ; echo "c"',
+    'echo a\\ #b ; node --test',
+    "echo 'a\\' ; node --test ; echo 'b'",
+    'echo $(true)#x ; node --test',
+    'echo "a b"#x ; node --test',
+    'echo "unterminated node --test',
+    'node --test tests/ # run',
+  ] as const;
+  for (const line of runningLines) {
+    assert.throws(
+      () => assertJobRunsNoNodeTest(lintWorkflowWithRunLine(line), 'lint'),
+      noNodeTest,
+      `accepted ${line}`,
     );
   }
 });
