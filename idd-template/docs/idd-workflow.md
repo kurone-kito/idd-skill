@@ -1110,8 +1110,9 @@ never reuses an earlier set, and replay refuses a handoff that does. If the
 handoff write fails, the coordination claim is kept as a recovery hold
 (preventive; no observed incident yet) and a retry reuses the persisted
 answer. After the write succeeds, the claim is released before the
-authoring pass acquires ownership, and the same request cannot produce
-another handoff or erase an earlier choice.
+authoring pass acquires ownership, unless the source was closed meanwhile,
+which is a recovery hold because the rework needs the source open. The same
+request cannot produce another handoff or erase an earlier choice.
 
 The `rework-authored` transition is a separate guarded request. It needs
 the coordination claim to be released and to be one that recorded a rework
@@ -1121,11 +1122,10 @@ session, and anchor, an audited roadmap on the same source, and real child
 issues wired under it. The evidence names the title and body digest of the
 source as it was when the audit began, which the caller captures before it
 reads the roadmap and its children, and they must still match the source
-when the record is written. A source that is closed while a rework request
-still awaits authoring is a recovery hold, not a release. It only appends
-the record. It never releases the authoring hold, and unknown ownership or
-wiring refuses it. It is terminal
-only when every decision of the bundle is confirmed or has its record.
+when the record is written. It only appends the record. It never releases
+the authoring hold, and unknown ownership or wiring refuses it. It is
+terminal only when every decision of the bundle is confirmed or has its
+record.
 
 ### Provisional plan assessment (A4 and A4.5)
 
