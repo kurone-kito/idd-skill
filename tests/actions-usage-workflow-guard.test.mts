@@ -1802,11 +1802,12 @@ function shellQuoteEnd(line: string, start: number): number {
  *
  * A quoted span with no whitespace or `;&|`, an empty one included, is
  * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
- * all still match. The whole line is kept verbatim when it holds a `${{`
- * (GitHub Actions substitutes the expression, quotes and all, before the
- * shell reads the line). The rest of the line is kept verbatim from a
- * backtick, from a `$'...'` or `$"..."` quote, from a double-quoted span with
- * a `$(` or backtick in it, and from a quote that never closes.
+ * all still match. A line that holds a `${{` removes nothing, because GitHub
+ * Actions substitutes the expression, quotes and all, before the shell reads
+ * the line: it only unquotes spans in place. The rest of the line is kept
+ * verbatim from a backtick, from a `$'...'` or `$"..."` quote, from a
+ * double-quoted span with a `$(` or backtick in it, and from a quote that
+ * never closes.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
@@ -1825,9 +1826,9 @@ function shellQuoteEnd(line: string, start: number): number {
  * reads one line alone, so it reads such a line as if it started outside a
  * quote. */
 function executableShellText(line: string): string {
-  if (line.includes('${{')) {
-    return line;
-  }
+  // GitHub Actions substitutes a `${{ ... }}` expression, quotes and all,
+  // before the shell reads the line, so a line with one removes nothing.
+  const keepAll = line.includes('${{');
   let text = '';
   let index = 0;
   let afterEscape = false;
@@ -1843,7 +1844,7 @@ function executableShellText(line: string): string {
     const startsWord =
       index === 0 || (!afterEscape && /[\s;&|(]/.test(line.charAt(index - 1)));
     afterEscape = false;
-    if (char === '#' && startsWord) {
+    if (char === '#' && startsWord && !keepAll) {
       break;
     }
     if (char === '`') {
@@ -1868,7 +1869,7 @@ function executableShellText(line: string): string {
     const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
     if (/^[^\s;&|]*$/.test(body)) {
       text += body;
-    } else if (TEXT_PRINTING_COMMAND.test(command)) {
+    } else if (!keepAll && TEXT_PRINTING_COMMAND.test(command)) {
       text += ' ';
     } else {
       text += line.slice(index, end + 1);
@@ -2159,6 +2160,14 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo "${{ \'node --test\' }}"',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "echo ${{ '; node --test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "node '--test' tests/ ${{ github.sha }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '"node" --test ${{ github.sha }}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "node ${{ '--test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ok # node --test ${{ x }}',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "echo \\${{ '; node --test' }}",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
