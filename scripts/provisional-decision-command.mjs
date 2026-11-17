@@ -69,9 +69,11 @@ Request fields by "type":
 The resolve action asks whether the implemented choices were acceptable and acts
 only on an actual answer. A dry run reports the presentation, its digest, and
 needsUserAnswer; show the presentation and ask only when needsUserAnswer is
-true. The action reads no opt-in switch, so it still works when
-dangerouslyAutoDecide is off, but it needs a readable trusted repository policy.
-The rework-authored request is not run by this command.
+true. Without an actual answer, --apply only releases the coordination claim
+and leaves the source pending, so run the dry run first. The action reads no
+opt-in switch, so it still works when dangerouslyAutoDecide is off, but it needs
+a readable trusted repository policy. The rework-authored request is not run by
+this command.
 resolve input is what the user actually did, never an assistant assertion or
 agent-fed text. One of:
   {"channel":"conversation","origin":"user","message":"...",
@@ -88,9 +90,9 @@ reports state, action, outcome, reason, nextStep, steps, recordIds,
 needsUserAnswer, presentation, presentationSha256, and warnings. Both carry
 apply.
 Exit codes: 0 planned, applied, or refused with action none (nothing to do
-yet); 2 reconciled (the record already exists, or a resolve step that
-nextStep names must run again; read state and action on stdout) or a usage
-error (message on stderr); 3 recovery-hold (inspect before any retry); 4
+yet); 2 reconciled (the record already exists, a resolve run finds everything
+done, or a resolve step that nextStep names must run again; read state and
+action on stdout) or a usage error (message on stderr); 3 recovery-hold (inspect before any retry); 4
 fix-input (correct the request or the issue, then re-run).
 `;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/;

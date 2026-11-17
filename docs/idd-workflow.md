@@ -1020,9 +1020,11 @@ of `provisional-decision.mts` runs it, and the `idd-provisional-decision`
 command runs it for a request of type `resolve`. That request names the
 coordination claim (`claimId`, `agentId`, `branch`), the decisions of the
 current bundle (`decisionGenerations`), and optionally what the user did
-(`input`) with the digest it answered (`answeredPresentationSha256`). A dry
-run without `input` reports the presentation and its digest. The action reads
-no opt-in switch, so confirmation and rework still work after
+(`input`) with the digest it answered (`answeredPresentationSha256`) and the
+later results that relied on the prior ones (`downstreamResults`). A dry run
+without `input` reports the presentation and its digest. `--apply` without an
+answer only releases the coordination claim, so run the dry run first. The
+action reads no opt-in switch, so confirmation and rework still work after
 `dangerouslyAutoDecide` is turned off, but the command needs a readable
 trusted repository policy, which supplies the trusted marker actors, and a
 change to that policy between the planning read and a write blocks the write.
@@ -1133,14 +1135,15 @@ with the normal unclaim.
 The command's GitHub store takes a record or an answer as already written only
 when its comment is unedited and its author is a trusted marker actor or this
 run posted it. An untrusted comment that pre-posts a deterministic record ID is
-therefore ignored and cannot stall the resolution. The decision transitions
-keep their own rule: their planner holds while an untrusted or edited comment
-carries the ID of the record it would write. The close and the release re-read
-the issue and the claim just before the write, and the close reads the closed
-state back. GitHub offers no conditional write, so a close that another actor
+therefore ignored and cannot stall the resolution (found in the review of pull
+request `#5264`; no incident recorded). The decision transitions keep their own
+rule: their planner holds while an untrusted or edited comment carries the ID of
+the record it would write. The close re-reads the claim and the issue, and the
+release re-reads the claim, just before the write, and the close reads the
+closed state back. GitHub offers no conditional write, so a close that another actor
 made with another reason before the `gh` close call is reported and never
 overwritten, while a foreign close inside that call cannot be told from this
-one. Neither write
+one (preventive; no observed incident yet). Neither write
 invalidates the Discover hints, which age out or refresh like any other raw
 write.
 

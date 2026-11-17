@@ -639,9 +639,11 @@ test('--help names the resolve action, its input and its exit codes', async () =
   assert.match(usage, /resolve a confirmation-pending source/u);
   assert.match(usage, /resolve:\s+type, claimId, agentId, branch/u);
   assert.match(usage, /still works when\s+dangerouslyAutoDecide is off/u);
-  assert.match(usage, /rework-authored request is not run by this command/u);
+  assert.match(usage, /rework-authored request is not run by\s+this command/u);
   assert.match(usage, /"channel":"conversation"/u);
   assert.match(usage, /nextStep names/u);
+  assert.match(usage, /--apply only releases the coordination claim/u);
+  assert.match(usage, /finds everything\s+done/u);
   assert.deepEqual(h.trustReads, []);
 });
 

@@ -1408,7 +1408,10 @@ test('a pre-posted confirmation record ID from an untrusted comment cannot force
         id: '4999',
         body: preposted,
         user: 'mallory',
-        createdAt: '2026-11-03T11:05:00Z',
+        // Before every post the store will make, as a real pre-post would be.
+        createdAt: new Date(seed.clockMs + 2000)
+          .toISOString()
+          .replace('.000Z', 'Z'),
       });
     },
     async ({ fake }) => {
@@ -1443,35 +1446,69 @@ test('a pre-posted confirmation record ID from an untrusted comment cannot force
   );
 });
 
-test('a trusted policy change between the planning read and a write blocks the write', async () => {
+test('a trusted policy change before any write blocks that write', async () => {
   const seed = await seedBundle();
-  await withFake(loadSeed(seed), async ({ fake }) => {
-    const dry = await runCommand(seed, resolveRequest);
-    // The first trust read is the planning read; every later one has changed.
-    const blocked = await runCommand(
-      seed,
-      {
-        ...resolveRequest,
-        input: conversationYes,
-        answeredPresentationSha256: dry.report.presentationSha256,
-      },
-      {
-        apply: true,
-        trustAt: (read) =>
-          read === 1
-            ? policy
-            : ({ trustedMarkerActors: ['someone-else'] } as IddConfig),
-      },
-    );
-    assert.equal(
-      exitCodeOf(blocked.outcome),
-      3,
-      JSON.stringify(blocked.report),
-    );
-    assert.equal(blocked.report.action, 'recovery-hold');
-    assert.deepEqual(fake.writes(), []);
-    assert.equal(fake.state().issue.state, 'open');
-  });
+  // The first trust read is the planning read; each write reads it once more.
+  // `unchangedReads` is how many reads still return the original policy.
+  const cases = [
+    {
+      write: 'answer append',
+      unchangedReads: 1,
+      exit: 3,
+      closed: false,
+      released: false,
+    },
+    {
+      write: 'source close',
+      unchangedReads: 3,
+      exit: 3,
+      closed: false,
+      released: false,
+    },
+    {
+      write: 'claim release',
+      unchangedReads: 4,
+      exit: 2,
+      closed: true,
+      released: false,
+    },
+  ] as const;
+  for (const item of cases) {
+    await withFake(loadSeed(seed), async ({ fake }) => {
+      const dry = await runCommand(seed, resolveRequest);
+      const blocked = await runCommand(
+        seed,
+        {
+          ...resolveRequest,
+          input: conversationYes,
+          answeredPresentationSha256: dry.report.presentationSha256,
+        },
+        {
+          apply: true,
+          trustAt: (read) =>
+            read <= item.unchangedReads
+              ? policy
+              : ({ trustedMarkerActors: ['someone-else'] } as IddConfig),
+        },
+      );
+      const name = `${item.write}: ${JSON.stringify(blocked.report)}`;
+      assert.equal(exitCodeOf(blocked.outcome), item.exit, name);
+      assert.match(
+        String(blocked.report.reason),
+        new RegExp(`trusted policy changed before the ${item.write}`),
+        name,
+      );
+      const state = fake.state();
+      assert.equal(state.issue.state === 'closed', item.closed, name);
+      assert.equal(
+        state.comments.some((comment) =>
+          comment.body.startsWith(`<!-- unclaimed-by: ${coordAgent} `),
+        ),
+        item.released,
+        name,
+      );
+    });
+  }
 });
 
 test('an unreadable or absent trusted policy is a recovery hold before any read of the issue', async () => {
