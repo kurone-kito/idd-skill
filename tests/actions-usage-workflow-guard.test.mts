@@ -1782,11 +1782,13 @@ function shellQuoteEnd(line: string, start: number): number {
   return -1;
 }
 
-/** Returns whether the line pipes or redirects output outside quotes: the
- * output of an `echo` there can become code (`echo 'node --test' | bash`,
- * `echo 'node --test' > run.sh`). A comment is not skipped, so a pipe in a
- * comment only keeps more text, which fails loudly. */
-function hasPipeOrRedirect(line: string): boolean {
+/** Returns whether the output of an `echo` on the line may become code: the
+ * line pipes, redirects output, or opens a group or a command substitution
+ * outside quotes (`echo 'node --test' | bash`, `echo 'node --test' > run.sh`,
+ * `x=$(true; echo 'node --test'); eval "$x"`), or holds a `$'...'` or
+ * `$"..."` quote, whose end this loop cannot find. A comment is not skipped,
+ * so a pipe in a comment only keeps more text, which fails loudly. */
+function echoOutputMayRun(line: string): boolean {
   let index = 0;
   while (index < line.length) {
     const char = line.charAt(index);
@@ -1797,9 +1799,13 @@ function hasPipeOrRedirect(line: string): boolean {
       if (end === -1) {
         return false;
       }
+      if (line.charAt(index - 1) === '$') {
+        return true;
+      }
       index = end + 1;
     } else if (
       char === '>' ||
+      char === '(' ||
       (char === '|' &&
         line.charAt(index - 1) !== '|' &&
         line.charAt(index + 1) !== '|')
@@ -1826,16 +1832,17 @@ function hasPipeOrRedirect(line: string): boolean {
  *   start is read from the original line, never from the output.
  * - A quoted argument that holds whitespace or `;&|` becomes one space when
  *   the current simple command, the text since the last `;`, `&`, `|`, or
- *   `(`, starts with `echo` and was not opened by a `(`. Any other quoted
- *   span is kept with its quotes, because it can be code: `bash -c '...'`,
- *   `eval "$CMD"`, `CMD='...'`, `for c in '...'`, `node -e '...'`.
+ *   `(`, starts with `echo`. Any other quoted span is kept with its quotes,
+ *   because it can be code: `bash -c '...'`, `eval "$CMD"`, `CMD='...'`,
+ *   `for c in '...'`, `node -e '...'`.
  *
  * A quoted span with no whitespace or `;&|`, an empty one included, is
  * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
  * all still match. A line that holds a `${{` removes nothing, because GitHub
  * Actions substitutes the expression, quotes and all, before the shell reads
- * the line; nor does a line that pipes or redirects, because the output of
- * an `echo` there can become code. Such a line only unquotes spans in place.
+ * the line; nor does a line that pipes, redirects output, or opens a group or
+ * substitution, because the output of an `echo` there can become code. Such
+ * a line only unquotes spans in place.
  * The rest of the line is kept verbatim from a backtick, from a `$'...'` or
  * `$"..."` quote, from a double-quoted span with a `$(` or backtick in it,
  * and from a quote that never closes.
@@ -1846,9 +1853,10 @@ function hasPipeOrRedirect(line: string): boolean {
  * after `then` or `{` or after a `>&` redirection, because the first word
  * since the last `;`, `&`, `|`, or `(` names the command; a `#` inside a kept
  * quoted span or after a backtick (`bash -c 'echo ok # node --test'`); and
- * any line with a `${{`, a pipe, or a redirection. These pass, as a false
- * acceptance, although they can run the test runner: a word that an
- * expansion or an escape builds, such as `node$IFS--test` or
+ * any line with a `${{`, a pipe, a redirection, or a `(`. These pass, as a
+ * false acceptance, although they can run the test runner: a group, pipe, or
+ * substitution that spans lines (`x=$(` then `echo '...'` then `)`); a word
+ * that an expansion or an escape builds, such as `node$IFS--test` or
  * `node\ --test` (the raw-line check missed them too); a `#` inside
  * `${...}`; a quoted variable glued to `node`; a comment that ends in a
  * backslash (the backslash-newline join runs first, as it always did); and a
@@ -1858,13 +1866,12 @@ function hasPipeOrRedirect(line: string): boolean {
 function executableShellText(line: string): string {
   // GitHub Actions substitutes a `${{ ... }}` expression, quotes and all,
   // before the shell reads the line, so a line with one removes nothing. Nor
-  // does a line that pipes or redirects, where an `echo` can feed code.
-  const keepAll = line.includes('${{') || hasPipeOrRedirect(line);
+  // does a line where the output of an `echo` can become code.
+  const keepAll = line.includes('${{') || echoOutputMayRun(line);
   let text = '';
   let index = 0;
   let afterEscape = false;
   let commandStart = 0;
-  let commandOpener = '';
   while (index < line.length) {
     const char = line.charAt(index);
     if (char === '\\') {
@@ -1887,7 +1894,6 @@ function executableShellText(line: string): string {
       index += 1;
       if (/[;&|(]/.test(char)) {
         commandStart = text.length;
-        commandOpener = char;
       }
       continue;
     }
@@ -1902,11 +1908,7 @@ function executableShellText(line: string): string {
     const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
     if (/^[^\s;&|]*$/.test(body)) {
       text += body;
-    } else if (
-      !keepAll &&
-      commandOpener !== '(' &&
-      TEXT_PRINTING_COMMAND.test(command)
-    ) {
+    } else if (!keepAll && TEXT_PRINTING_COMMAND.test(command)) {
       text += ' ';
     } else {
       text += line.slice(index, end + 1);
@@ -2130,6 +2132,10 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo "a" "node --test" "b"',
     'echo "a b" "node --test"',
     'echo "node --test" || true',
+    'echo "a > b" "node --test"',
+    'echo "a | b" "node --test"',
+    "echo 'node --test' \\| true",
+    "echo ok # don't run node --test",
     'echo "node --test" && echo ok',
     'echo "" # node --test',
     "echo 'node --test'",
@@ -2189,6 +2195,9 @@ test('the lint job node --test guard ignores quoted and commented text but still
     "echo 'node --test' | bash",
     "echo 'node --test' > run.sh",
     'x=$(echo \'node --test\'); eval "$x"',
+    'x=$(true; echo \'node --test\'); eval "$x"',
+    "bash <(true; echo 'node --test')",
+    "echo 'node --test #' $'\\'' | bash",
     "echo ok; bash -c 'node --test'",
     "echo ok && bash -c 'node --test'",
     "echo ok | bash -c 'node --test'",
