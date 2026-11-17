@@ -1,5 +1,5 @@
-// Guards two of #2322's acceptance criteria, one of #3665's, and one of
-// #3728's against future workflow edits:
+// Guards two of #2322's acceptance criteria, one of #3665's, one of
+// #3728's, and one of #5182's against future workflow edits:
 // (1) none of the four required status-check workflows ever gains a path
 // filter on its pull_request trigger or renames its job id (a path-filtered
 // required check never reports for a change outside its filter, which
@@ -14,6 +14,11 @@
 // (4) the required `lint` job stays on `ubuntu-latest`: issue #3728 recorded
 // cancellation annotations for runs 36730573670, 36752800229, and
 // 36955823310; the workflow comment preserves their timer ambiguity.
+// (5) the `lint` job keeps `timeout-minutes: 10` and none of its steps runs
+// `node --test`: issue #5182 moved the full test suite out of that job (the
+// installed pnpm-boundary test shards still run it) and cut the timeout from
+// 30 to 10 minutes, and issue #5266 added this guard so a later edit cannot
+// restore the step or the old budget while every other guard still passes.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -21,6 +26,11 @@ import { dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import {
+  parseWorkflowYamlSubset,
+  type WorkflowYamlMapping,
+  type WorkflowYamlValue,
+} from '../src/scripts/workflow-yaml-subset.mts';
 import {
   readSharedSetupNodePin,
   SETUP_NODE_USE_LINE,
@@ -1733,6 +1743,252 @@ test('lint-windows setup ignores comments that mention setup-node', () => {
   );
   assert.notEqual(annotatedWorkflow, workflow);
   assertWindowsNodeSetupBeforeCheckout(annotatedWorkflow);
+});
+
+/** The timeout, in minutes, that the `lint` job keeps now that issue #5182
+ * removed the full test suite from it. */
+const LINT_JOB_TIMEOUT_MINUTES = '10';
+
+/** Matches a shell command line that starts the Node test runner: `node` (or
+ * `node.exe`, under any path, or an `npx node@22` style version) followed by
+ * `--test`, possibly after other options. The lookbehind keeps a property
+ * access such as `process.versions.node` from starting a match. A script
+ * argument that happens to be spelled `--test...` also matches, which only
+ * fails loudly. */
+const NODE_TEST_COMMAND =
+  /(?<![\w.-])node(?:@[\w.]+)?(?:\.exe)?\s(?:[^\n;&|]*\s)?--test(?!\w)/;
+
+function isWorkflowMapping(
+  value: WorkflowYamlValue | undefined,
+): value is WorkflowYamlMapping {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Parses a workflow with the shared YAML subset reader and returns one job's
+ * mapping. A construct the reader refuses, a missing root `jobs` mapping, or
+ * a missing job fails the guard instead of passing it. */
+function parsedWorkflowJob(
+  workflow: string,
+  jobId: string,
+): WorkflowYamlMapping {
+  const parsed = parseWorkflowYamlSubset(workflow);
+  if (!parsed.ok) {
+    assert.fail(
+      `lint.yml: the workflow must parse with the YAML subset reader, but it refused ${parsed.violation.construct} at line ${parsed.violation.line}`,
+    );
+  }
+  const jobs = isWorkflowMapping(parsed.value) ? parsed.value.jobs : undefined;
+  assert.ok(isWorkflowMapping(jobs), 'lint.yml: root jobs mapping not found');
+  const job = jobs[jobId];
+  assert.ok(isWorkflowMapping(job), `lint.yml: job ${jobId} not found`);
+  return job;
+}
+
+/** Requires the job's own `timeout-minutes` key to be exactly `minutes`. The
+ * reader resolves no scalar types, so `10`, `'10'`, and `"10"` all read as
+ * `10`, while a missing key, another value, a step-level key, and an
+ * expression all fail. */
+function assertJobTimeoutMinutes(
+  workflow: string,
+  jobId: string,
+  minutes: string,
+): void {
+  assert.equal(
+    parsedWorkflowJob(workflow, jobId)['timeout-minutes'],
+    minutes,
+    `lint.yml: ${jobId} job must keep timeout-minutes: ${minutes} (#5182)`,
+  );
+}
+
+/** Requires that no `run` line of the job's steps starts the Node test
+ * runner. Backslash-newline continuations are joined first and whole-line
+ * shell comments are skipped. */
+function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
+  const { steps } = parsedWorkflowJob(workflow, jobId);
+  assert.ok(
+    Array.isArray(steps) && steps.length > 0,
+    `lint.yml: ${jobId} job must list steps`,
+  );
+  for (const step of steps) {
+    if (!isWorkflowMapping(step) || typeof step.run !== 'string') {
+      continue;
+    }
+    for (const line of step.run.replace(/\\\n/g, ' ').split('\n')) {
+      if (line.trimStart().startsWith('#')) {
+        continue;
+      }
+      assert.doesNotMatch(
+        line,
+        NODE_TEST_COMMAND,
+        `lint.yml: ${jobId} job must not run the test suite with node --test (#5182): ${line.trim()}`,
+      );
+    }
+  }
+}
+
+/** Replaces one exact occurrence, so a mutation that no longer matches the
+ * live workflow fails the test instead of passing without testing anything. */
+function replaceOnce(text: string, from: string, to: string): string {
+  assert.equal(
+    text.split(from).length,
+    2,
+    `expected exactly one occurrence of ${JSON.stringify(from)}`,
+  );
+  return text.replace(from, () => to);
+}
+
+test('lint.yml keeps the lint job timeout at 10 minutes and runs no node --test step', () => {
+  const workflow = readWorkflow('lint.yml');
+  assertJobTimeoutMinutes(workflow, 'lint', LINT_JOB_TIMEOUT_MINUTES);
+  assertJobRunsNoNodeTest(workflow, 'lint');
+});
+
+test('changing the lint job timeout or restoring a node --test step is rejected', () => {
+  const workflow = readWorkflow('lint.yml');
+  const lintJob = extractJobBody(workflow, 'lint');
+  // Each mutation edits only the lint job's own text, so a second job that
+  // repeats a step or a timeout line cannot make an anchor ambiguous.
+  const mutateLintJob = (mutate: (jobBody: string) => string): string =>
+    replaceOnce(workflow, lintJob, mutate(lintJob));
+  const timeoutLine = '    timeout-minutes: 10\n    steps:\n';
+  const nextStep = '      - name: Run workshop integrity check\n';
+  const timeoutMutations = [
+    [
+      'a longer timeout',
+      mutateLintJob((job) =>
+        replaceOnce(job, timeoutLine, '    timeout-minutes: 30\n    steps:\n'),
+      ),
+    ],
+    [
+      'the old shorter timeout',
+      mutateLintJob((job) =>
+        replaceOnce(job, timeoutLine, '    timeout-minutes: 15\n    steps:\n'),
+      ),
+    ],
+    [
+      'a removed timeout',
+      mutateLintJob((job) => replaceOnce(job, timeoutLine, '    steps:\n')),
+    ],
+    [
+      'a step-level timeout only',
+      mutateLintJob((job) =>
+        replaceOnce(
+          replaceOnce(job, timeoutLine, '    steps:\n'),
+          '        run: node scripts/audit-docs.mjs --check\n',
+          '        run: node scripts/audit-docs.mjs --check\n        timeout-minutes: 10\n',
+        ),
+      ),
+    ],
+  ] as const;
+  for (const [description, mutated] of timeoutMutations) {
+    assert.notEqual(mutated, workflow, description);
+    assert.throws(
+      () => assertJobTimeoutMinutes(mutated, 'lint', LINT_JOB_TIMEOUT_MINUTES),
+      /lint job must keep timeout-minutes: 10/,
+      `accepted ${description}`,
+    );
+  }
+
+  const restoredSteps = [
+    [
+      'the removed suite step under its old name',
+      '      - name: Run bare-Node test suite\n        run: node --test --import ./tests/isolate-state.mts tests/*.test.mts\n',
+    ],
+    [
+      'a node --test line inside a run block',
+      '      - name: Run unit tests\n        run: |\n          echo start\n          node --test tests/*.test.mts\n',
+    ],
+    [
+      'node --test after other options',
+      '      - name: Run unit tests\n        run: node --import ./tests/isolate-state.mts --test tests/*.test.mts\n',
+    ],
+    [
+      'node --test on a continued line',
+      '      - name: Run unit tests\n        run: |\n          node \\\n            --test tests/*.test.mts\n',
+    ],
+    [
+      'a flow-mapping step',
+      '      - { name: Run unit tests, run: node --test tests/ }\n',
+    ],
+    [
+      'node --test through an absolute path',
+      '      - name: Run unit tests\n        run: /usr/bin/node --test tests/*.test.mts\n',
+    ],
+    [
+      'node.exe with other options before --test',
+      '      - name: Run unit tests\n        run: node.exe --import ./tests/isolate-state.mts --test tests/\n',
+    ],
+    [
+      'node --test through a versioned npx command',
+      '      - name: Run unit tests\n        run: npx node@22 --test tests/*.test.mts\n',
+    ],
+  ] as const;
+  for (const [description, step] of restoredSteps) {
+    const mutated = mutateLintJob((job) =>
+      replaceOnce(job, nextStep, `${step}${nextStep}`),
+    );
+    assert.throws(
+      () => assertJobRunsNoNodeTest(mutated, 'lint'),
+      /lint job must not run the test suite with node --test/,
+      `accepted ${description}`,
+    );
+  }
+});
+
+test('comments, other node commands, and other jobs do not trip the lint job guards', () => {
+  const workflow = [
+    'jobs:',
+    '  lint:',
+    '    timeout-minutes: 10',
+    '    steps:',
+    '      # node --test tests/*.test.mts',
+    '      - name: Static audits',
+    '        run: |',
+    '          # node --test tests/*.test.mts',
+    '          node --version',
+    "          node -e 'console.log(process.versions.node)'",
+    '          node scripts/audit-docs.mjs --check',
+    '          echo engines.node --test-free',
+    '  other:',
+    '    timeout-minutes: 15',
+    '    steps:',
+    '      - run: node --test tests/*.test.mts',
+  ].join('\n');
+  assertJobTimeoutMinutes(workflow, 'lint', '10');
+  assertJobRunsNoNodeTest(workflow, 'lint');
+  assert.throws(
+    () => assertJobRunsNoNodeTest(workflow, 'other'),
+    /other job must not run the test suite with node --test/,
+  );
+});
+
+test('a workflow the YAML subset reader refuses or a missing lint job cannot pass the lint job guards', () => {
+  const anchored = [
+    'jobs:',
+    '  lint:',
+    '    timeout-minutes: &minutes 10',
+    '    steps:',
+    '      - run: node --version',
+  ].join('\n');
+  assert.throws(
+    () => assertJobTimeoutMinutes(anchored, 'lint', '10'),
+    /must parse with the YAML subset reader, but it refused anchor/,
+  );
+  assert.throws(
+    () => assertJobRunsNoNodeTest(anchored, 'lint'),
+    /must parse with the YAML subset reader/,
+  );
+
+  const noSteps = ['jobs:', '  lint:', '    timeout-minutes: 10'].join('\n');
+  assert.throws(
+    () => assertJobRunsNoNodeTest(noSteps, 'lint'),
+    /lint job must list steps/,
+  );
+  assert.throws(
+    () =>
+      assertJobTimeoutMinutes('jobs:\n  other:\n    steps: []', 'lint', '10'),
+    /job lint not found/,
+  );
 });
 
 function evaluateNodeFloorProgram(
