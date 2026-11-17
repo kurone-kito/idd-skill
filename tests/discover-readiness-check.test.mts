@@ -4684,3 +4684,168 @@ test('countIssuesWithLabel counts open issues by trimmed, case-insensitive label
     2,
   );
 });
+
+test('decision gate: a reused gate holds only the current pass (queue and count)', async () => {
+  let open = 1;
+  const gate = decisionGate(
+    { 96: pendingEvidence() },
+    {
+      countOpenConfirmationIssues() {
+        return open;
+      },
+    },
+  );
+  const first = await runGate(
+    [96, 97],
+    [gateIssue(96), gateIssue(97)],
+    gate.resolver,
+  );
+  assert.deepEqual(
+    first.confirmationQueue?.map((entry) => entry.number),
+    [96],
+  );
+  assert.deepEqual(
+    first.ready.map((entry) => entry.number),
+    [97],
+  );
+  // A second pass with no needs-decision source reports no queue.
+  const second = await runGate([98], [gateIssue(98, [])], gate.resolver);
+  assert.equal('confirmationQueue' in second, false);
+  // A third pass reads the count again, not the first pass's value.
+  open = 3;
+  const third = await runGate([97], [gateIssue(97)], gate.resolver);
+  assert.deepEqual(third.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_pending_cap:3/3',
+  ]);
+  // A pass whose label name collides never reports the earlier queue either.
+  const collided = await runGate(
+    [97],
+    [gateIssue(97, ['status:authoring'])],
+    gate.resolver,
+    {
+      needsDecisionLabelName: 'status:authoring',
+    },
+  );
+  assert.equal('confirmationQueue' in collided, false);
+});
+
+test('decision gate: one source whose replay fails does not hide the other sources', async () => {
+  const batches: number[][] = [];
+  const gate = decisionGate(
+    { 61: pendingEvidence() },
+    {
+      async loadStates(sources) {
+        batches.push(sources.map((source) => source.issueNumber));
+        if (sources.some((source) => source.issueNumber === 62)) {
+          throw new Error('replay refused for 62');
+        }
+        return new Map(
+          sources.map((source) => [
+            source.issueNumber,
+            source.issueNumber === 61 ? pendingEvidence() : noRecords,
+          ]),
+        );
+      },
+    },
+  );
+  const result = await runGate(
+    [61, 62, 63],
+    [gateIssue(61), gateIssue(62), gateIssue(63)],
+    gate.resolver,
+  );
+  assert.deepEqual(batches, [[61, 62, 63], [61], [62], [63]]);
+  assert.deepEqual(
+    result.confirmationQueue?.map((entry) => entry.number),
+    [61],
+  );
+  assert.deepEqual(
+    result.ready.map((entry) => entry.number),
+    [63],
+  );
+  const failed = result.filteredOut.find((entry) => entry.number === 62);
+  assert.deepEqual(failed?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_state_unavailable',
+  ]);
+});
+
+test('the trusted read behind the gate fails closed and is read once', () => {
+  const report = (overrides: Record<string, unknown>) =>
+    ({
+      status: 'readable',
+      source: 'repository',
+      ref: 'main',
+      master: 'enabled',
+      classes: { decisionIssue: 'enabled' },
+      maxPendingConfirmations: 10,
+      confirmationLabelName: ' status:needs-confirmation ',
+      ...overrides,
+    }) as never;
+  const policyOf = (read: () => never) => {
+    let reads = 0;
+    const reader = buildProvisionalDecisionEvidenceReader({
+      owner: 'acme',
+      repo: 'repo',
+      port: createFakeProviderAdapter({}),
+      readTrustedMarkerActors: () => [],
+      policy: null,
+      readTrustedAutoDecide: () => {
+        reads += 1;
+        return read();
+      },
+    });
+    return {
+      policy: reader.trustedDecisionPolicy(),
+      classEnabled: reader.decisionIssueClassEnabled(),
+      again: reader.trustedDecisionPolicy(),
+      reads: () => reads,
+    };
+  };
+  const enabled = policyOf(() => report({}));
+  assert.deepEqual(enabled.policy, {
+    classEnabled: true,
+    maxPendingConfirmations: 10,
+    confirmationLabelName: 'status:needs-confirmation',
+  });
+  assert.equal(enabled.classEnabled, true);
+  assert.equal(enabled.reads(), 1);
+  assert.equal(enabled.again, enabled.policy);
+  const closed = {
+    classEnabled: false,
+    maxPendingConfirmations: null,
+    confirmationLabelName: null,
+  };
+  for (const unusable of [
+    report({ classes: { decisionIssue: 'class-off' } }),
+    report({ classes: { decisionIssue: 'master-off' } }),
+    report({ status: 'unreadable', classes: { decisionIssue: 'unreadable' } }),
+  ]) {
+    const result = policyOf(() => unusable);
+    assert.deepEqual(result.policy, closed);
+    assert.equal(result.classEnabled, false);
+  }
+  // An enabled class with an unusable cap or label keeps the class but fails
+  // the number or the name closed.
+  for (const [overrides, expected] of [
+    [{ maxPendingConfirmations: 0 }, { maxPendingConfirmations: null }],
+    [
+      { maxPendingConfirmations: Number.NaN },
+      { maxPendingConfirmations: null },
+    ],
+    [{ maxPendingConfirmations: undefined }, { maxPendingConfirmations: null }],
+    [{ confirmationLabelName: '  ' }, { confirmationLabelName: null }],
+    [{ confirmationLabelName: undefined }, { confirmationLabelName: null }],
+  ] as const) {
+    assert.deepEqual(policyOf(() => report(overrides)).policy, {
+      ...enabled.policy,
+      ...expected,
+    });
+  }
+  // A read that throws is a class that is off.
+  const throwing = policyOf(() => {
+    throw new Error('trusted read failed');
+  });
+  assert.deepEqual(throwing.policy, closed);
+  assert.equal(throwing.reads(), 1);
+});

@@ -4989,3 +4989,28 @@ test('decision gate: a source edited between two scans is judged again from fres
     [`${DECISION} (provisional_state_unavailable)`],
   );
 });
+
+test('decision gate: a reused gate holds only the current orphan pass', async () => {
+  const { resolver } = orphanGate({ 1: completedSource });
+  const first = await runOrphans([decisionIssue(1)], {
+    decisionSources: resolver,
+  });
+  assert.deepEqual(
+    first.confirmationQueue?.map((entry) => entry.number),
+    [1],
+  );
+  // No needs-decision source in the next listing: no stale queue.
+  const second = await runOrphans([decisionIssue(2, [])], {
+    decisionSources: resolver,
+  });
+  assert.equal('confirmationQueue' in second, false);
+  // A colliding name never reports the earlier queue either.
+  const collided = await runOrphans(
+    [decisionIssue(3, ['status:authoring-only'])],
+    {
+      decisionSources: resolver,
+      needsDecisionLabelName: 'status:authoring-only',
+    },
+  );
+  assert.equal('confirmationQueue' in collided, false);
+});

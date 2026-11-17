@@ -1031,6 +1031,7 @@ export async function filterOrphanIssues(issues, options = {}) {
   // whose needs-decision name collides with another configured name.
   const decisionSources = options.decisionSources;
   const decisionVerdicts = new Map();
+  let decisionGateRan = false;
   if (decisionSources !== undefined) {
     const labelNames = {
       needsDecisionLabelName: normalizeNeedsDecisionLabelName(
@@ -1076,14 +1077,14 @@ export async function filterOrphanIssues(issues, options = {}) {
         labels: [...labels],
       });
     }
-    if (candidates.length > 0) {
-      await decisionSources.prepare(candidates);
-      for (const candidate of candidates) {
-        decisionVerdicts.set(
-          candidate.issueNumber,
-          decisionSources.verdict(candidate.issueNumber),
-        );
-      }
+    // Always prepared, even with no source, so the gate holds only this pass.
+    decisionGateRan = !collides;
+    if (decisionGateRan) await decisionSources.prepare(candidates);
+    for (const candidate of candidates) {
+      decisionVerdicts.set(
+        candidate.issueNumber,
+        decisionSources.verdict(candidate.issueNumber),
+      );
     }
   }
   for (const issue of issues) {
@@ -1457,7 +1458,9 @@ export async function filterOrphanIssues(issues, options = {}) {
   };
   // #4538: a completed source awaiting confirmation is reported here, never
   // offered as work and never dropped silently. Present only when non-empty.
-  const confirmationQueue = decisionSources?.queue() ?? [];
+  const confirmationQueue = decisionGateRan
+    ? (decisionSources?.queue() ?? [])
+    : [];
   return {
     orphans: ranked,
     routed_to_human: routedToHuman,
@@ -2061,6 +2064,9 @@ provisional work is complete and awaits confirmation stays excluded with
 "details" "<label> (confirmation_pending)" whatever the flag or class says, and
 is listed in "confirmationQueue" (present only when non-empty): its number,
 title, bundle generation, chosen choices, and verified implementation links.
+Reading that state costs one work-item read and one comment read per
+needs-decision issue, whatever the flag says, because the queue must stay
+visible when it is off.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --

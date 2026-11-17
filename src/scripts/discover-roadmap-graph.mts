@@ -279,7 +279,8 @@ export interface LeafActiveClaim {
 export interface LeafReadiness {
   /**
    * Passes every A3 readiness filter — no `status:blocked-by-human` /
-   * `status:needs-decision` / `status:authoring-only` / authoring-hold label,
+   * `status:needs-decision` (unless admitted as a `decisionSource`, issue
+   * #4538) / `status:authoring-only` / authoring-hold label,
    * and every dependency
    * resolves to a closed issue: visible `Blocked by #N` / `Depends on #N` /
    * task-list refs and hidden `{prefix}-blocked-by` roadmap markers, exactly

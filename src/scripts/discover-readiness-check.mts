@@ -475,6 +475,11 @@ export function buildProvisionalDecisionEvidenceReader(input: {
   port: ProviderPort;
   /** Injectable trusted actor source for deterministic tests. */
   readTrustedMarkerActors?: () => string[];
+  /** Injectable trusted auto-decide read for deterministic tests. */
+  readTrustedAutoDecide?: (input: {
+    owner: string;
+    repo: string;
+  }) => TrustedAutoDecideReport;
   /**
    * Not read. The trusted base configuration supplies the actors and the
    * stale age; kept so the existing callers keep compiling.
@@ -530,7 +535,10 @@ export function buildProvisionalDecisionEvidenceReader(input: {
     if (trustedPolicy === undefined) {
       try {
         trustedPolicy = summarizeTrustedDecisionPolicy(
-          readTrustedAutoDecide({ owner, repo }),
+          (input.readTrustedAutoDecide ?? readTrustedAutoDecide)({
+            owner,
+            repo,
+          }),
         );
       } catch {
         trustedPolicy = {
@@ -1208,20 +1216,38 @@ export function buildDecisionSourceResolver(
 
   return {
     async prepare(sources) {
+      // Every pass starts clean, so a reused gate never reports the queue or
+      // the count of an earlier pass (an empty list clears them too).
       candidates.clear();
       evidenceByNumber.clear();
       queueByNumber.clear();
+      openConfirmationCount = undefined;
       for (const source of sources) {
         candidates.set(source.issueNumber, source);
       }
       if (candidates.size === 0) return;
-      let states: ReadonlyMap<number, ProvisionalDecisionEvidence>;
+      const states = new Map<number, unknown>();
+      const numbers = [...candidates.keys()];
       try {
-        states = await inputs.loadStates(
-          [...candidates.keys()].map((issueNumber) => ({ issueNumber })),
+        const batch = await inputs.loadStates(
+          numbers.map((issueNumber) => ({ issueNumber })),
         );
+        for (const [issueNumber, evidence] of batch) {
+          states.set(issueNumber, evidence);
+        }
       } catch {
-        return;
+        // One failing source must not hide the others (a completed source
+        // keeps its queue row), so read them one by one, each isolated. A
+        // source that still fails keeps no evidence.
+        for (const issueNumber of numbers) {
+          try {
+            const single = await inputs.loadStates([{ issueNumber }]);
+            const evidence = single.get(issueNumber);
+            if (evidence !== undefined) states.set(issueNumber, evidence);
+          } catch {
+            // No evidence for this source.
+          }
+        }
       }
       for (const [issueNumber, candidate] of candidates) {
         const evidence: unknown = states.get(issueNumber);
@@ -1829,7 +1855,8 @@ export async function evaluateDiscoverReadiness(
         labels: [...issue.labels],
       });
     }
-    if (labelled.length > 0) await decisionSources.prepare(labelled);
+    // Always prepared, even with no source, so the gate holds only this pass.
+    await decisionSources.prepare(labelled);
   }
 
   for (const issueNumber of evaluatedNumbers) {
@@ -2335,7 +2362,10 @@ export async function evaluateDiscoverReadiness(
   }
 
   const filteredByReason = countReasons(filteredOut);
-  const confirmationQueue = decisionSources?.queue() ?? [];
+  const confirmationQueue =
+    decisionSources !== undefined && !decisionNameCollides
+      ? decisionSources.queue()
+      : [];
   return {
     ready,
     filteredOut,
@@ -2938,7 +2968,9 @@ function printHelp() {
   work is complete and awaits confirmation is never ready, whatever the flag or
   class says (reasons: label:<name>, confirmation_pending) and is listed in
   "confirmationQueue" (present only when non-empty): its number, title, bundle
-  generation, chosen choices, and verified implementation links.
+  generation, chosen choices, and verified implementation links. Reading that
+  state costs one work-item read and one comment read per needs-decision issue,
+  whatever the flag says, because the queue must stay visible when it is off.
 
 Output schema (JSON mode):
   {
