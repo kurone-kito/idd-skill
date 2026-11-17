@@ -170,6 +170,19 @@ stop rules を仕組みとして設計する考え方(Anthropic のいう
 全体像は [docs/idd-workflow.md](docs/idd-workflow.md) を参照して
 ください。
 
+## オプション: 暫定的な意思決定
+
+既定では、判断が必要な issue は人の判断を待ちます。リポジトリがオプトイン
+(`dangerouslyAutoDecide`、既定はオフ。さらに停止の種類ごとのスイッチ)すると、
+セッションは現実的な選択肢の中から選び、通常の CI・レビュー・担当の
+ゲートをすべて通して実装し、人が確認できるように issue を開いたままにします。
+得るのは待ち時間の短縮、引き換えに手戻りの可能性を負います。人が別の
+選択肢を望んだ場合、同じ issue が保留状態の手戻りロードマップになります。
+実行側はコマンドとして提供済みですが、確認側はまだコマンドに接続されていません。
+詳しくは
+[Provisional decision opt-in](docs/customization.md#provisional-decision-opt-in)
+を参照してください。
+
 ## 実例で学ぶ
 
 [VRChat Event Calendar ワークショップ](docs/workshop/README.md) を

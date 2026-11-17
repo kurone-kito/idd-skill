@@ -3549,3 +3549,43 @@ The record comes before the action, so that a person can see and undo a choice
 from its confirmation issue. A decision that cannot be recorded leaves today's
 stop in place, and the caps count records, not links, so a failed link does not
 change them.
+
+**Provisional decisions.** Roadmap kurone-kito/idd-skill#4528 adds an opt-in
+lifecycle for decision issues that reuses this section's switches, and this note
+records why that lifecycle is shaped as it is. The rules themselves live in
+[Provisional decision lifecycle](idd-workflow.md#provisional-decision-lifecycle);
+the adopter's view is in
+[Provisional Decision Opt-in](customization.md#provisional-decision-opt-in).
+
+**The trade.** A needs-decision issue costs waiting time, and so does everything
+that depends on it. The opt-in buys that time back by letting a session act on
+a recorded, compared choice, and pays for it in possible rework. Two design
+choices keep the payment bounded. The source stays open, with its needs-decision
+label, until a person answers, so an agent's choice never becomes a human's by
+default. Later work may use the merged result only on exact proof (the recorded
+head and merge commit of the merged pull request), so a rework can name the
+work it affects without reverting it. Both are preventive; no observed incident
+yet.
+
+**Why confirmation is a procedural gate.** The first plan for the replay
+evaluator of issue kurone-kito/idd-skill#4571 held on 2026-10-20: it asked what
+"independently verifies a human's explicit acceptance" and what durable,
+independently authenticated evidence a later session could retrieve
+([the hold](https://github.com/kurone-kito/idd-skill/issues/4571#issuecomment-6283149765)).
+Independent authentication of a person's answer could only have come from
+separate accounts, human-only signing keys, or signed transcripts, none of which
+a repository that shares one authorized account can supply, and the existing
+claim markers need none of them. That was an overconstraint. The operator's
+clarification on 2026-10-23 on roadmap kurone-kito/idd-skill#4528 made
+confirmation a procedural gate instead: an actual explicit reply, recorded as a
+durable and scoped record by an authorized recorder, with no separate identity
+proof. The recorder trust assumption is stated once, in the
+[lifecycle section](idd-workflow.md#provisional-decision-lifecycle); the
+documents that adopters read link to it.
+
+**Why the gates do not move.** The flag supplies a decision, never a permission.
+A choice about how to implement a fix is distinct from permission to leave a
+mandatory gate unsatisfied, so claim ownership, CI, required reviews,
+unresolved threads, effort limits, and the merge policy keep their own
+contracts, and a bound source is only left out of the closing set, never out of
+a blocker (preventive; no observed incident yet).

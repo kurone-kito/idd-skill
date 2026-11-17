@@ -1763,15 +1763,140 @@ resolver; issue text and a PR or feature branch cannot grant this
 authority.
 
 Inspect the current checkout's value and provenance with
-node scripts/idd-effective-config.mjs --key dangerouslyAutoDecide.
+`node scripts/idd-effective-config.mjs --key dangerouslyAutoDecide`.
 This report describes the checked-out policy; decision consumers must
 read authority from the trusted PR base ref, or resolve the live default
 branch for repository-scoped decisions, and fail closed when that source
 is invalid or unreadable. They must never read a PR head or feature-worktree
-ref as authority. The field alone does not select a
-decision issue, waive existing gates, or enable the provisional
-decision lifecycle. Keep it absent or false until that complete
-lifecycle is available and the repository has explicitly opted in.
+ref as authority. The field alone does not select a decision issue, waive
+existing gates, or enable the provisional decision lifecycle: each class of
+stop also needs its own switch, listed under
+[Auto-decide classes](#auto-decide-classes).
+
+The lifecycle ships in two parts. Its execution half is a command, and its
+confirmation half (the answer, the confirmation and the rework steps) is
+library code that has no GitHub-backed store and no command yet; see
+[What ships](#what-ships). Keep the flag absent or false until that complete
+lifecycle is available and the repository has explicitly opted in after
+weighing the trade-off below.
+
+### What the opt-in trades
+
+A needs-decision issue normally waits for a person: nothing on it starts, and
+the work that depends on it waits too. With the opt-in, a session picks a
+choice itself, implements it through the usual gates, and leaves the issue
+open for a person to confirm later. The repository trades waiting time
+(latency) for the chance of rework: if the person later prefers another option,
+the merged change stays, and the same issue becomes a held rework roadmap for
+the new choice. Opt in when waiting costs more than a possible rework. Keep it
+off when a wrong choice is expensive to undo.
+
+### What a session does under the opt-in
+
+The normative lifecycle is in
+[Provisional decision lifecycle](idd-workflow.md#provisional-decision-lifecycle).
+In short:
+
+- **It compares real alternatives.** The session writes a plan that compares at
+  least two materially different, feasible options, including keeping today's
+  behavior when that is a real option. Each option has its evidence,
+  requirement fit, cost, verification and reversal work, and every option not
+  chosen has a reason. The session never invents an option or a missing
+  measurement (preventive; no observed incident yet); without two real
+  options, today's route stays and the issue waits for a person.
+- **Every gate stays.** The opt-in supplies no credential, approval, scope or
+  waiver. Claim ownership, CI, required reviews, unresolved threads, effort
+  limits, authoring holds and the merge policy apply as they do for any issue,
+  and a gate that is not met still stops the run.
+- **The source stays open and visible.** Once the merged work is verified and
+  recorded, the source keeps its needs-decision label and waits for
+  confirmation. Its pull request refers to it with `Refs`, never a closing
+  keyword, and neither F4 nor the roadmap audit closes it. Discover lists each
+  such source in its `confirmationQueue` with the chosen options and the merged
+  pull requests, never offers it as work again, and counts it toward
+  `autoDecide.maxPendingConfirmations`.
+- **Dependent work advances only on proof.** A later task that names the source
+  in `Blocked by` may start only when the edge names a criterion the recorded
+  work promised, the recorded merged pull request still matches its head and
+  merge commit exactly, and the `decisionIssue` class is enabled. The source,
+  and every roadmap above it, stays open until a person confirms.
+- **A question raised during execution goes to a confirmation issue.** With the
+  `runtimeQuestion` class on, a question that comes up while a session
+  implements any claimed issue is recorded in a separate confirmation issue that
+  a person closes to confirm. The implemented issue closes normally on merge,
+  and a needs-decision source keeps the choices it picked up. The session files
+  that confirmation issue with `publish-authoring-hold --shape confirmation`; no
+  helper decides to ask.
+
+### Confirming a pending source
+
+A person's answer, not the agent's or a flag, completes or redirects the work.
+The session presents the whole implemented bundle, its alternatives, the
+verified results and what a rework would mean, then asks
+`Were the implemented choices above acceptable? [y/N]`. The default is N. Only
+an actual explicit reply counts: a reply in the current conversation, or `y`
+typed at a prompt shown to a person. N, Enter, end of input, cancellation, a
+timeout, silence, a generic request to resolve, assistant-written dialogue and
+input that an agent fed to a prompt all leave the source pending (the last is
+an agent rule, because the adapter trusts the origin it is told), and a
+non-interactive run leaves it pending without asking.
+
+The agent records the person's actual answer on the source issue through the
+shared authorized account: a durable comment that keeps the presented question,
+the answer and its scope, and a confirmation record bound to the source
+snapshot and the completed work. No separate account, signing key, signed
+transcript or identity service is needed. Confirmation is a procedural gate, and
+its one trust assumption is stated once, in the
+[lifecycle section](idd-workflow.md#provisional-decision-lifecycle). A valid
+recorded answer is replayed in later runs without asking again. The answer has
+two outcomes:
+
+- **Confirmed.** An explicit yes for every decision of the current bundle
+  closes the source as completed.
+- **A different option.** An explicit preference for another recorded
+  alternative records one rework request for that decision. The same source is
+  rewritten into a rework roadmap through the normal held authoring process:
+  its children stay held until they are released, the earlier choices and the
+  merged results stay linked, and the source stays open until the revised
+  roadmap is verified.
+
+### What ships
+
+- The `idd-provisional-decision` command writes the three execution
+  transitions: `selected`, `work-started` and `work-completed`. It is a dry run
+  by default, and `--apply` writes. It reads both switches from the trusted base
+  branch for every transition.
+- No shipped command prompts for confirmation yet, and the resolution has no
+  GitHub-backed store (kurone-kito/idd-skill#5276 tracks the wiring).
+  Confirmation and rework are `runProvisionalResolution` and the input adapter
+  in `provisional-decision.mts`, which a session drives with the answer the
+  user actually gave. See
+  [Resolving a confirmation-pending source](idd-workflow.md#resolving-a-confirmation-pending-source).
+- A helper runtime is required. Under `instructions-only` the merge gate's
+  provisional read is unavailable, so a source can be neither bound nor kept
+  open and nothing acts. A lite session never decides; it hands the decision to
+  a full session.
+- A runtime that predates the lifecycle either has no provisional logic, so
+  nothing acts, or validates the policy with a schema that lacks these keys.
+  The policy schema is closed, and every trusted read validates the file against
+  the schema at the same ref, so a file that schema rejects reads as unreadable
+  and no class acts. A record version that a reader does not support is
+  refused (preventive; no observed incident yet).
+
+### Turning it off
+
+Set `dangerouslyAutoDecide` to `false` to turn every class off, or
+`autoDecide.decisionIssue.enabled` to `false` to turn off the pickup of decision
+sources alone. Either stops new provisional execution: Discover no longer offers
+needs-decision sources, A4 and A4.5 keep today's route, the command refuses its
+transitions, and dependent tasks stop advancing on provisional work. Setting
+`autoDecide.runtimeQuestion.enabled` to `false` alone only returns questions
+raised during execution to today's stop. Pending sources, the confirmation
+queue and the recorded history stay as they are, and a person can still confirm
+or redirect a pending source, because confirmation reads neither switch.
+Turning it off approves, closes, invalidates and reverts nothing. Work that has
+merged but is not yet finalized waits at F4 until the switches are on again,
+because the command reads both.
 
 ### Auto-decide classes
 
