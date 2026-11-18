@@ -509,6 +509,12 @@ When storage stops the review, send the drafts to a carrier marked
   criterion for each case in
   [Destructive operations](references/contract.md#destructive-operations), or
   name the guard that makes the case impossible.
+- For a draft that deletes, renames, or moves a repository path or tree,
+  include the reference inventory under
+  [Destructive operations](references/contract.md#destructive-operations):
+  repository references, including prose documentation that names the path,
+  and executable consumers (links, tests, hooks, workflows, templates, and
+  scripts).
 - Keep human-dependent setup, review, and approval work isolated from
   ready execution issues whenever possible.
 - Link every active child issue from its roadmap body.
