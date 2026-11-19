@@ -66,6 +66,12 @@ function assertAbsoluteNormalized(path) {
       `${path} is not in normalized form (it has '.', '..', or a repeated separator); refusing it`,
     );
   }
+  const { root } = pathParse(path);
+  if (path.length > root.length && (path.endsWith(sep) || path.endsWith('/'))) {
+    throw new Error(
+      `${path} has a trailing separator; refusing a directory-form file target`,
+    );
+  }
 }
 function splitPosixPath(path) {
   const { root } = pathParse(path);
@@ -126,9 +132,9 @@ function closeHeldDirs(held, close) {
 }
 /**
  * Open every intermediate directory with O_DIRECTORY|O_NOFOLLOW and keep the
- * descriptors. The final open uses a descriptor-relative path when the host
- * provides /proc/self/fd or /dev/fd; otherwise the chain is re-lstat'd against
- * the held inodes immediately before an absolute O_NOFOLLOW open.
+ * descriptors. The final open uses a descriptor-relative path via
+ * /proc/self/fd. Hosts without that mechanism are refused rather than using a
+ * racy absolute-path fallback.
  */
 function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
   const parts = splitPosixPath(path);
@@ -145,17 +151,23 @@ function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
       parts.root,
       flags.oRdonly | flags.oDirectory | flags.nonBlock,
     );
+    // Own the descriptor before fstat so a throw still closes it.
+    held.push({
+      fd: rootFd,
+      absPath: parts.root,
+      dev: 0,
+      ino: 0,
+    });
     const rootStat = fstat(rootFd);
     if (!rootStat.isDirectory()) {
-      close(rootFd);
       throw new Error(`path root is not a plain directory: ${parts.root}`);
     }
-    held.push({
+    held[held.length - 1] = {
       fd: rootFd,
       absPath: parts.root,
       dev: rootStat.dev,
       ino: rootStat.ino,
-    });
+    };
     for (let index = 0; index < parts.names.length - 1; index++) {
       const name = parts.names[index];
       if (name === undefined) {
@@ -167,14 +179,17 @@ function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
         throw new Error(`missing parent directory handle above ${abs}`);
       }
       const relative = fdRelativeChild(parent.fd, name, platform);
+      if (relative === null) {
+        throw new Error(
+          `this host cannot open ${abs} relative to a held directory descriptor; refusing rather than using a racy absolute-path fallback`,
+        );
+      }
       let childFd;
       try {
-        // When a descriptor-relative path is available, never retry the
-        // absolute pathname: held directory fds do not stop rename/replace
-        // of those names, and O_NOFOLLOW would only protect abs's final
-        // component.
+        // Never retry an absolute pathname after a descriptor-relative open:
+        // held directory fds do not stop rename/replace of those names.
         childFd = open(
-          relative ?? abs,
+          relative,
           flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
         );
       } catch (error) {
@@ -187,19 +202,24 @@ function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
           `cannot open intermediate directory ${abs}: ${describe(error)}`,
         );
       }
+      held.push({
+        fd: childFd,
+        absPath: abs,
+        dev: 0,
+        ino: 0,
+      });
       const childStat = fstat(childFd);
       if (!childStat.isDirectory()) {
-        close(childFd);
         throw new Error(
           `intermediate component is not a plain directory: ${abs}`,
         );
       }
-      held.push({
+      held[held.length - 1] = {
         fd: childFd,
         absPath: abs,
         dev: childStat.dev,
         ino: childStat.ino,
-      });
+      };
     }
     const finalName = parts.names[parts.names.length - 1];
     if (finalName === undefined) {
@@ -229,43 +249,16 @@ function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
       throw new Error(`missing parent directory handle above ${finalAbs}`);
     }
     const relative = fdRelativeChild(parent.fd, finalName, platform);
-    const revalidateHeldInodes = () => {
-      for (const dir of held) {
-        let st;
-        try {
-          st = lstat(dir.absPath);
-        } catch (error) {
-          throw new Error(
-            `intermediate component changed underfoot: ${dir.absPath}: ${describe(error)}`,
-          );
-        }
-        if (st.isSymbolicLink()) {
-          throw new Error(
-            `intermediate component is a symlink; refusing: ${dir.absPath}`,
-          );
-        }
-        if (!st.isDirectory() || st.dev !== dir.dev || st.ino !== dir.ino) {
-          throw new Error(
-            `intermediate component changed underfoot: ${dir.absPath}`,
-          );
-        }
-      }
-    };
+    if (relative === null) {
+      throw new Error(
+        `this host cannot open ${finalAbs} relative to a held directory descriptor; refusing rather than using a racy absolute-path fallback`,
+      );
+    }
     let finalFd;
-    if (relative !== null) {
-      // Descriptor-relative only — no absolute-path retry after failure.
-      try {
-        finalFd = open(relative, finalFlags, finalMode);
-      } catch (error) {
-        throw new Error(`cannot open ${finalAbs}: ${describe(error)}`);
-      }
-    } else {
-      revalidateHeldInodes();
-      try {
-        finalFd = open(finalAbs, finalFlags, finalMode);
-      } catch (error) {
-        throw new Error(`cannot open ${finalAbs}: ${describe(error)}`);
-      }
+    try {
+      finalFd = open(relative, finalFlags, finalMode);
+    } catch (error) {
+      throw new Error(`cannot open ${finalAbs}: ${describe(error)}`);
     }
     // Parent descriptors stay open only until the final open returns; the
     // fd-relative open already bound the name lookup to those inodes.
@@ -493,17 +486,19 @@ export function readNoFollowFile(path, deps = {}) {
     const bytesPath = freshBytesPath(deps);
     const unlink = deps.unlinkSync ?? unlinkSync;
     const readFile = deps.readFileSync ?? readFileSync;
+    let stagingOwned = false;
     try {
       const result = runWindowsHelper('read', [path, bytesPath], deps);
       refuseUnlessOk(result);
-      const delivered =
-        typeof result.bytesPath === 'string' ? result.bytesPath : bytesPath;
+      // The helper created this path with CREATE_NEW; only then may we unlink.
+      stagingOwned = true;
       if (typeof result.bytes === 'string') {
         return Buffer.from(result.bytes, 'base64');
       }
-      // Staging lives under the shared temp directory; verify the helper's
-      // content hash so a post-exit symlink replace cannot return other bytes.
-      const buffer = Buffer.from(readFile(delivered));
+      // Always read the Node-chosen staging path (not a possibly re-encoded
+      // echo from PowerShell stdout). Verify the helper's content hash so a
+      // post-exit symlink replace cannot return other bytes.
+      const buffer = Buffer.from(readFile(bytesPath));
       if (typeof result.sha256 === 'string' && result.sha256.length > 0) {
         const digest = createHash('sha256').update(buffer).digest('hex');
         if (digest !== result.sha256.toLowerCase()) {
@@ -518,11 +513,12 @@ export function readNoFollowFile(path, deps = {}) {
       }
       return buffer;
     } finally {
-      try {
-        unlink(bytesPath);
-      } catch {
-        // Best-effort cleanup of the staging file; the read result or refusal
-        // is what the caller must see.
+      if (stagingOwned) {
+        try {
+          unlink(bytesPath);
+        } catch {
+          // Best-effort cleanup of the staging file we know the helper created.
+        }
       }
     }
   }

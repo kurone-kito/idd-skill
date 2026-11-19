@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   constants,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -25,6 +26,13 @@ import {
 const SCRIPT = fileURLToPath(
   new URL('../src/scripts/windows-nofollow.ps1', import.meta.url),
 );
+
+/** POSIX live tests need /proc/self/fd for descriptor-relative opens. */
+function posixLiveDeps(): Record<string, never> | null {
+  if (!hasPosixNoFollowFlags()) return null;
+  if (!existsSync('/proc/self/fd')) return null;
+  return {};
+}
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), 'idd-nofollow-'));
@@ -112,11 +120,7 @@ test('readNoFollowFile returns bytes for a regular file', () => {
     const file = join(dir, 'plain.txt');
     writeFileSync(file, 'payload-bytes');
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) {
       assert.ok(
         true,
@@ -142,11 +146,7 @@ test('readNoFollowFile refuses a final symlink or junction', () => {
       return;
     }
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(link, deps),
@@ -171,11 +171,7 @@ test('readNoFollowFile refuses an intermediate reparse point', () => {
     }
     const target = join(linkDir, 'inside.txt');
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(target, deps),
@@ -192,11 +188,7 @@ test('readNoFollowFile refuses a non-regular final component', () => {
     const nested = join(dir, 'subdir');
     mkdirSync(nested);
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(nested, deps),
@@ -220,11 +212,7 @@ test('readNoFollowFile refuses a multi-hard-link file', () => {
       return;
     }
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     assert.throws(() => readNoFollowFile(file, deps), /hard link/i);
   } finally {
@@ -237,11 +225,7 @@ test('writeExclusiveNoFollow creates a new file and refuses an existing final co
   try {
     const file = join(dir, 'new.txt');
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     writeExclusiveNoFollow(file, 'created', deps);
     assert.equal(readFileSync(file, 'utf8'), 'created');
@@ -266,11 +250,7 @@ test('writeExclusiveNoFollow refuses a final symlink before the first write', ()
       return;
     }
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     assert.throws(
       () => writeExclusiveNoFollow(link, 'overwrite', deps),
@@ -292,11 +272,7 @@ test('copyNoFollow copies bytes and refuses a destination under a directory link
     mkdirSync(realParent);
     const destOk = join(realParent, 'dst.txt');
     const deps =
-      process.platform === 'win32'
-        ? { scriptPath: SCRIPT }
-        : hasPosixNoFollowFlags()
-          ? {}
-          : null;
+      process.platform === 'win32' ? { scriptPath: SCRIPT } : posixLiveDeps();
     if (deps === null) return;
     copyNoFollow(source, destOk, deps);
     assert.equal(readFileSync(destOk, 'utf8'), 'copy-me');
@@ -324,7 +300,7 @@ test('writeExclusiveNoFollow leaves the new file when a later write fails', () =
     );
     return;
   }
-  if (!hasPosixNoFollowFlags()) return;
+  if (posixLiveDeps() === null) return;
 
   const dir = scratch();
   try {

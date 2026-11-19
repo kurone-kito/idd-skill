@@ -8,6 +8,9 @@
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Match Node's UTF-8 stdout decode so staging paths with non-ASCII characters
+# survive the process boundary on a non-UTF-8 console code page.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function Write-Result([hashtable]$Object, [int]$ExitCode) {
   $Object | ConvertTo-Json -Compress -Depth 6
@@ -210,6 +213,11 @@ function Split-AbsoluteComponents([string]$Path) {
   foreach ($name in $names) {
     if ($name -eq '.' -or $name -eq '..') {
       Fail "path is not normalized: $Path"
+    }
+    # Reject NTFS alternate data stream syntax in components after the root
+    # (drive-letter colon stays in the root only).
+    if ($name.Contains(':')) {
+      Fail "path component looks like an alternate data stream: $name"
     }
   }
   return @{ root = $normalizedRoot; names = $names }
