@@ -11,6 +11,7 @@
 
 import * as nodeFs from 'node:fs';
 import { basename, dirname, join } from 'node:path';
+import { isQualifiedConfigRoot } from './idd-config.mts';
 import {
   checkContainment,
   type FsOps,
@@ -155,7 +156,7 @@ function parseEntry(
     corrupt(path, 'an entry has no string path');
   }
   const entryPath = value.path;
-  if (!entryPath.startsWith('/')) {
+  if (!isQualifiedConfigRoot(entryPath)) {
     corrupt(path, `entry path ${entryPath} is not absolute`);
   }
   if (value.kind === 'file') {
@@ -217,7 +218,10 @@ function parseEntry(
     };
   }
   if (value.kind === 'link') {
-    if (typeof value.target !== 'string' || !value.target.startsWith('/')) {
+    if (
+      typeof value.target !== 'string' ||
+      !isQualifiedConfigRoot(value.target)
+    ) {
       corrupt(path, `link entry ${entryPath} has no absolute target`);
     }
     // The installer only ever records its own `current` link, which targets a
