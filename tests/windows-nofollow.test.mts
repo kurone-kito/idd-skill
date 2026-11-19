@@ -137,7 +137,7 @@ test('readNoFollowFile refuses a final symlink or junction', () => {
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(link, deps),
-      /refuse|symlink|reparse|not a regular file/i,
+      /refuse|symlink|symbolic links|reparse|ELOOP|not a regular file/i,
     );
     assert.equal(readFileSync(real, 'utf8'), 'secret');
   } finally {

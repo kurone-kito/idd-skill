@@ -1,7 +1,9 @@
-# Dependency-free Windows no-follow open helper (issue #5287).
+﻿# Dependency-free Windows no-follow open helper (issue #5287).
 # Invoked as process arguments only: powershell.exe -File <this> <mode> <path> [dest]
 # Modes: read | create | copy
-# Stdout is one JSON object. Binary payloads are base64 under "bytes".
+# Stdout is one JSON object. Binary payloads for read are written to a
+# caller-provided staging file (args[2]) so Node's maxBuffer is not the
+# transport limit; small reads may still embed base64 under "bytes".
 # Exit 0 on success; non-zero on refusal or error (JSON still on stdout when possible).
 
 Set-StrictMode -Version Latest
@@ -17,7 +19,7 @@ function Fail([string]$Reason, [string]$Code = 'refuse') {
 }
 
 if ($args.Count -lt 2) {
-  Fail 'usage: windows-nofollow.ps1 <read|create|copy> <path> [dest]' 'usage'
+  Fail 'usage: windows-nofollow.ps1 <read|create|copy> <path> [dest-or-bytes]' 'usage'
 }
 
 $Mode = [string]$args[0]
@@ -33,11 +35,14 @@ if ([string]::IsNullOrWhiteSpace($TargetPath)) {
 if ($Mode -eq 'copy' -and [string]::IsNullOrWhiteSpace($DestPath)) {
   Fail 'copy requires a destination path' 'usage'
 }
+if ($Mode -eq 'read' -and [string]::IsNullOrWhiteSpace($DestPath)) {
+  Fail 'read requires a staging output path' 'usage'
+}
 if (-not [System.IO.Path]::IsPathRooted($TargetPath)) {
   Fail "path must be absolute: $TargetPath"
 }
 if (
-  $Mode -eq 'copy' -and
+  $Mode -in @('copy', 'read') -and
   ($DestPath -eq $null -or -not [System.IO.Path]::IsPathRooted($DestPath))
 ) {
   Fail "path must be absolute: $DestPath"
@@ -124,9 +129,21 @@ function Get-Win32Error {
   return [Runtime.InteropServices.Marshal]::GetLastWin32Error()
 }
 
-function Open-NoFollow([string]$Path, [uint32]$Access, [uint32]$Disposition) {
+# Directories are opened without FILE_SHARE_DELETE so a held handle blocks
+# rename/delete/replace of that component until the caller closes it. Files
+# allow read sharing only.
+function Open-NoFollow(
+  [string]$Path,
+  [uint32]$Access,
+  [uint32]$Disposition,
+  [switch]$IsDirectory
+) {
   $flags = [IdNoFollow]::FILE_FLAG_OPEN_REPARSE_POINT -bor [IdNoFollow]::FILE_FLAG_BACKUP_SEMANTICS -bor [IdNoFollow]::FILE_FLAG_SEQUENTIAL_SCAN
-  $share = [IdNoFollow]::FILE_SHARE_READ -bor [IdNoFollow]::FILE_SHARE_WRITE -bor [IdNoFollow]::FILE_SHARE_DELETE
+  $share = if ($IsDirectory) {
+    [IdNoFollow]::FILE_SHARE_READ
+  } else {
+    [IdNoFollow]::FILE_SHARE_READ
+  }
   $handle = [IdNoFollow]::CreateFileW(
     $Path,
     $Access,
@@ -146,6 +163,14 @@ function Close-HandleSafe([IntPtr]$Handle) {
   if ($Handle -ne [IntPtr]::Zero -and $Handle -ne [IdNoFollow]::INVALID_HANDLE_VALUE) {
     [void][IdNoFollow]::CloseHandle($Handle)
   }
+}
+
+function Close-HandleList([System.Collections.ArrayList]$Handles) {
+  if ($null -eq $Handles) { return }
+  foreach ($handle in $Handles) {
+    Close-HandleSafe ([IntPtr]$handle)
+  }
+  $Handles.Clear()
 }
 
 function Get-HandleInfo([IntPtr]$Handle) {
@@ -197,26 +222,30 @@ function Join-Component([string]$Parent, [string]$Name) {
   return $Parent + '\' + $Name
 }
 
-function Assert-ExistingChain([string]$Path, [switch]$FinalMustBeAbsent) {
+# Walk every existing component from a handle opened with
+# FILE_FLAG_OPEN_REPARSE_POINT. Intermediate directory handles stay open in
+# HeldHandles until the caller finishes I/O, so a replace of those components
+# fails while the chain is held (no FILE_SHARE_DELETE).
+function Assert-ExistingChain(
+  [string]$Path,
+  [switch]$FinalMustBeAbsent,
+  [System.Collections.ArrayList]$HeldHandles
+) {
   $parts = Split-AbsoluteComponents $Path
   $current = $parts.root
 
-  # Classify the volume root itself (must exist as a directory).
-  $rootOpen = Open-NoFollow $current ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+  $rootOpen = Open-NoFollow $current ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
   if (-not $rootOpen.ok) {
     Fail "cannot open path root: $current (win32=$($rootOpen.error))"
   }
-  try {
-    $rootInfo = Get-HandleInfo $rootOpen.handle
-    if ($null -eq $rootInfo) {
-      Fail "cannot inspect path root: $current"
-    }
-    $rootKind = Classify-Attributes $rootInfo.FileAttributes
-    if ($rootKind -ne 'directory') {
-      Fail "path root is not a plain directory: $current ($rootKind)"
-    }
-  } finally {
-    Close-HandleSafe $rootOpen.handle
+  [void]$HeldHandles.Add($rootOpen.handle)
+  $rootInfo = Get-HandleInfo $rootOpen.handle
+  if ($null -eq $rootInfo) {
+    Fail "cannot inspect path root: $current"
+  }
+  $rootKind = Classify-Attributes $rootInfo.FileAttributes
+  if ($rootKind -ne 'directory') {
+    Fail "path root is not a plain directory: $current ($rootKind)"
   }
 
   if ($parts.names.Count -eq 0) {
@@ -228,6 +257,26 @@ function Assert-ExistingChain([string]$Path, [switch]$FinalMustBeAbsent) {
     $candidate = Join-Component $current $name
     $isFinal = ($i -eq ($parts.names.Count - 1))
 
+    if (-not $isFinal) {
+      # Classify from the no-follow handle, not from a followed path string.
+      $dirOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
+      if (-not $dirOpen.ok) {
+        Fail "cannot open intermediate directory: $candidate (win32=$($dirOpen.error))"
+      }
+      [void]$HeldHandles.Add($dirOpen.handle)
+      $dirInfo = Get-HandleInfo $dirOpen.handle
+      if ($null -eq $dirInfo) {
+        Fail "cannot inspect intermediate directory: $candidate"
+      }
+      $openedKind = Classify-Attributes $dirInfo.FileAttributes
+      if ($openedKind -ne 'directory') {
+        Fail "intermediate component is not a plain directory: $candidate ($openedKind)"
+      }
+      $current = $candidate
+      continue
+    }
+
+    # Final component.
     $attrs = [IdNoFollow]::GetFileAttributesW($candidate)
     if ($attrs -eq [IdNoFollow]::INVALID_FILE_ATTRIBUTES) {
       $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
@@ -235,39 +284,13 @@ function Assert-ExistingChain([string]$Path, [switch]$FinalMustBeAbsent) {
       # component is treated as absent; CREATE_NEW still refuses if the name
       # appears before the open. A stale Win32 last-error (for example 203)
       # must not block that absent path.
-      if ($isFinal -and $FinalMustBeAbsent) {
+      if ($FinalMustBeAbsent) {
         return @{ parent = $current; final = $candidate; absent = $true }
       }
       Fail "cannot inspect $candidate (win32=$err)"
     }
 
     $kind = Classify-Attributes $attrs
-    if (-not $isFinal) {
-      if ($kind -ne 'directory') {
-        Fail "intermediate component is not a plain directory: $candidate ($kind)"
-      }
-      # Open the directory without following a reparse point to prove the handle.
-      $dirOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
-      if (-not $dirOpen.ok) {
-        Fail "cannot open intermediate directory: $candidate (win32=$($dirOpen.error))"
-      }
-      try {
-        $dirInfo = Get-HandleInfo $dirOpen.handle
-        if ($null -eq $dirInfo) {
-          Fail "cannot inspect intermediate directory: $candidate"
-        }
-        $openedKind = Classify-Attributes $dirInfo.FileAttributes
-        if ($openedKind -ne 'directory') {
-          Fail "intermediate component changed underfoot: $candidate ($openedKind)"
-        }
-      } finally {
-        Close-HandleSafe $dirOpen.handle
-      }
-      $current = $candidate
-      continue
-    }
-
-    # Final component.
     if ($FinalMustBeAbsent) {
       Fail "exclusive create refuses an existing final component: $candidate ($kind)"
     }
@@ -278,159 +301,192 @@ function Assert-ExistingChain([string]$Path, [switch]$FinalMustBeAbsent) {
   }
 }
 
-function Read-NoFollowFile([string]$Path) {
-  $chain = Assert-ExistingChain $Path
-  $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
-  if (-not $open.ok) {
-    Fail "cannot open for read: $($chain.final) (win32=$($open.error))"
+function Read-BytesFromHandle([IntPtr]$Handle, [string]$Label) {
+  $info = Get-HandleInfo $Handle
+  if ($null -eq $info) {
+    Fail "cannot inspect opened file: $Label"
   }
+  $kind = Classify-Attributes $info.FileAttributes
+  if ($kind -ne 'file') {
+    Fail "opened handle is not a regular file: $Label ($kind)"
+  }
+  if ($info.NumberOfLinks -ne 1) {
+    Fail "file has more than one hard link (nlink=$($info.NumberOfLinks)): $Label"
+  }
+  $size = [uint64]$info.FileSizeLow + ([uint64]$info.FileSizeHigh -shl 32)
+  if ($size -gt [uint32]::MaxValue) {
+    Fail "file too large to read through this helper: $Label"
+  }
+  $buffer = New-Object byte[] ([int]$size)
+  if ($size -gt 0) {
+    $total = [uint32]0
+    while ($total -lt $size) {
+      $chunk = New-Object byte[] ([Math]::Min(65536, $size - $total))
+      $read = [uint32]0
+      if (-not [IdNoFollow]::ReadFile($Handle, $chunk, [uint32]$chunk.Length, [ref]$read, [IntPtr]::Zero)) {
+        Fail "read failed for $Label (win32=$(Get-Win32Error))"
+      }
+      if ($read -eq 0) { break }
+      [Array]::Copy($chunk, 0, $buffer, $total, $read)
+      $total += $read
+    }
+    if ($total -ne $size) {
+      Fail "short read for $Label"
+    }
+  }
+  return @{ buffer = $buffer; nlink = $info.NumberOfLinks }
+}
+
+function Write-BytesToHandle([IntPtr]$Handle, [byte[]]$Bytes, [string]$Label) {
+  if ($null -eq $Bytes -or $Bytes.Length -eq 0) { return }
+  $offset = 0
+  while ($offset -lt $Bytes.Length) {
+    $remaining = $Bytes.Length - $offset
+    $chunkSize = [Math]::Min(65536, $remaining)
+    $chunk = New-Object byte[] $chunkSize
+    [Array]::Copy($Bytes, $offset, $chunk, 0, $chunkSize)
+    $written = [uint32]0
+    if (-not [IdNoFollow]::WriteFile($Handle, $chunk, [uint32]$chunkSize, [ref]$written, [IntPtr]::Zero)) {
+      Fail "write failed after exclusive create at $Label (win32=$(Get-Win32Error)); leftover path: $Label"
+    }
+    if ($written -eq 0) {
+      Fail "write made no progress after exclusive create at $Label; leftover path: $Label"
+    }
+    $offset += [int]$written
+  }
+}
+
+function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
+  $held = New-Object System.Collections.ArrayList
   try {
-    $info = Get-HandleInfo $open.handle
-    if ($null -eq $info) {
-      Fail "cannot inspect opened file: $($chain.final)"
+    $chain = Assert-ExistingChain $Path -HeldHandles $held
+    # Parent directory handles stay open for the final open and read so a
+    # concurrent replace of an intermediate component is blocked.
+    $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    if (-not $open.ok) {
+      Fail "cannot open for read: $($chain.final) (win32=$($open.error))"
     }
-    $kind = Classify-Attributes $info.FileAttributes
-    if ($kind -ne 'file') {
-      Fail "opened handle is not a regular file: $($chain.final) ($kind)"
-    }
-    if ($info.NumberOfLinks -ne 1) {
-      Fail "file has more than one hard link (nlink=$($info.NumberOfLinks)): $($chain.final)"
-    }
-    $size = [uint64]$info.FileSizeLow + ([uint64]$info.FileSizeHigh -shl 32)
-    if ($size -gt [uint32]::MaxValue) {
-      Fail "file too large to read through this helper: $($chain.final)"
-    }
-    $buffer = New-Object byte[] ([int]$size)
-    if ($size -gt 0) {
-      $total = [uint32]0
-      while ($total -lt $size) {
-        $chunk = New-Object byte[] ([Math]::Min(65536, $size - $total))
-        $read = [uint32]0
-        if (-not [IdNoFollow]::ReadFile($open.handle, $chunk, [uint32]$chunk.Length, [ref]$read, [IntPtr]::Zero)) {
-          Fail "read failed for $($chain.final) (win32=$(Get-Win32Error))"
+    try {
+      $payload = Read-BytesFromHandle $open.handle $chain.final
+      # Deliver bytes through the staging path so stdout stays small.
+      $stageHeld = New-Object System.Collections.ArrayList
+      try {
+        $stageChain = Assert-ExistingChain $StagingPath -FinalMustBeAbsent -HeldHandles $stageHeld
+        $stageOpen = Open-NoFollow $stageChain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+        if (-not $stageOpen.ok) {
+          Fail "cannot create staging file: $($stageChain.final) (win32=$($stageOpen.error))"
         }
-        if ($read -eq 0) { break }
-        [Array]::Copy($chunk, 0, $buffer, $total, $read)
-        $total += $read
+        try {
+          Write-BytesToHandle $stageOpen.handle $payload.buffer $stageChain.final
+        } finally {
+          Close-HandleSafe $stageOpen.handle
+        }
+      } finally {
+        Close-HandleList $stageHeld
       }
-      if ($total -ne $size) {
-        Fail "short read for $($chain.final)"
-      }
+      Write-Result @{
+        ok = $true
+        bytesPath = $StagingPath
+        nlink = $payload.nlink
+      } 0
+    } finally {
+      Close-HandleSafe $open.handle
     }
-    $b64 = [Convert]::ToBase64String($buffer)
-    Write-Result @{ ok = $true; bytes = $b64; nlink = $info.NumberOfLinks } 0
   } finally {
-    Close-HandleSafe $open.handle
+    Close-HandleList $held
   }
 }
 
 function Create-NoFollowFile([string]$Path, [byte[]]$Bytes) {
-  $chain = Assert-ExistingChain $Path -FinalMustBeAbsent
-  $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
-  if (-not $open.ok) {
-    Fail "exclusive create refused for $($chain.final) (win32=$($open.error))"
-  }
-  $created = $true
+  $held = New-Object System.Collections.ArrayList
   try {
-    $info = Get-HandleInfo $open.handle
-    if ($null -eq $info) {
-      Fail "cannot inspect created file: $($chain.final)"
+    $chain = Assert-ExistingChain $Path -FinalMustBeAbsent -HeldHandles $held
+    $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+    if (-not $open.ok) {
+      Fail "exclusive create refused for $($chain.final) (win32=$($open.error))"
     }
-    $kind = Classify-Attributes $info.FileAttributes
-    if ($kind -ne 'file') {
-      Fail "created handle is not a regular file: $($chain.final) ($kind)"
-    }
-    if ($null -ne $Bytes -and $Bytes.Length -gt 0) {
-      $offset = 0
-      while ($offset -lt $Bytes.Length) {
-        $remaining = $Bytes.Length - $offset
-        $chunkSize = [Math]::Min(65536, $remaining)
-        $chunk = New-Object byte[] $chunkSize
-        [Array]::Copy($Bytes, $offset, $chunk, 0, $chunkSize)
-        $written = [uint32]0
-        if (-not [IdNoFollow]::WriteFile($open.handle, $chunk, [uint32]$chunkSize, [ref]$written, [IntPtr]::Zero)) {
-          # Leave the new file at the caller-chosen path; do not delete it.
-          Fail "write failed after exclusive create at $($chain.final) (win32=$(Get-Win32Error)); leftover path: $($chain.final)"
-        }
-        if ($written -eq 0) {
-          Fail "write made no progress after exclusive create at $($chain.final); leftover path: $($chain.final)"
-        }
-        $offset += [int]$written
+    $created = $true
+    try {
+      $info = Get-HandleInfo $open.handle
+      if ($null -eq $info) {
+        Fail "cannot inspect created file: $($chain.final)"
       }
+      $kind = Classify-Attributes $info.FileAttributes
+      if ($kind -ne 'file') {
+        Fail "created handle is not a regular file: $($chain.final) ($kind)"
+      }
+      Write-BytesToHandle $open.handle $Bytes $chain.final
+      Write-Result @{ ok = $true; path = $chain.final; created = $created } 0
+    } finally {
+      Close-HandleSafe $open.handle
     }
-    Write-Result @{ ok = $true; path = $chain.final; created = $created } 0
   } finally {
-    Close-HandleSafe $open.handle
+    Close-HandleList $held
   }
 }
 
 function Copy-NoFollowFile([string]$Source, [string]$Destination) {
-  # Read source through the no-follow open, then exclusive-create the destination.
-  # Re-validate the destination parent chain so a directory link cannot redirect the write.
-  $sourceChain = Assert-ExistingChain $Source
-  $destChain = Assert-ExistingChain $Destination -FinalMustBeAbsent
+  $srcHeld = New-Object System.Collections.ArrayList
+  $destHeld = New-Object System.Collections.ArrayList
+  try {
+    $sourceChain = Assert-ExistingChain $Source -HeldHandles $srcHeld
+    $destChain = Assert-ExistingChain $Destination -FinalMustBeAbsent -HeldHandles $destHeld
 
-  $destParentFull = [System.IO.Path]::GetFullPath($destChain.parent)
-  $destFinalFull = [System.IO.Path]::GetFullPath($destChain.final)
-  $destParentPrefix = $destParentFull.TrimEnd('\') + '\'
-  if (-not $destFinalFull.StartsWith($destParentPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    Fail "destination escapes its parent directory: $Destination"
-  }
-  if ([System.IO.Path]::GetDirectoryName($destFinalFull) -ne $destParentFull.TrimEnd('\')) {
-    # GetDirectoryName on a drive root can differ; compare leaf only when parent is non-root.
+    # Preserve a drive-root separator: Path.Combine("C:", "leaf") is "C:leaf".
+    # Join-Component keeps "C:\" + leaf as "C:\leaf".
+    $destFinalFull = [System.IO.Path]::GetFullPath($destChain.final)
+    $destParentNormalized = [System.IO.Path]::GetFullPath($destChain.parent)
+    $destParentPrefix = if (
+      $destParentNormalized.EndsWith('\') -or $destParentNormalized.EndsWith('/')
+    ) {
+      $destParentNormalized
+    } else {
+      $destParentNormalized + '\'
+    }
+    if (-not $destFinalFull.StartsWith($destParentPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      Fail "destination escapes its parent directory: $Destination"
+    }
     $leaf = [System.IO.Path]::GetFileName($destFinalFull)
-    $rejoined = [System.IO.Path]::Combine($destParentFull.TrimEnd('\'), $leaf)
+    $rejoined = Join-Component $destParentPrefix $leaf
     if ([System.IO.Path]::GetFullPath($rejoined) -ne $destFinalFull) {
       Fail "destination is not a direct child of its verified parent: $Destination"
     }
-  }
 
-  $srcOpen = Open-NoFollow $sourceChain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
-  if (-not $srcOpen.ok) {
-    Fail "cannot open source for copy: $($sourceChain.final) (win32=$($srcOpen.error))"
-  }
-  try {
-    $srcInfo = Get-HandleInfo $srcOpen.handle
-    if ($null -eq $srcInfo) {
-      Fail "cannot inspect source: $($sourceChain.final)"
+    $srcOpen = Open-NoFollow $sourceChain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    if (-not $srcOpen.ok) {
+      Fail "cannot open source for copy: $($sourceChain.final) (win32=$($srcOpen.error))"
     }
-    $srcKind = Classify-Attributes $srcInfo.FileAttributes
-    if ($srcKind -ne 'file') {
-      Fail "source is not a regular file: $($sourceChain.final) ($srcKind)"
-    }
-    if ($srcInfo.NumberOfLinks -ne 1) {
-      Fail "source has more than one hard link (nlink=$($srcInfo.NumberOfLinks)): $($sourceChain.final)"
-    }
-    $size = [uint64]$srcInfo.FileSizeLow + ([uint64]$srcInfo.FileSizeHigh -shl 32)
-    if ($size -gt [uint32]::MaxValue) {
-      Fail "source too large to copy through this helper: $($sourceChain.final)"
-    }
-    $buffer = New-Object byte[] ([int]$size)
-    if ($size -gt 0) {
-      $total = [uint32]0
-      while ($total -lt $size) {
-        $chunk = New-Object byte[] ([Math]::Min(65536, $size - $total))
-        $read = [uint32]0
-        if (-not [IdNoFollow]::ReadFile($srcOpen.handle, $chunk, [uint32]$chunk.Length, [ref]$read, [IntPtr]::Zero)) {
-          Fail "source read failed: $($sourceChain.final) (win32=$(Get-Win32Error))"
+    try {
+      $payload = Read-BytesFromHandle $srcOpen.handle $sourceChain.final
+      $destOpen = Open-NoFollow $destChain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+      if (-not $destOpen.ok) {
+        Fail "exclusive create refused for $($destChain.final) (win32=$($destOpen.error))"
+      }
+      try {
+        $info = Get-HandleInfo $destOpen.handle
+        if ($null -eq $info) {
+          Fail "cannot inspect created file: $($destChain.final)"
         }
-        if ($read -eq 0) { break }
-        [Array]::Copy($chunk, 0, $buffer, $total, $read)
-        $total += $read
+        $kind = Classify-Attributes $info.FileAttributes
+        if ($kind -ne 'file') {
+          Fail "created handle is not a regular file: $($destChain.final) ($kind)"
+        }
+        Write-BytesToHandle $destOpen.handle $payload.buffer $destChain.final
+        Write-Result @{ ok = $true; path = $destChain.final; created = $true } 0
+      } finally {
+        Close-HandleSafe $destOpen.handle
       }
-      if ($total -ne $size) {
-        Fail "short source read: $($sourceChain.final)"
-      }
+    } finally {
+      Close-HandleSafe $srcOpen.handle
     }
   } finally {
-    Close-HandleSafe $srcOpen.handle
+    Close-HandleList $srcHeld
+    Close-HandleList $destHeld
   }
-
-  Create-NoFollowFile $Destination $buffer
 }
 
 switch ($Mode) {
-  'read' { Read-NoFollowFile $TargetPath }
+  'read' { Read-NoFollowFile $TargetPath $DestPath }
   'create' {
     # Content arrives as a base64 process argument (never interpolated into a
     # command string) or, when omitted, as raw bytes on stdin.

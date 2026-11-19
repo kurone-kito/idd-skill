@@ -5,23 +5,37 @@
 // See docs/typescript-sources.md.
 //
 // Cross-platform no-follow open primitive (issue #5287 / roadmap #5285).
-// POSIX uses O_RDONLY|O_NOFOLLOW|O_NONBLOCK (and O_CREAT|O_EXCL|O_NOFOLLOW for
-// exclusive create). Windows, where those constants are undefined, calls the
-// sibling System32 PowerShell script with the script path and target path as
-// process arguments (decision-windows-nofollow-binding). Missing flags are
-// never replaced with zero.
+// POSIX walks every intermediate component with lstat (refuse a symlink or
+// non-directory) then opens the final name with O_RDONLY|O_NOFOLLOW|O_NONBLOCK
+// (and O_CREAT|O_EXCL|O_NOFOLLOW for exclusive create). Windows, where those
+// constants are undefined, calls the sibling System32 PowerShell script with
+// the script path and the target path as process arguments
+// (decision-windows-nofollow-binding). Missing flags are never replaced with
+// zero. Large Windows reads return bytes through a caller-provided temp file
+// so the JSON stdout stays inside the process maxBuffer.
 
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import {
   closeSync,
   existsSync,
   constants as fsConstants,
   fstatSync,
+  lstatSync,
   openSync,
   readFileSync,
+  unlinkSync,
   writeSync,
 } from 'node:fs';
-import { isAbsolute, join, normalize, dirname as pathDirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  dirname as pathDirname,
+  isAbsolute,
+  join,
+  normalize,
+  parse as pathParse,
+  sep,
+} from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = pathDirname(fileURLToPath(import.meta.url));
@@ -59,13 +73,17 @@ export interface NoFollowDeps {
   openSync?: typeof openSync;
   closeSync?: typeof closeSync;
   fstatSync?: typeof fstatSync;
+  lstatSync?: typeof lstatSync;
   readFileSync?: typeof readFileSync;
   writeSync?: typeof writeSync;
+  unlinkSync?: typeof unlinkSync;
+  tmpdir?: () => string;
 }
 
 interface WindowsHelperSuccess {
   ok: true;
   bytes?: string;
+  bytesPath?: string;
   path?: string;
   nlink?: number;
   created?: boolean;
@@ -84,6 +102,18 @@ function describe(error: unknown): string {
   return String(error);
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as { code: unknown }).code === 'string'
+  ) {
+    return (error as { code: string }).code;
+  }
+  return undefined;
+}
+
 function assertAbsoluteNormalized(path: string): void {
   if (!isAbsolute(path)) {
     throw new Error(`path must be absolute: ${path}`);
@@ -92,6 +122,63 @@ function assertAbsoluteNormalized(path: string): void {
     throw new Error(
       `${path} is not in normalized form (it has '.', '..', or a repeated separator); refusing it`,
     );
+  }
+}
+
+/**
+ * Refuse a symbolic link (or non-directory) on any intermediate component.
+ * `O_NOFOLLOW` alone only protects the final name, so this walk is required
+ * for the intermediate-component acceptance criterion.
+ */
+function assertPosixIntermediateChain(
+  path: string,
+  deps: NoFollowDeps,
+  finalMustBeAbsent: boolean,
+): void {
+  const { root } = pathParse(path);
+  const remainder = path.slice(root.length);
+  const names = remainder.split(sep).filter((name) => name.length > 0);
+  if (names.length === 0) {
+    throw new Error(`refusing the filesystem root as a file target: ${path}`);
+  }
+  const lstat = deps.lstatSync ?? lstatSync;
+  let current = root.endsWith(sep) ? root : `${root}${sep}`;
+  // pathParse root on POSIX is usually '/', already with the separator.
+  if (root === '/') current = '/';
+  for (let index = 0; index < names.length; index++) {
+    const name = names[index]!;
+    if (name === '.' || name === '..') {
+      throw new Error(`path is not normalized: ${path}`);
+    }
+    current = current === '/' ? `/${name}` : join(current, name);
+    const isFinal = index === names.length - 1;
+    let stat;
+    try {
+      stat = lstat(current);
+    } catch (error) {
+      if (isFinal && finalMustBeAbsent && errorCode(error) === 'ENOENT') {
+        return;
+      }
+      throw new Error(`cannot inspect ${current}: ${describe(error)}`);
+    }
+    if (!isFinal) {
+      if (stat.isSymbolicLink()) {
+        throw new Error(
+          `intermediate component is a symlink; refusing: ${current}`,
+        );
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(
+          `intermediate component is not a plain directory: ${current}`,
+        );
+      }
+      continue;
+    }
+    if (finalMustBeAbsent) {
+      throw new Error(
+        `exclusive create refuses an existing final component: ${current}`,
+      );
+    }
   }
 }
 
@@ -237,6 +324,7 @@ function refuseUnlessOk(
 }
 
 function readPosix(path: string, deps: NoFollowDeps): Buffer {
+  assertPosixIntermediateChain(path, deps, false);
   const constants = deps.constants ?? fsConstants;
   const flags = requirePosixFlags(constants);
   const open = deps.openSync ?? openSync;
@@ -265,6 +353,7 @@ function writePosix(
   content: string | Uint8Array,
   deps: NoFollowDeps,
 ): void {
+  assertPosixIntermediateChain(path, deps, true);
   const constants = deps.constants ?? fsConstants;
   const flags = requirePosixFlags(constants);
   const open = deps.openSync ?? openSync;
@@ -314,6 +403,11 @@ function copyPosix(
   writePosix(destination, bytes, deps);
 }
 
+function freshBytesPath(deps: NoFollowDeps): string {
+  const dir = (deps.tmpdir ?? tmpdir)();
+  return join(dir, `idd-nofollow-${randomBytes(16).toString('hex')}.bin`);
+}
+
 /**
  * Read a regular file without following a symbolic link, junction, or other
  * reparse point on any component. Refuses a multi-hard-link file.
@@ -326,12 +420,26 @@ export function readNoFollowFile(
   assertAbsoluteNormalized(path);
   const platform = deps.platform ?? process.platform;
   if (platform === 'win32') {
-    const result = runWindowsHelper('read', [path], deps);
-    refuseUnlessOk(result);
-    if (typeof result.bytes !== 'string') {
-      throw new Error('windows no-follow helper omitted file bytes');
+    const bytesPath = freshBytesPath(deps);
+    const unlink = deps.unlinkSync ?? unlinkSync;
+    const readFile = deps.readFileSync ?? readFileSync;
+    try {
+      const result = runWindowsHelper('read', [path, bytesPath], deps);
+      refuseUnlessOk(result);
+      const delivered =
+        typeof result.bytesPath === 'string' ? result.bytesPath : bytesPath;
+      if (typeof result.bytes === 'string') {
+        return Buffer.from(result.bytes, 'base64');
+      }
+      return Buffer.from(readFile(delivered));
+    } finally {
+      try {
+        unlink(bytesPath);
+      } catch {
+        // Best-effort cleanup of the staging file; the read result or refusal
+        // is what the caller must see.
+      }
     }
-    return Buffer.from(result.bytes, 'base64');
   }
   return readPosix(path, deps);
 }
