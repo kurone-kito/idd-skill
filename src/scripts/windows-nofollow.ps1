@@ -276,28 +276,37 @@ function Assert-ExistingChain(
       continue
     }
 
-    # Final component.
-    $attrs = [IdNoFollow]::GetFileAttributesW($candidate)
-    if ($attrs -eq [IdNoFollow]::INVALID_FILE_ATTRIBUTES) {
-      $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-      # For an exclusive create, any invalid-attributes result on the final
-      # component is treated as absent; CREATE_NEW still refuses if the name
-      # appears before the open. A stale Win32 last-error (for example 203)
-      # must not block that absent path.
+    # Final component: classify from a no-follow handle, not GetFileAttributesW.
+    $finalOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    if (-not $finalOpen.ok) {
+      # For an exclusive create, a failed open of the final name is treated as
+      # absent; CREATE_NEW still refuses if the name appears before the open.
       if ($FinalMustBeAbsent) {
         return @{ parent = $current; final = $candidate; absent = $true }
       }
-      Fail "cannot inspect $candidate (win32=$err)"
+      Fail "cannot open final component: $candidate (win32=$($finalOpen.error))"
     }
-
-    $kind = Classify-Attributes $attrs
-    if ($FinalMustBeAbsent) {
-      Fail "exclusive create refuses an existing final component: $candidate ($kind)"
+    try {
+      $finalInfo = Get-HandleInfo $finalOpen.handle
+      if ($null -eq $finalInfo) {
+        Fail "cannot inspect final component: $candidate"
+      }
+      $kind = Classify-Attributes $finalInfo.FileAttributes
+      if ($FinalMustBeAbsent) {
+        Fail "exclusive create refuses an existing final component: $candidate ($kind)"
+      }
+      if ($kind -ne 'file') {
+        Fail "final component is not a regular file: $candidate ($kind)"
+      }
+      return @{
+        parent = $current
+        final = $candidate
+        absent = $false
+        kind = $kind
+      }
+    } finally {
+      Close-HandleSafe $finalOpen.handle
     }
-    if ($kind -ne 'file') {
-      Fail "final component is not a regular file: $candidate ($kind)"
-    }
-    return @{ parent = $current; final = $candidate; absent = $false; kind = $kind }
   }
 }
 
@@ -384,9 +393,17 @@ function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
       } finally {
         Close-HandleList $stageHeld
       }
+      $hasher = [System.Security.Cryptography.SHA256]::Create()
+      try {
+        $hashBytes = $hasher.ComputeHash($payload.buffer)
+      } finally {
+        $hasher.Dispose()
+      }
+      $sha = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
       Write-Result @{
         ok = $true
         bytesPath = $StagingPath
+        sha256 = $sha
         nlink = $payload.nlink
       } 0
     } finally {

@@ -15,7 +15,7 @@
 // zero. Large Windows reads return bytes through a caller-provided temp file
 // so the JSON stdout stays inside the process maxBuffer.
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -519,7 +519,22 @@ export function readNoFollowFile(path, deps = {}) {
       if (typeof result.bytes === 'string') {
         return Buffer.from(result.bytes, 'base64');
       }
-      return Buffer.from(readFile(delivered));
+      // Staging lives under the shared temp directory; verify the helper's
+      // content hash so a post-exit symlink replace cannot return other bytes.
+      const buffer = Buffer.from(readFile(delivered));
+      if (typeof result.sha256 === 'string' && result.sha256.length > 0) {
+        const digest = createHash('sha256').update(buffer).digest('hex');
+        if (digest !== result.sha256.toLowerCase()) {
+          throw new Error(
+            'windows no-follow staging file hash mismatch; refusing possibly replaced bytes',
+          );
+        }
+      } else {
+        throw new Error(
+          'windows no-follow helper omitted staging sha256; refusing unverifiable bytes',
+        );
+      }
+      return buffer;
     } finally {
       try {
         unlink(bytesPath);
