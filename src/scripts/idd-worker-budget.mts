@@ -548,9 +548,10 @@ function readAvailableMemoryBytes(readers: WorkerBudgetReaders): number | null {
 }
 
 /**
- * Read Windows `\System\Processor Queue Length` via `typeperf`. Returns null
- * when the counter cannot be sampled or is not a finite non-negative number.
- * Never consults `os.loadavg()`, which is always `[0, 0, 0]` on win32.
+ * Read Windows `\System\Processor Queue Length` via `typeperf` (#5289).
+ * Returns null when the counter cannot be sampled or is not a finite
+ * non-negative number. Never consults `os.loadavg()`, which is always
+ * `[0, 0, 0]` on win32.
  */
 export function readWindowsProcessorQueueLength(
   execFile: typeof execFileSync = execFileSync,
