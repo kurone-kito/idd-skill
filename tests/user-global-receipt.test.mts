@@ -80,9 +80,7 @@ test('a drive-letter current link target parses on win32 (#5288)', {
   withDataRoot((dataRoot) => {
     const linkPath = join(dataRoot, 'current');
     const target = join(dataRoot, '1.2.3');
-    writeReceiptFile(dataRoot, [
-      { kind: 'link', path: linkPath, target },
-    ]);
+    writeReceiptFile(dataRoot, [{ kind: 'link', path: linkPath, target }]);
     const result = readReceipt(dataRoot, fsWithFlags());
     assert.equal(result.state, 'valid');
     assert.deepEqual(result.receipt?.entries[0], {
@@ -177,9 +175,7 @@ test("a link that is not the installer's current link is corrupt (#5288)", () =>
 
 test('an unknown entry kind makes the receipt corrupt (#5288)', () => {
   withDataRoot((dataRoot) => {
-    writeReceiptFile(dataRoot, [
-      { kind: 'socket', path: join(dataRoot, 'x') },
-    ]);
+    writeReceiptFile(dataRoot, [{ kind: 'socket', path: join(dataRoot, 'x') }]);
     assert.throws(
       () => readReceipt(dataRoot, fsWithFlags()),
       /corrupt.*unknown kind/,
