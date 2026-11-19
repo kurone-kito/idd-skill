@@ -133,7 +133,15 @@ export interface WorkerBudgetReaders {
 }
 
 const DEFAULT_READERS: WorkerBudgetReaders = {
-  load1m: () => readOneMinuteLoad(os.loadavg()),
+  // Opt the Windows processor-queue signal in here only. `idd-load-gate`
+  // also calls `readOneMinuteLoad(os.loadavg())` and must keep its
+  // load-unavailable fast pass on win32 (#5289).
+  load1m: () =>
+    readOneMinuteLoad(
+      os.loadavg(),
+      process.platform,
+      process.platform === 'win32' ? readWindowsProcessorQueueLength : null,
+    ),
   coreCount: () => os.cpus().length,
   procMemAvailableBytes: () => {
     const contents = readFileSync('/proc/meminfo', 'utf8');
@@ -585,10 +593,7 @@ export function parseTypeperfQueueLength(stdout: string): number | null {
 export function readOneMinuteLoad(
   loadAverages: readonly number[],
   platform = process.platform,
-  windowsHostLoad:
-    | (() => number | null)
-    | number
-    | null = readWindowsProcessorQueueLength,
+  windowsHostLoad: (() => number | null) | number | null = null,
 ): number | null {
   if (platform === 'win32') {
     const value =

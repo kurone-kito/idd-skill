@@ -61,7 +61,15 @@ const FULL_OBJECT_ID_PATTERN = /^[0-9a-f]{40,64}$/;
 const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const DEFAULT_READERS = {
-  load1m: () => readOneMinuteLoad(os.loadavg()),
+  // Opt the Windows processor-queue signal in here only. `idd-load-gate`
+  // also calls `readOneMinuteLoad(os.loadavg())` and must keep its
+  // load-unavailable fast pass on win32 (#5289).
+  load1m: () =>
+    readOneMinuteLoad(
+      os.loadavg(),
+      process.platform,
+      process.platform === 'win32' ? readWindowsProcessorQueueLength : null,
+    ),
   coreCount: () => os.cpus().length,
   procMemAvailableBytes: () => {
     const contents = readFileSync('/proc/meminfo', 'utf8');
@@ -462,7 +470,7 @@ export function parseTypeperfQueueLength(stdout) {
 export function readOneMinuteLoad(
   loadAverages,
   platform = process.platform,
-  windowsHostLoad = readWindowsProcessorQueueLength,
+  windowsHostLoad = null,
 ) {
   if (platform === 'win32') {
     const value =
