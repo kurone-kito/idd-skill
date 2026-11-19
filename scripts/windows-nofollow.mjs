@@ -178,19 +178,36 @@ function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
           flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
         );
       } catch (error) {
-        if (relative !== null && relative !== abs) {
-          // /dev/fd relative open is unavailable on some hosts; fall back.
-          childFd = open(
-            abs,
-            flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
-          );
-        } else if (
-          errorCode(error) === 'ELOOP' ||
-          errorCode(error) === 'ENOTDIR'
-        ) {
+        if (errorCode(error) === 'ELOOP' || errorCode(error) === 'ENOTDIR') {
           throw new Error(
             `intermediate component is a symlink or not a plain directory: ${abs}`,
           );
+        }
+        if (relative !== null) {
+          // /dev/fd relative open is unavailable on some hosts; fall back to
+          // an absolute O_NOFOLLOW|O_DIRECTORY open. Do not fall back on
+          // ELOOP/ENOTDIR — those are real refusals of the component.
+          try {
+            childFd = open(
+              abs,
+              flags.oRdonly |
+                flags.oDirectory |
+                flags.noFollow |
+                flags.nonBlock,
+            );
+          } catch (fallbackError) {
+            if (
+              errorCode(fallbackError) === 'ELOOP' ||
+              errorCode(fallbackError) === 'ENOTDIR'
+            ) {
+              throw new Error(
+                `intermediate component is a symlink or not a plain directory: ${abs}`,
+              );
+            }
+            throw new Error(
+              `cannot open intermediate directory ${abs}: ${describe(fallbackError)}`,
+            );
+          }
         } else {
           throw new Error(
             `cannot open intermediate directory ${abs}: ${describe(error)}`,

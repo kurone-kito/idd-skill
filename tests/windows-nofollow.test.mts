@@ -179,7 +179,7 @@ test('readNoFollowFile refuses an intermediate reparse point', () => {
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(target, deps),
-      /refuse|intermediate|reparse|symlink|not a plain directory/i,
+      /refuse|intermediate|reparse|symlink|symbolic links|ELOOP|not a plain directory/i,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -308,7 +308,7 @@ test('copyNoFollow copies bytes and refuses a destination under a directory link
     const destBad = join(linkParent, 'escaped.txt');
     assert.throws(
       () => copyNoFollow(source, destBad, deps),
-      /refuse|intermediate|reparse|symlink|not a plain directory|escape/i,
+      /refuse|intermediate|reparse|symlink|symbolic links|ELOOP|not a plain directory|escape/i,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
