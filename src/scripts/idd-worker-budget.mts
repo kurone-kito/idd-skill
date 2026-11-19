@@ -6,7 +6,7 @@
 
 // Read-only dispatch budget for one orchestrator session (#3835).
 
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
@@ -539,12 +539,66 @@ function readAvailableMemoryBytes(readers: WorkerBudgetReaders): number | null {
   return safeNonNegativeInteger(readers.freeMemoryBytes);
 }
 
-/** Return the one-minute load, treating Windows' unsupported zero as absent. */
+/**
+ * Read Windows `\System\Processor Queue Length` via `typeperf`. Returns null
+ * when the counter cannot be sampled or is not a finite non-negative number.
+ * Never consults `os.loadavg()`, which is always `[0, 0, 0]` on win32.
+ */
+export function readWindowsProcessorQueueLength(
+  execFile: typeof execFileSync = execFileSync,
+): number | null {
+  try {
+    const stdout = execFile(
+      'typeperf',
+      ['\\System\\Processor Queue Length', '-sc', '1'],
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        windowsHide: true,
+      },
+    );
+    return parseTypeperfQueueLength(stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse the second CSV field of the first sample row from `typeperf` output. */
+export function parseTypeperfQueueLength(stdout: string): number | null {
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('"') || trimmed.includes('PDH-CSV')) continue;
+    const fields = trimmed.match(/"(?:[^"]|"")*"/g);
+    if (fields === null || fields.length < 2) continue;
+    const raw = fields[1].slice(1, -1).replace(/""/g, '"');
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+
+/**
+ * Return the host load signal used as `load1m`. On win32, ignore
+ * `os.loadavg()` (always zeros) and use `windowsHostLoad` — by default the
+ * processor-queue length. On other platforms, use the first load average.
+ */
 export function readOneMinuteLoad(
   loadAverages: readonly number[],
   platform = process.platform,
+  windowsHostLoad:
+    | (() => number | null)
+    | number
+    | null = readWindowsProcessorQueueLength,
 ): number | null {
-  if (platform === 'win32') return null;
+  if (platform === 'win32') {
+    const value =
+      typeof windowsHostLoad === 'function'
+        ? windowsHostLoad()
+        : windowsHostLoad;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  }
   const value = loadAverages[0];
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value

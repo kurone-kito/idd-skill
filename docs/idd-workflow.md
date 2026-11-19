@@ -2364,12 +2364,16 @@ Running this variant safely requires:
   shared-file contention reflects host capacity: a worker's own build
   and test children compete for the same cores and memory as every other
   session on the host, so run a cheap preflight before each dispatch.
-  Compare the 1-minute load average (`uptime`) with the core count
-  (`nproc`, or `sysctl -n hw.ncpu` on macOS), and read the available
-  memory (`MemAvailable` in `/proc/meminfo`, or the platform
-  equivalent). As starting values an operator may tune — this guide's
+  Compare the host load signal with the core count (`nproc`, or
+  `sysctl -n hw.ncpu` on macOS), and read the available memory
+  (`MemAvailable` in `/proc/meminfo`, or the platform equivalent). On
+  POSIX the load signal is the 1-minute load average (`uptime`). On
+  Windows, `os.loadavg()` is always `[0, 0, 0]`, so `idd-worker-budget`
+  reads `\System\Processor Queue Length` via `typeperf` instead; an
+  unreadable sample stays unavailable and yields zero slots with
+  `host-load`. As starting values an operator may tune — this guide's
   own starting choice, not measured limits — start no new worker while
-  the 1-minute load exceeds the core count or the available memory is
+  the load signal exceeds the core count or the available memory is
   under 2 GiB. A `host-load` stop with a readable load and core count is
   waited out: the orchestrator re-checks every 60 seconds and dispatches once
   `orchestrator.hostLoadClearStreak` (default 3) consecutive readings have a

@@ -7,8 +7,10 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   computeWorkerBudget,
+  parseTypeperfQueueLength,
   readInstructionsReport,
   readOneMinuteLoad,
+  readWindowsProcessorQueueLength,
   sortPathsInByteOrder,
   type WorkerBudgetReaders,
   type WorkerBudgetRequest,
@@ -71,8 +73,18 @@ test('worker budget reports each reachable limiting factor', () => {
       factor: 'host-load',
     },
     {
-      name: 'Windows unsupported host load',
-      readers: { load1m: () => readOneMinuteLoad([0, 0, 0], 'win32') },
+      name: 'Windows unreadable host load',
+      readers: {
+        load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', null),
+      },
+      factor: 'host-load',
+    },
+    {
+      name: 'Windows host load above core count',
+      readers: {
+        load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', 4.01),
+        coreCount: () => 4,
+      },
       factor: 'host-load',
     },
     {
@@ -225,16 +237,51 @@ test('running at or above the worker cap returns zero slots', () => {
   }
 });
 
-test('Windows load averages are treated as unavailable, not zero load', () => {
-  assert.equal(readOneMinuteLoad([0, 0, 0], 'win32'), null);
+test('Windows load averages are ignored; only the Windows host signal counts (#5289)', () => {
+  assert.equal(readOneMinuteLoad([0, 0, 0], 'win32', null), null);
+  assert.equal(readOneMinuteLoad([0, 0, 0], 'win32', 1.5), 1.5);
   assert.equal(readOneMinuteLoad([0.5, 0.4, 0.3], 'linux'), 0.5);
-  const result = computeWorkerBudget(
+  const unavailable = computeWorkerBudget(
     request(),
-    readers({ load1m: () => readOneMinuteLoad([0, 0, 0], 'win32') }),
+    readers({ load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', null) }),
   );
-  assert.equal(result.load1m, null);
-  assert.equal(result.slots, 0);
-  assert.equal(result.limitingFactor, 'host-load');
+  assert.equal(unavailable.load1m, null);
+  assert.equal(unavailable.slots, 0);
+  assert.equal(unavailable.limitingFactor, 'host-load');
+
+  const readable = computeWorkerBudget(
+    request({ maxWorkers: 4, running: 0, startable: 2 }),
+    readers({
+      load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', 1),
+      coreCount: () => 4,
+      procMemAvailableBytes: () => 8 * GIB,
+      rateLimit: () => ({
+        resources: {
+          core: { remaining: 5_000 },
+          graphql: { remaining: 5_000 },
+        },
+      }),
+    }),
+  );
+  assert.equal(readable.load1m, 1);
+  assert.ok(readable.slots > 0);
+  assert.notEqual(readable.limitingFactor, 'host-load');
+});
+
+test('typeperf CSV samples parse into a non-negative queue length (#5289)', () => {
+  assert.equal(
+    parseTypeperfQueueLength(
+      '"(PDH-CSV 4.0)","\\\\HOST\\System\\Processor Queue Length"\r\n"11/20/2026 06:55:20.026","1.000000"\r\n',
+    ),
+    1,
+  );
+  assert.equal(parseTypeperfQueueLength('not a sample'), null);
+  assert.equal(
+    readWindowsProcessorQueueLength(() => {
+      throw new Error('injected typeperf failure');
+    }),
+    null,
+  );
 });
 
 test('a successful rate-limit response missing either resource fails closed', () => {
