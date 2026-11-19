@@ -391,6 +391,7 @@ jobs:
               tests/upstream-candidate.test.mts
               tests/user-global-install.test.mts
               tests/user-global-paths.test.mts
+              tests/user-global-receipt.test.mts
               tests/validation-command-contract.test.mts
               tests/verify-install-deps.test.mts
               tests/windows-acl.test.mts
