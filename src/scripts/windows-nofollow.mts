@@ -189,15 +189,11 @@ function fdRelativeChild(
       `refusing a path component that is not a single name: ${name}`,
     );
   }
+  // Linux /proc/self/fd/<fd>/<name> is an openat substitute. Darwin's
+  // /dev/fd/<fd>/<name> is not a reliable equivalent, so non-Linux hosts
+  // return null and use absolute opens with held-inode revalidation.
   if (platform === 'linux' || existsSync('/proc/self/fd')) {
     return `/proc/self/fd/${dirFd}/${name}`;
-  }
-  if (
-    platform === 'darwin' ||
-    platform === 'freebsd' ||
-    existsSync('/dev/fd')
-  ) {
-    return `/dev/fd/${dirFd}/${name}`;
   }
   return null;
 }
@@ -270,6 +266,10 @@ function openPosixFinal(
       const relative = fdRelativeChild(parent.fd, name, platform);
       let childFd: number;
       try {
+        // When a descriptor-relative path is available, never retry the
+        // absolute pathname: held directory fds do not stop rename/replace
+        // of those names, and O_NOFOLLOW would only protect abs's final
+        // component.
         childFd = open(
           relative ?? abs,
           flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
@@ -280,36 +280,9 @@ function openPosixFinal(
             `intermediate component is a symlink or not a plain directory: ${abs}`,
           );
         }
-        if (relative !== null) {
-          // /dev/fd relative open is unavailable on some hosts; fall back to
-          // an absolute O_NOFOLLOW|O_DIRECTORY open. Do not fall back on
-          // ELOOP/ENOTDIR — those are real refusals of the component.
-          try {
-            childFd = open(
-              abs,
-              flags.oRdonly |
-                flags.oDirectory |
-                flags.noFollow |
-                flags.nonBlock,
-            );
-          } catch (fallbackError) {
-            if (
-              errorCode(fallbackError) === 'ELOOP' ||
-              errorCode(fallbackError) === 'ENOTDIR'
-            ) {
-              throw new Error(
-                `intermediate component is a symlink or not a plain directory: ${abs}`,
-              );
-            }
-            throw new Error(
-              `cannot open intermediate directory ${abs}: ${describe(fallbackError)}`,
-            );
-          }
-        } else {
-          throw new Error(
-            `cannot open intermediate directory ${abs}: ${describe(error)}`,
-          );
-        }
+        throw new Error(
+          `cannot open intermediate directory ${abs}: ${describe(error)}`,
+        );
       }
       const childStat = fstat(childFd);
       if (!childStat.isDirectory()) {
@@ -381,19 +354,11 @@ function openPosixFinal(
 
     let finalFd: number;
     if (relative !== null) {
+      // Descriptor-relative only — no absolute-path retry after failure.
       try {
         finalFd = open(relative, finalFlags, finalMode);
-      } catch {
-        // /dev/fd relative open is unavailable on some hosts; re-validate
-        // held inodes then open the absolute path while descriptors remain.
-        revalidateHeldInodes();
-        try {
-          finalFd = open(finalAbs, finalFlags, finalMode);
-        } catch (fallbackError) {
-          throw new Error(
-            `cannot open ${finalAbs}: ${describe(fallbackError)}`,
-          );
-        }
+      } catch (error) {
+        throw new Error(`cannot open ${finalAbs}: ${describe(error)}`);
       }
     } else {
       revalidateHeldInodes();
