@@ -63,8 +63,21 @@ test('hasPosixNoFollowFlags refuses a missing constant without substituting zero
       O_EXCL: 3,
       O_NOFOLLOW: 0,
       O_NONBLOCK: 0,
+      O_DIRECTORY: 4,
     }),
     true,
+  );
+  assert.equal(
+    hasPosixNoFollowFlags({
+      O_RDONLY: 0,
+      O_WRONLY: 1,
+      O_CREAT: 2,
+      O_EXCL: 3,
+      O_NOFOLLOW: 0,
+      O_NONBLOCK: 0,
+      O_DIRECTORY: undefined,
+    }),
+    false,
   );
 });
 

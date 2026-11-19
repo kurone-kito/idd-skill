@@ -5,11 +5,12 @@
 // See docs/typescript-sources.md.
 //
 // Cross-platform no-follow open primitive (issue #5287 / roadmap #5285).
-// POSIX walks every intermediate component with lstat (refuse a symlink or
-// non-directory) then opens the final name with O_RDONLY|O_NOFOLLOW|O_NONBLOCK
-// (and O_CREAT|O_EXCL|O_NOFOLLOW for exclusive create). Windows, where those
-// constants are undefined, calls the sibling System32 PowerShell script with
-// the script path and the target path as process arguments
+// POSIX opens every directory component with O_DIRECTORY|O_NOFOLLOW, keeps
+// those descriptors, and opens the final name relative to the parent fd via
+// /proc/self/fd (Linux) or /dev/fd when available so a swapped intermediate
+// symlink cannot redirect the final open. Windows, where those constants are
+// undefined, calls the sibling System32 PowerShell script with the script
+// path and the target path as process arguments
 // (decision-windows-nofollow-binding). Missing flags are never replaced with
 // zero. Large Windows reads return bytes through a caller-provided temp file
 // so the JSON stdout stays inside the process maxBuffer.
@@ -66,56 +67,232 @@ function assertAbsoluteNormalized(path) {
     );
   }
 }
-/**
- * Refuse a symbolic link (or non-directory) on any intermediate component.
- * `O_NOFOLLOW` alone only protects the final name, so this walk is required
- * for the intermediate-component acceptance criterion.
- */
-function assertPosixIntermediateChain(path, deps, finalMustBeAbsent) {
+function splitPosixPath(path) {
   const { root } = pathParse(path);
-  const remainder = path.slice(root.length);
-  const names = remainder.split(sep).filter((name) => name.length > 0);
+  const names = path
+    .slice(root.length)
+    .split(sep)
+    .filter((name) => name.length > 0);
   if (names.length === 0) {
     throw new Error(`refusing the filesystem root as a file target: ${path}`);
   }
-  const lstat = deps.lstatSync ?? lstatSync;
-  let current = root.endsWith(sep) ? root : `${root}${sep}`;
-  // pathParse root on POSIX is usually '/', already with the separator.
-  if (root === '/') current = '/';
-  for (let index = 0; index < names.length; index++) {
-    const name = names[index];
+  for (const name of names) {
     if (name === '.' || name === '..') {
       throw new Error(`path is not normalized: ${path}`);
     }
+  }
+  return { root: root === '' ? '/' : root, names };
+}
+function joinPosix(root, names, count) {
+  let current = root.endsWith(sep) || root === '/' ? root : `${root}${sep}`;
+  if (root === '/') current = '/';
+  for (let index = 0; index < count; index++) {
+    const name = names[index];
+    if (name === undefined) {
+      throw new Error('path component list ended early');
+    }
     current = current === '/' ? `/${name}` : join(current, name);
-    const isFinal = index === names.length - 1;
-    let stat;
+  }
+  return current;
+}
+/**
+ * Prefer a descriptor-relative path so the final open cannot be redirected
+ * by renaming an intermediate component to a symlink after the walk.
+ */
+function fdRelativeChild(dirFd, name, platform) {
+  if (name.includes('/') || name.includes('\0')) {
+    throw new Error(
+      `refusing a path component that is not a single name: ${name}`,
+    );
+  }
+  if (platform === 'linux' || existsSync('/proc/self/fd')) {
+    return `/proc/self/fd/${dirFd}/${name}`;
+  }
+  if (
+    platform === 'darwin' ||
+    platform === 'freebsd' ||
+    existsSync('/dev/fd')
+  ) {
+    return `/dev/fd/${dirFd}/${name}`;
+  }
+  return null;
+}
+function closeHeldDirs(held, close) {
+  for (let index = held.length - 1; index >= 0; index--) {
+    const dir = held[index];
+    if (dir === undefined) continue;
     try {
-      stat = lstat(current);
-    } catch (error) {
-      if (isFinal && finalMustBeAbsent && errorCode(error) === 'ENOENT') {
-        return;
-      }
-      throw new Error(`cannot inspect ${current}: ${describe(error)}`);
+      close(dir.fd);
+    } catch {
+      // Best-effort; the caller's error is the one to report.
     }
-    if (!isFinal) {
-      if (stat.isSymbolicLink()) {
+  }
+}
+/**
+ * Open every intermediate directory with O_DIRECTORY|O_NOFOLLOW and keep the
+ * descriptors. The final open uses a descriptor-relative path when the host
+ * provides /proc/self/fd or /dev/fd; otherwise the chain is re-lstat'd against
+ * the held inodes immediately before an absolute O_NOFOLLOW open.
+ */
+function openPosixFinal(path, deps, finalFlags, finalMode, finalMustBeAbsent) {
+  const parts = splitPosixPath(path);
+  const constants = deps.constants ?? fsConstants;
+  const flags = requirePosixFlags(constants);
+  const open = deps.openSync ?? openSync;
+  const close = deps.closeSync ?? closeSync;
+  const fstat = deps.fstatSync ?? fstatSync;
+  const lstat = deps.lstatSync ?? lstatSync;
+  const platform = deps.platform ?? process.platform;
+  const held = [];
+  try {
+    const rootFd = open(
+      parts.root,
+      flags.oRdonly | flags.oDirectory | flags.nonBlock,
+    );
+    const rootStat = fstat(rootFd);
+    if (!rootStat.isDirectory()) {
+      close(rootFd);
+      throw new Error(`path root is not a plain directory: ${parts.root}`);
+    }
+    held.push({
+      fd: rootFd,
+      absPath: parts.root,
+      dev: rootStat.dev,
+      ino: rootStat.ino,
+    });
+    for (let index = 0; index < parts.names.length - 1; index++) {
+      const name = parts.names[index];
+      if (name === undefined) {
+        throw new Error('path component list ended early');
+      }
+      const abs = joinPosix(parts.root, parts.names, index + 1);
+      const parent = held[held.length - 1];
+      if (parent === undefined) {
+        throw new Error(`missing parent directory handle above ${abs}`);
+      }
+      const relative = fdRelativeChild(parent.fd, name, platform);
+      let childFd;
+      try {
+        childFd = open(
+          relative ?? abs,
+          flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
+        );
+      } catch (error) {
+        if (relative !== null && relative !== abs) {
+          // /dev/fd relative open is unavailable on some hosts; fall back.
+          childFd = open(
+            abs,
+            flags.oRdonly | flags.oDirectory | flags.noFollow | flags.nonBlock,
+          );
+        } else if (
+          errorCode(error) === 'ELOOP' ||
+          errorCode(error) === 'ENOTDIR'
+        ) {
+          throw new Error(
+            `intermediate component is a symlink or not a plain directory: ${abs}`,
+          );
+        } else {
+          throw new Error(
+            `cannot open intermediate directory ${abs}: ${describe(error)}`,
+          );
+        }
+      }
+      const childStat = fstat(childFd);
+      if (!childStat.isDirectory()) {
+        close(childFd);
         throw new Error(
-          `intermediate component is a symlink; refusing: ${current}`,
+          `intermediate component is not a plain directory: ${abs}`,
         );
       }
-      if (!stat.isDirectory()) {
-        throw new Error(
-          `intermediate component is not a plain directory: ${current}`,
-        );
-      }
-      continue;
+      held.push({
+        fd: childFd,
+        absPath: abs,
+        dev: childStat.dev,
+        ino: childStat.ino,
+      });
     }
+    const finalName = parts.names[parts.names.length - 1];
+    if (finalName === undefined) {
+      throw new Error(`refusing the filesystem root as a file target: ${path}`);
+    }
+    const finalAbs = joinPosix(parts.root, parts.names, parts.names.length);
     if (finalMustBeAbsent) {
-      throw new Error(
-        `exclusive create refuses an existing final component: ${current}`,
-      );
+      try {
+        lstat(finalAbs);
+        throw new Error(
+          `exclusive create refuses an existing final component: ${finalAbs}`,
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith('exclusive create refuses')
+        ) {
+          throw error;
+        }
+        if (errorCode(error) !== 'ENOENT') {
+          throw new Error(`cannot inspect ${finalAbs}: ${describe(error)}`);
+        }
+      }
     }
+    const parent = held[held.length - 1];
+    if (parent === undefined) {
+      throw new Error(`missing parent directory handle above ${finalAbs}`);
+    }
+    const relative = fdRelativeChild(parent.fd, finalName, platform);
+    const revalidateHeldInodes = () => {
+      for (const dir of held) {
+        let st;
+        try {
+          st = lstat(dir.absPath);
+        } catch (error) {
+          throw new Error(
+            `intermediate component changed underfoot: ${dir.absPath}: ${describe(error)}`,
+          );
+        }
+        if (st.isSymbolicLink()) {
+          throw new Error(
+            `intermediate component is a symlink; refusing: ${dir.absPath}`,
+          );
+        }
+        if (!st.isDirectory() || st.dev !== dir.dev || st.ino !== dir.ino) {
+          throw new Error(
+            `intermediate component changed underfoot: ${dir.absPath}`,
+          );
+        }
+      }
+    };
+    let finalFd;
+    if (relative !== null) {
+      try {
+        finalFd = open(relative, finalFlags, finalMode);
+      } catch {
+        // /dev/fd relative open is unavailable on some hosts; re-validate
+        // held inodes then open the absolute path while descriptors remain.
+        revalidateHeldInodes();
+        try {
+          finalFd = open(finalAbs, finalFlags, finalMode);
+        } catch (fallbackError) {
+          throw new Error(
+            `cannot open ${finalAbs}: ${describe(fallbackError)}`,
+          );
+        }
+      }
+    } else {
+      revalidateHeldInodes();
+      try {
+        finalFd = open(finalAbs, finalFlags, finalMode);
+      } catch (error) {
+        throw new Error(`cannot open ${finalAbs}: ${describe(error)}`);
+      }
+    }
+    // Parent descriptors stay open only until the final open returns; the
+    // fd-relative open already bound the name lookup to those inodes.
+    closeHeldDirs(held, close);
+    held.length = 0;
+    return finalFd;
+  } catch (error) {
+    closeHeldDirs(held, close);
+    throw error;
   }
 }
 function resolveScriptPath(deps) {
@@ -144,6 +321,7 @@ function requirePosixFlags(constants) {
   const oWriteOnly = constants.O_WRONLY;
   const oCreat = constants.O_CREAT;
   const oExcl = constants.O_EXCL;
+  const oDirectory = constants.O_DIRECTORY;
   // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
   if (
     noFollow === undefined ||
@@ -151,13 +329,22 @@ function requirePosixFlags(constants) {
     oRdonly === undefined ||
     oWriteOnly === undefined ||
     oCreat === undefined ||
-    oExcl === undefined
+    oExcl === undefined ||
+    oDirectory === undefined
   ) {
     throw new Error(
       'this platform does not support the no-follow and nonblocking opens required for this helper; refusing before any mutation',
     );
   }
-  return { noFollow, nonBlock, oRdonly, oWriteOnly, oCreat, oExcl };
+  return {
+    noFollow,
+    nonBlock,
+    oRdonly,
+    oWriteOnly,
+    oCreat,
+    oExcl,
+    oDirectory,
+  };
 }
 function parseHelperOutput(stdout) {
   const text = stdout.trim();
@@ -236,14 +423,18 @@ function refuseUnlessOk(result) {
   }
 }
 function readPosix(path, deps) {
-  assertPosixIntermediateChain(path, deps, false);
   const constants = deps.constants ?? fsConstants;
   const flags = requirePosixFlags(constants);
-  const open = deps.openSync ?? openSync;
   const close = deps.closeSync ?? closeSync;
   const fstat = deps.fstatSync ?? fstatSync;
   const readFile = deps.readFileSync ?? readFileSync;
-  const fd = open(path, flags.oRdonly | flags.noFollow | flags.nonBlock);
+  const fd = openPosixFinal(
+    path,
+    deps,
+    flags.oRdonly | flags.noFollow | flags.nonBlock,
+    undefined,
+    false,
+  );
   try {
     const stat = fstat(fd);
     if (!stat.isFile()) {
@@ -260,10 +451,8 @@ function readPosix(path, deps) {
   }
 }
 function writePosix(path, content, deps) {
-  assertPosixIntermediateChain(path, deps, true);
   const constants = deps.constants ?? fsConstants;
   const flags = requirePosixFlags(constants);
-  const open = deps.openSync ?? openSync;
   const close = deps.closeSync ?? closeSync;
   const fstat = deps.fstatSync ?? fstatSync;
   const write = deps.writeSync ?? writeSync;
@@ -271,10 +460,12 @@ function writePosix(path, content, deps) {
     typeof content === 'string'
       ? Buffer.from(content, 'utf8')
       : Buffer.from(content);
-  const fd = open(
+  const fd = openPosixFinal(
     path,
+    deps,
     flags.oWriteOnly | flags.oCreat | flags.oExcl | flags.noFollow,
     0o644,
+    true,
   );
   let closed = false;
   try {
@@ -395,6 +586,7 @@ export function hasPosixNoFollowFlags(constants = fsConstants) {
     constants?.O_RDONLY !== undefined &&
     constants?.O_WRONLY !== undefined &&
     constants?.O_CREAT !== undefined &&
-    constants?.O_EXCL !== undefined
+    constants?.O_EXCL !== undefined &&
+    constants?.O_DIRECTORY !== undefined
   );
 }
