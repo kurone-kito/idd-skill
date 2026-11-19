@@ -277,6 +277,12 @@ test('typeperf CSV samples parse into a non-negative queue length (#5289)', () =
   );
   assert.equal(parseTypeperfQueueLength('not a sample'), null);
   assert.equal(
+    parseTypeperfQueueLength(
+      '"(PDH-CSV 4.0)","\\\\HOST\\System\\Processor Queue Length"\r\n"11/20/2026 06:55:20.026",""\r\n',
+    ),
+    null,
+  );
+  assert.equal(
     readWindowsProcessorQueueLength(() => {
       throw new Error('injected typeperf failure');
     }),

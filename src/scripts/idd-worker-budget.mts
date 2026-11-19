@@ -579,6 +579,8 @@ export function parseTypeperfQueueLength(stdout: string): number | null {
     const fields = trimmed.match(/"(?:[^"]|"")*"/g);
     if (fields === null || fields.length < 2) continue;
     const raw = fields[1].slice(1, -1).replace(/""/g, '"');
+    // Empty CSV fields become 0 under Number(''); treat them as unreadable.
+    if (raw.trim() === '') continue;
     const value = Number(raw);
     if (Number.isFinite(value) && value >= 0) return value;
   }
