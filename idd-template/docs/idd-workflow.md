@@ -2359,8 +2359,9 @@ Running this variant safely requires:
   As starting values an operator may tune — this guide's own starting
   choice, not measured limits — start no new worker while the load
   signal exceeds the core count (or, on Windows, meets it) or the
-  available memory is under 2 GiB. A `host-load` stop with a readable load and core count is
-  waited out: the orchestrator re-checks every 60 seconds and dispatches once
+  available memory is under 2 GiB. A `host-load` stop with a readable
+  load and core count is waited out: the orchestrator re-checks every
+  60 seconds and dispatches once
   `orchestrator.hostLoadClearStreak` (default 3) consecutive readings have a
   free slot, stopping at `orchestrator.hostLoadWaitCeiling` (default `PT30M`).
   A memory stop is not waited out; dispatch fewer workers instead. In one
