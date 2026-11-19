@@ -130,6 +130,12 @@ export interface WorkerBudgetReaders {
   procMemAvailableBytes: () => number | null;
   freeMemoryBytes: () => number;
   rateLimit: () => unknown;
+  /**
+   * Host platform for the load comparison. Win32 uses `>=` so a processor
+   * queue equal to the core count is host-load (#5289); other platforms keep
+   * the existing strict `>` threshold.
+   */
+  platform?: () => NodeJS.Platform | string;
 }
 
 const DEFAULT_READERS: WorkerBudgetReaders = {
@@ -150,6 +156,7 @@ const DEFAULT_READERS: WorkerBudgetReaders = {
   },
   freeMemoryBytes: () => os.freemem(),
   rateLimit: () => ghApiJson('rate_limit'),
+  platform: () => process.platform,
 };
 
 if (import.meta.main) {
@@ -249,6 +256,15 @@ export function computeWorkerBudget(
   const load1m = safeNonNegativeNumber(readers.load1m);
   const coreCount = safePositiveInteger(readers.coreCount);
   const availableMemoryBytes = readAvailableMemoryBytes(readers);
+  const platform = readers.platform?.() ?? process.platform;
+  // Processor Queue Length counts ready threads waiting for a CPU. A queue
+  // equal to the core count is already saturated on win32 (#5289). POSIX
+  // loadavg keeps the existing strict `>` threshold so equality still admits
+  // slots.
+  const hostLoadExceeded =
+    load1m !== null &&
+    coreCount !== null &&
+    (platform === 'win32' ? load1m >= coreCount : load1m > coreCount);
 
   let restRemaining: number | null = null;
   let graphqlRemaining: number | null = null;
@@ -275,7 +291,7 @@ export function computeWorkerBudget(
   const slots = Math.max(0, Math.min(...limits));
 
   let limitingFactor: WorkerBudgetLimitingFactor;
-  if (load1m === null || coreCount === null || load1m > coreCount) {
+  if (load1m === null || coreCount === null || hostLoadExceeded) {
     limitingFactor = 'host-load';
   } else if (
     availableMemoryBytes === null ||

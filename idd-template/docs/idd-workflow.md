@@ -2354,10 +2354,12 @@ Running this variant safely requires:
   Windows, `os.loadavg()` is always `[0, 0, 0]`, so `idd-worker-budget`
   reads `\System\Processor Queue Length` via `typeperf` instead; an
   unreadable sample stays unavailable and yields zero slots with
-  `host-load`. As starting values an operator may tune — this guide's
-  own starting choice, not measured limits — start no new worker while
-  the load signal exceeds the core count or the available memory is
-  under 2 GiB. A `host-load` stop with a readable load and core count is
+  `host-load`, and a queue at or above the core count is also
+  `host-load` (POSIX loadavg still uses a strict greater-than check).
+  As starting values an operator may tune — this guide's own starting
+  choice, not measured limits — start no new worker while the load
+  signal exceeds the core count (or, on Windows, meets it) or the
+  available memory is under 2 GiB. A `host-load` stop with a readable load and core count is
   waited out: the orchestrator re-checks every 60 seconds and dispatches once
   `orchestrator.hostLoadClearStreak` (default 3) consecutive readings have a
   free slot, stopping at `orchestrator.hostLoadWaitCeiling` (default `PT30M`).

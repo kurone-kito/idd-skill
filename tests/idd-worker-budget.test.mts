@@ -84,6 +84,16 @@ test('worker budget reports each reachable limiting factor', () => {
       readers: {
         load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', 4.01),
         coreCount: () => 4,
+        platform: () => 'win32',
+      },
+      factor: 'host-load',
+    },
+    {
+      name: 'Windows host load equal to core count',
+      readers: {
+        load1m: () => readOneMinuteLoad([0, 0, 0], 'win32', 4),
+        coreCount: () => 4,
+        platform: () => 'win32',
       },
       factor: 'host-load',
     },
@@ -364,7 +374,12 @@ test('available memory falls back from /proc/meminfo to os.freemem()', () => {
 
 test('worker budget admits slots at each exact threshold', () => {
   const atThreshold = [
-    { name: 'load equal to the core count', readers: { load1m: () => 4 } },
+    {
+      name: 'load equal to the core count',
+      // POSIX loadavg keeps strict `>`; pin a non-win32 platform so this
+      // threshold stays admitted when the suite runs on Windows (#5289).
+      readers: { load1m: () => 4, platform: () => 'linux' },
+    },
     {
       name: 'memory at the floor',
       readers: { procMemAvailableBytes: () => 2 * GIB },
