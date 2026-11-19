@@ -120,14 +120,14 @@ function requirePosixFlags(constants: NonNullable<NoFollowDeps['constants']>): {
   noFollow: number;
   nonBlock: number;
   oRdonly: number;
-  oWronly: number;
+  oWriteOnly: number;
   oCreat: number;
   oExcl: number;
 } {
   const noFollow = constants.O_NOFOLLOW;
   const nonBlock = constants.O_NONBLOCK;
   const oRdonly = constants.O_RDONLY;
-  const oWronly = constants.O_WRONLY;
+  const oWriteOnly = constants.O_WRONLY;
   const oCreat = constants.O_CREAT;
   const oExcl = constants.O_EXCL;
   // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
@@ -135,7 +135,7 @@ function requirePosixFlags(constants: NonNullable<NoFollowDeps['constants']>): {
     noFollow === undefined ||
     nonBlock === undefined ||
     oRdonly === undefined ||
-    oWronly === undefined ||
+    oWriteOnly === undefined ||
     oCreat === undefined ||
     oExcl === undefined
   ) {
@@ -143,7 +143,7 @@ function requirePosixFlags(constants: NonNullable<NoFollowDeps['constants']>): {
       'this platform does not support the no-follow and nonblocking opens required for this helper; refusing before any mutation',
     );
   }
-  return { noFollow, nonBlock, oRdonly, oWronly, oCreat, oExcl };
+  return { noFollow, nonBlock, oRdonly, oWriteOnly, oCreat, oExcl };
 }
 
 function parseHelperOutput(stdout: string): WindowsHelperResult {
@@ -277,7 +277,7 @@ function writePosix(
       : Buffer.from(content);
   const fd = open(
     path,
-    flags.oWronly | flags.oCreat | flags.oExcl | flags.noFollow,
+    flags.oWriteOnly | flags.oCreat | flags.oExcl | flags.noFollow,
     0o644,
   );
   let closed = false;
@@ -318,6 +318,7 @@ function copyPosix(
  * Read a regular file without following a symbolic link, junction, or other
  * reparse point on any component. Refuses a multi-hard-link file.
  */
+// audit:ignore-dead-export: callers land in later Windows roadmap children (#5290); this child only adds the primitive
 export function readNoFollowFile(
   path: string,
   deps: NoFollowDeps = {},
@@ -340,6 +341,7 @@ export function readNoFollowFile(
  * If the exclusive create succeeds and a later write fails, the new file
  * remains only at the caller-chosen path; this helper does not delete it.
  */
+// audit:ignore-dead-export: callers land in later Windows roadmap children (#5290); this child only adds the primitive
 export function writeExclusiveNoFollow(
   path: string,
   content: string | Uint8Array,
@@ -370,6 +372,7 @@ export function writeExclusiveNoFollow(
  * on either path. Refuses when the destination would escape its verified
  * parent through a directory link.
  */
+// audit:ignore-dead-export: callers land in later Windows roadmap children (#5290); this child only adds the primitive
 export function copyNoFollow(
   source: string,
   destination: string,
@@ -390,6 +393,7 @@ export function copyNoFollow(
  * True when this process can use the POSIX no-follow open flags without
  * substituting zero for a missing constant.
  */
+// audit:ignore-dead-export: capability probe for tests and later adopters; no production caller in this child
 export function hasPosixNoFollowFlags(
   constants: NoFollowDeps['constants'] = fsConstants,
 ): boolean {

@@ -137,7 +137,7 @@ test('readNoFollowFile refuses a final symlink or junction', () => {
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(link, deps),
-      /refus|symlink|reparse|not a regular file/i,
+      /refuse|symlink|reparse|not a regular file/i,
     );
     assert.equal(readFileSync(real, 'utf8'), 'secret');
   } finally {
@@ -166,7 +166,7 @@ test('readNoFollowFile refuses an intermediate reparse point', () => {
     if (deps === null) return;
     assert.throws(
       () => readNoFollowFile(target, deps),
-      /refus|intermediate|reparse|symlink|not a plain directory/i,
+      /refuse|intermediate|reparse|symlink|not a plain directory/i,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -234,7 +234,7 @@ test('writeExclusiveNoFollow creates a new file and refuses an existing final co
     assert.equal(readFileSync(file, 'utf8'), 'created');
     assert.throws(
       () => writeExclusiveNoFollow(file, 'again', deps),
-      /refus|exist|EEXIST|win32/i,
+      /refuse|exist|EEXIST|win32/i,
     );
     assert.equal(readFileSync(file, 'utf8'), 'created');
   } finally {
@@ -261,7 +261,7 @@ test('writeExclusiveNoFollow refuses a final symlink before the first write', ()
     if (deps === null) return;
     assert.throws(
       () => writeExclusiveNoFollow(link, 'overwrite', deps),
-      /refus|exist|symlink|reparse/i,
+      /refuse|exist|symlink|reparse/i,
     );
     assert.equal(readFileSync(real, 'utf8'), 'keep');
   } finally {
@@ -295,7 +295,7 @@ test('copyNoFollow copies bytes and refuses a destination under a directory link
     const destBad = join(linkParent, 'escaped.txt');
     assert.throws(
       () => copyNoFollow(source, destBad, deps),
-      /refus|intermediate|reparse|symlink|not a plain directory|escape/i,
+      /refuse|intermediate|reparse|symlink|not a plain directory|escape/i,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -321,12 +321,22 @@ test('writeExclusiveNoFollow leaves the new file when a later write fails', () =
       () =>
         writeExclusiveNoFollow(file, 'data', {
           platform: 'linux',
-          writeSync: ((fd, buffer, offset, length) => {
+          writeSync: ((
+            fd: number,
+            buffer: NodeJS.ArrayBufferView,
+            offset?: number,
+            length?: number,
+          ) => {
             writes += 1;
             if (writes === 1) {
               throw new Error('simulated write failure');
             }
-            return writeSync(fd, buffer, offset, length);
+            return writeSync(
+              fd,
+              buffer,
+              offset ?? 0,
+              length ?? buffer.byteLength,
+            );
           }) as typeof writeSync,
         }),
       /simulated write failure|leftover path/,
