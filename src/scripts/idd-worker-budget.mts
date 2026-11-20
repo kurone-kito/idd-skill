@@ -6,7 +6,7 @@
 
 // Read-only dispatch budget for one orchestrator session (#3835).
 
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
@@ -130,10 +130,24 @@ export interface WorkerBudgetReaders {
   procMemAvailableBytes: () => number | null;
   freeMemoryBytes: () => number;
   rateLimit: () => unknown;
+  /**
+   * Host platform for the load comparison. Win32 uses `>=` so a processor
+   * queue equal to the core count is host-load (#5289); other platforms keep
+   * the existing strict `>` threshold.
+   */
+  platform?: () => NodeJS.Platform | string;
 }
 
 const DEFAULT_READERS: WorkerBudgetReaders = {
-  load1m: () => readOneMinuteLoad(os.loadavg()),
+  // Opt the Windows processor-queue signal in here only. `idd-load-gate`
+  // also calls `readOneMinuteLoad(os.loadavg())` and must keep its
+  // load-unavailable fast pass on win32 (#5289).
+  load1m: () =>
+    readOneMinuteLoad(
+      os.loadavg(),
+      process.platform,
+      process.platform === 'win32' ? readWindowsProcessorQueueLength : null,
+    ),
   coreCount: () => os.cpus().length,
   procMemAvailableBytes: () => {
     const contents = readFileSync('/proc/meminfo', 'utf8');
@@ -142,6 +156,7 @@ const DEFAULT_READERS: WorkerBudgetReaders = {
   },
   freeMemoryBytes: () => os.freemem(),
   rateLimit: () => ghApiJson('rate_limit'),
+  platform: () => process.platform,
 };
 
 if (import.meta.main) {
@@ -241,6 +256,15 @@ export function computeWorkerBudget(
   const load1m = safeNonNegativeNumber(readers.load1m);
   const coreCount = safePositiveInteger(readers.coreCount);
   const availableMemoryBytes = readAvailableMemoryBytes(readers);
+  const platform = readers.platform?.() ?? process.platform;
+  // Processor Queue Length counts ready threads waiting for a CPU. A queue
+  // equal to the core count is already saturated on win32 (#5289). POSIX
+  // loadavg keeps the existing strict `>` threshold so equality still admits
+  // slots.
+  const hostLoadExceeded =
+    load1m !== null &&
+    coreCount !== null &&
+    (platform === 'win32' ? load1m >= coreCount : load1m > coreCount);
 
   let restRemaining: number | null = null;
   let graphqlRemaining: number | null = null;
@@ -267,7 +291,7 @@ export function computeWorkerBudget(
   const slots = Math.max(0, Math.min(...limits));
 
   let limitingFactor: WorkerBudgetLimitingFactor;
-  if (load1m === null || coreCount === null || load1m > coreCount) {
+  if (load1m === null || coreCount === null || hostLoadExceeded) {
     limitingFactor = 'host-load';
   } else if (
     availableMemoryBytes === null ||
@@ -539,12 +563,66 @@ function readAvailableMemoryBytes(readers: WorkerBudgetReaders): number | null {
   return safeNonNegativeInteger(readers.freeMemoryBytes);
 }
 
-/** Return the one-minute load, treating Windows' unsupported zero as absent. */
+/**
+ * Read Windows `\System\Processor Queue Length` via `typeperf` (#5289).
+ * Returns null when the counter cannot be sampled or is not a finite
+ * non-negative number. Never consults `os.loadavg()`, which is always
+ * `[0, 0, 0]` on win32.
+ */
+export function readWindowsProcessorQueueLength(
+  execFile: typeof execFileSync = execFileSync,
+): number | null {
+  try {
+    const stdout = execFile(
+      'typeperf',
+      ['\\System\\Processor Queue Length', '-sc', '1'],
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        windowsHide: true,
+      },
+    );
+    return parseTypeperfQueueLength(stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse the second CSV field of the first sample row from `typeperf` output. */
+export function parseTypeperfQueueLength(stdout: string): number | null {
+  for (const line of stdout.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('"') || trimmed.includes('PDH-CSV')) continue;
+    const fields = trimmed.match(/"(?:[^"]|"")*"/g);
+    if (fields === null || fields.length < 2) continue;
+    const raw = fields[1].slice(1, -1).replace(/""/g, '"');
+    // Empty CSV fields become 0 under Number(''); treat them as unreadable.
+    if (raw.trim() === '') continue;
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+
+/**
+ * Return the host load signal used as `load1m`. On win32, ignore
+ * `os.loadavg()` (always zeros) and use `windowsHostLoad` — by default the
+ * processor-queue length. On other platforms, use the first load average.
+ */
 export function readOneMinuteLoad(
   loadAverages: readonly number[],
   platform = process.platform,
+  windowsHostLoad: (() => number | null) | number | null = null,
 ): number | null {
-  if (platform === 'win32') return null;
+  if (platform === 'win32') {
+    const value =
+      typeof windowsHostLoad === 'function'
+        ? windowsHostLoad()
+        : windowsHostLoad;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : null;
+  }
   const value = loadAverages[0];
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value

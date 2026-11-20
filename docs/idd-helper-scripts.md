@@ -976,13 +976,20 @@ in this preamble, since the fallback differs per helper.
 - `scripts/idd-worker-budget.mjs` for a read-only per-session dispatch
   budget (issue
   [kurone-kito/idd-skill#3835](https://github.com/kurone-kito/idd-skill/issues/3835));
-  it reads the host's one-minute load and available memory, then uses
+  it reads the host load signal and available memory, then uses
   `GET /rate_limit` through the shared `ghApiJson` wrapper unless
-  `--no-network` is set. Missing host signals, failed or incomplete API
-  results, and rate-limit headroom below 500 produce zero slots. The
-  `--harness-limit` value and `--startable` count constrain the final
-  minimum; the helper never claims a host-wide worker total. The optional
-  `--instructions-since` argument (issue
+  `--no-network` is set. On POSIX the load signal is the one-minute load
+  average; on Windows it is `\System\Processor Queue Length` from
+  `typeperf` (issue
+  [kurone-kito/idd-skill#5289](https://github.com/kurone-kito/idd-skill/issues/5289)),
+  because `os.loadavg()` is always `[0, 0, 0]` there. An unreadable Windows
+  sample stays unavailable and yields zero slots with `host-load`, and a
+  Windows queue at or above the core count is also `host-load` (POSIX
+  loadavg keeps the strict greater-than threshold). Missing host signals,
+  failed or incomplete API results, and rate-limit headroom below 500
+  produce zero slots. The `--harness-limit` value and `--startable`
+  count constrain the final minimum; the helper never claims a host-wide
+  worker total. The optional `--instructions-since` argument (issue
   [kurone-kito/idd-skill#4376](https://github.com/kurone-kito/idd-skill/issues/4376))
   takes 7 to 40 hexadecimal digits in either case; any other value is a usage
   error. It adds three keys. `instructionsTip` is the commit that the local
