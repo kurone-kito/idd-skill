@@ -99,9 +99,15 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
   The installer creates a harness directory itself, such as `~/.codex` or
   `~/.config/opencode`, when its parent exists and it is missing.
 - On Windows, `HOME` (and every other declared root) must be a drive-letter or
-  UNC qualified path. The installer uses a Windows no-follow open for every
-  user-global read and exclusive create. A missing helper, or a symlink or
-  junction on an existing component, still refuses before any write.
+  UNC qualified path, and the account must be allowed to create directory
+  symbolic links (Developer Mode or an elevated token) because install
+  publishes `current` with `symlinkSync`. The installer uses a Windows
+  no-follow open for exclusive creates and for ordinary single-link reads.
+  An interrupted publication that leaves a two-link name is hashed only after
+  a containment walk and a matching `lstat`, because the helper refuses
+  `nlink>1` (preventive; no observed incident yet). A missing helper, or a
+  symlink or junction on an existing component, still refuses before any
+  write (preventive; no observed incident yet).
 
 ## What gets written
 

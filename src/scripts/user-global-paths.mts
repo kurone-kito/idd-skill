@@ -741,8 +741,20 @@ export function writeNewFile(
     try {
       writeExclusiveNoFollow(target, content, capability.deps);
     } catch (error) {
-      // The helper leaves a leftover only after its own exclusive create
-      // succeeds; a refused create must not unlink a pre-existing path.
+      // Exclusive create may leave the new path when a later write fails;
+      // remove only that leftover. A refused create must not unlink a
+      // pre-existing path.
+      try {
+        if (fs.lstatSync(target).isFile()) {
+          discardOwnFile(target, error, fs, `write to ${target} failed`);
+        }
+      } catch (inspectError) {
+        if (errorCode(inspectError) !== 'ENOENT') {
+          throw new Error(
+            `write to ${target} failed: ${describe(error)}; could not inspect leftover (${describe(inspectError)})`,
+          );
+        }
+      }
       throw new Error(`write to ${target} failed: ${describe(error)}`);
     }
     if (mode !== undefined) {
@@ -1017,6 +1029,17 @@ export function replaceFileByRename(
     try {
       writeExclusiveNoFollow(temp, content, capability.deps);
     } catch (error) {
+      try {
+        if (fs.lstatSync(temp).isFile()) {
+          discardOwnFile(temp, error, fs, `replacement of ${target} failed`);
+        }
+      } catch (inspectError) {
+        if (errorCode(inspectError) !== 'ENOENT') {
+          throw new Error(
+            `replacement of ${target} failed: ${describe(error)}; could not inspect leftover (${describe(inspectError)})`,
+          );
+        }
+      }
       throw new Error(`replacement of ${target} failed: ${describe(error)}`);
     }
     try {
@@ -1147,8 +1170,15 @@ export function repointCurrent(
       } catch (error) {
         try {
           fs.symlinkSync(previousTarget, current);
-        } catch {
-          // The restore failed; discardOwnFile still names the temp leftover.
+        } catch (restoreError) {
+          discardOwnFile(
+            temp,
+            new Error(
+              `${describe(error)}; could not restore ${current} (${describe(restoreError)})`,
+            ),
+            fs,
+            `repoint of ${current} failed`,
+          );
         }
         discardOwnFile(temp, error, fs, `repoint of ${current} failed`);
       }
