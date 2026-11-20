@@ -227,7 +227,9 @@ function readLstatVerifiedBytes(path, prior, fs) {
   }
   const nlink =
     typeof stat.nlink === 'bigint' ? Number(stat.nlink) : stat.nlink;
-  if (nlink === 1) {
+  // POSIX O_NOFOLLOW opens still work with nlink>1. Only the Windows helper
+  // refuses that shape, so keep the descriptor path everywhere else.
+  if (process.platform !== 'win32' || nlink === 1) {
     return readNoFollowBytes(path, fs);
   }
   return Buffer.from(fs.readFileSync(path));
@@ -1682,7 +1684,11 @@ function verifyPreparedTree(ctx, build, expected, receiptEntries, options) {
         );
       }
     }
-    if (sha256Hex(readNoFollowBytes(path, ctx.fs)) !== expectedEntry.sha256) {
+    const fileStat = ctx.fs.lstatSync(path);
+    if (
+      sha256Hex(readLstatVerifiedBytes(path, fileStat, ctx.fs)) !==
+      expectedEntry.sha256
+    ) {
       throw new Error(
         `${path} differs from the source bytes; refusing to reuse or overwrite it`,
       );

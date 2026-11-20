@@ -59,7 +59,9 @@ const SKILL_RELATIVE = 'issue-authoring/SKILL.md';
  */
 function symlinkSkipReason(): string | false {
   if (process.platform !== 'win32') return false;
-  const dir = nodeFs.mkdtempSync(join(nodeFs.realpathSync(tmpdir()), 'idd-symlink-probe-'));
+  const dir = nodeFs.mkdtempSync(
+    join(nodeFs.realpathSync(tmpdir()), 'idd-symlink-probe-'),
+  );
   const target = join(dir, 't');
   const link = join(dir, 'l');
   try {
@@ -3306,7 +3308,7 @@ test('a failure in a later write rolls back this run and leaves nothing behind',
     if (
       op === 'openSync' &&
       isWriteCall(op, args) &&
-      String(args[0]).replaceAll('\\','/').includes('/.agents/skills/')
+      String(args[0]).replaceAll('\\', '/').includes('/.agents/skills/')
     ) {
       throw new Error('injected write failure');
     }
@@ -3657,7 +3659,7 @@ test('a rollback keeps a listed path listed when this run recreated it and then 
     if (
       op === 'openSync' &&
       isWriteCall(op, args) &&
-      String(args[0]).replaceAll('\\','/').includes('/.agents/skills/')
+      String(args[0]).replaceAll('\\', '/').includes('/.agents/skills/')
     ) {
       throw new Error('injected write failure');
     }

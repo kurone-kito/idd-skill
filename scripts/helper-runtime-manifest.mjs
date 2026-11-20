@@ -146,6 +146,10 @@ const EXTRA_RUNTIME_FILES = new Map([
       'schemas/distribution-selection.schema.json',
     ],
   ],
+  // The Windows no-follow open spawns this sibling script by path; the import
+  // graph only pulls in the .mjs, so ship the .ps1 with every helper that
+  // closes over windows-nofollow (issue #5290).
+  ['scripts/windows-nofollow.mjs', ['src/scripts/windows-nofollow.ps1']],
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
   // validate-schemas validates every schema/fixture pair in its CLI `cases`
   // table by reading the files directly; none of them are imported.

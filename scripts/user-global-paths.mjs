@@ -410,6 +410,11 @@ function readLstatVerifiedFile(path, walk, fs) {
   ) {
     throw new Error(`${path} changed; refusing`);
   }
+  // POSIX O_NOFOLLOW opens still work with nlink>1. Only the Windows helper
+  // refuses that shape, so keep the descriptor path everywhere else.
+  if (process.platform !== 'win32' || stat.nlink <= 1) {
+    return readNoFollowBytes(path, fs);
+  }
   return Buffer.from(fs.readFileSync(path));
 }
 /** Read a regular file without following links or blocking on a special file. */
