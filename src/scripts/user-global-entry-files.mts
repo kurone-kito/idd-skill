@@ -21,8 +21,12 @@ import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { FsOps } from './user-global-paths.mts';
-import { checkContainment } from './user-global-paths.mts';
+import {
+  checkContainment,
+  isWindowsNoFollowOpenAvailable,
+} from './user-global-paths.mts';
 import type { ReceiptEntry } from './user-global-receipt.mts';
+import { readNoFollowFile } from './windows-nofollow.mts';
 
 /** The harnesses that load the entry text, in the order install edits them. */
 export const ENTRY_HARNESSES = ['claude', 'codex', 'opencode'] as const;
@@ -121,26 +125,47 @@ function sha256Of(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function requireNoFollowFlags(fs: FsOps): {
-  noFollow: number;
-  nonBlock: number;
-} {
+/**
+ * The no-follow capability `readRegular` needs. POSIX keeps real
+ * `O_NOFOLLOW` / `O_NONBLOCK`; Windows uses the open from issue `#5287`.
+ */
+function requireNoFollowFlags(fs: FsOps):
+  | { mode: 'posix'; noFollow: number; nonBlock: number }
+  | { mode: 'windows' } {
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
-  if (noFollow === undefined || nonBlock === undefined) {
-    throw new Error(
-      'this platform does not support the no-follow opens the installer needs; refusing',
-    );
+  // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
+  if (noFollow !== undefined && nonBlock !== undefined) {
+    return { mode: 'posix', noFollow, nonBlock };
   }
-  return { noFollow, nonBlock };
+  if (process.platform === 'win32') {
+    const override = fs.windowsNoFollow;
+    if (override !== false) {
+      const deps =
+        typeof override === 'object' && override !== null ? override : {};
+      if (isWindowsNoFollowOpenAvailable(deps)) {
+        return { mode: 'windows' };
+      }
+    }
+  }
+  throw new Error(
+    'this platform does not support the no-follow opens the installer needs; refusing',
+  );
 }
 
 /** The bytes of a regular file with one hard link, opened without following. */
 function readRegular(path: string, fs: FsOps): Buffer {
-  const flags = requireNoFollowFlags(fs);
+  const capability = requireNoFollowFlags(fs);
+  if (capability.mode === 'windows') {
+    const override = fs.windowsNoFollow;
+    const deps =
+      typeof override === 'object' && override !== null ? override : {};
+    // readNoFollowFile already refuses a multi-hard-link file.
+    return readNoFollowFile(path, deps);
+  }
   const fd = fs.openSync(
     path,
-    nodeFs.constants.O_RDONLY | flags.noFollow | flags.nonBlock,
+    nodeFs.constants.O_RDONLY | capability.noFollow | capability.nonBlock,
   );
   try {
     const stat = fs.fstatSync(fd);

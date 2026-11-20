@@ -3,9 +3,8 @@
 // src/scripts/user-global-receipt.mts.
 //
 // Every test runs against a sandbox HOME passed through `env` and `homedir`,
-// so no test writes to the real home directory. Tests that use real symbolic
-// links skip on Windows, where the no-follow opens are unavailable and the
-// installer refuses before any write.
+// so no test writes to the real home directory. Tests that must create a
+// real symbolic link skip only when Windows denies that creation.
 //
 // The "links above the roots" tests (#4303) cover the chain from a declared
 // root (HOME, or an XDG or CODEX root) down to each install root, and the
@@ -19,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { after, test as nodeTest, type TestContext } from 'node:test';
 import {
   bindDistributionSelection,
@@ -50,30 +49,64 @@ const PACKAGE_VERSION: string = JSON.parse(
 ).version;
 /** A version the package never ships, so an upgrade always targets a new directory. */
 const UPGRADE_VERSION = '99.0.0';
-const NO_LINKS =
-  process.platform === 'win32'
-    ? 'symbolic links need the no-follow opens, which Windows lacks'
-    : false;
 const ENTRY_RELATIVE = '.github/instructions/idd-overview-core.instructions.md';
 const SKILL_RELATIVE = 'issue-authoring/SKILL.md';
 
 /**
- * Every test here installs or uninstalls. The installer refuses on Windows
- * before any write, because the no-follow opens it needs are unavailable, so
- * each test skips there with this reason. A test that passes its own `skip`
- * option keeps it.
+ * Skip only when this host cannot create a symbolic link. Prefer a live
+ * probe over a blanket win32 skip so a Developer Mode host still runs the
+ * link cases (issue #5290).
  */
-const NO_INSTALL =
+function symlinkSkipReason(): string | false {
+  if (process.platform !== 'win32') return false;
+  const dir = nodeFs.mkdtempSync(join(nodeFs.realpathSync(tmpdir()), 'idd-symlink-probe-'));
+  const target = join(dir, 't');
+  const link = join(dir, 'l');
+  try {
+    nodeFs.writeFileSync(target, 'x');
+    nodeFs.symlinkSync(target, link);
+    return false;
+  } catch {
+    return 'symbolic link creation is denied on this Windows host';
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const NO_LINKS = symlinkSkipReason();
+const WINDOWS_ROOT_OWNED_LINKS =
   process.platform === 'win32'
-    ? 'the installer refuses on Windows before any write: no-follow opens are unavailable'
+    ? 'Windows no-follow opens refuse every reparse point, including root-owned links above a ceiling'
+    : false;
+const WINDOWS_NO_POSIX_FD =
+  process.platform === 'win32'
+    ? 'Windows writes go through the no-follow helper, so openSync write injection does not apply'
+    : false;
+const WINDOWS_NO_POSIX_MODE =
+  process.platform === 'win32'
+    ? 'Windows does not preserve POSIX executable modes'
+    : false;
+/**
+ * Issue `#5290` must not edit `distribution-selection.mts`, which still
+ * refuses no-follow reads on Windows. Skip selection/bind/dispatch cases
+ * until a later child wires that reader.
+ */
+const WINDOWS_NO_DISTRIBUTION_SELECTION =
+  process.platform === 'win32'
+    ? 'distribution-selection still refuses no-follow reads on Windows; out of scope for #5290'
     : false;
 
-const test = ((name: string, ...rest: unknown[]) => {
-  const fn = rest[rest.length - 1] as () => void;
-  const options =
-    rest.length === 2 ? (rest[0] as { skip?: string | boolean }) : {};
-  return nodeTest(name, { ...options, skip: NO_INSTALL || options.skip }, fn);
-}) as unknown as typeof nodeTest;
+/** Match a relative path segment under either separator in error messages. */
+const pathSeg = (posixRelative: string): string =>
+  posixRelative.replaceAll('/', '[/\\\\]');
+
+/** Whether `path` is `root` or a descendant, under either separator. */
+const isUnderPath = (path: string, root: string): boolean =>
+  path === root ||
+  path.startsWith(`${root}${sep}`) ||
+  path.startsWith(`${root}/`);
+
+const test = nodeTest;
 
 const sandboxes: string[] = [];
 
@@ -861,7 +894,7 @@ test('preparation refuses a source commit without the distribution manifest sche
 
   assert.throws(
     () => prepareDistributionSet(prepareOptions(home, source, commit)),
-    /schemas\/distribution-manifest\.schema\.json/,
+    new RegExp(pathSeg('schemas/distribution-manifest.schema.json')),
   );
   assert.equal(
     nodeFs.existsSync(join(dataRootOf(home), 'prepared', commit)),
@@ -1030,6 +1063,10 @@ test('a set prepared from the released v0.14.0 tree keeps that release layout, a
     nodeFs.readlinkSync(currentOf(home)),
     versionDirOf(home, UPGRADE_VERSION),
   );
+  if (WINDOWS_NO_DISTRIBUTION_SELECTION) {
+    t.skip(WINDOWS_NO_DISTRIBUTION_SELECTION);
+    return;
+  }
   const repo = makeAdopterRepository(home, 'adopter-v0-14-0', commit);
   const session = distributionOptionsFor(home, repo, 'session-v0-14-0');
   assert.equal(bindDistributionSelection(session).authorized, true);
@@ -1380,7 +1417,9 @@ test('checkout preparation detects missing committed files in a skill bundle', (
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
-test('checkout preparation preserves committed executable modes and verifies them on reuse', () => {
+test('checkout preparation preserves committed executable modes and verifies them on reuse', {
+  skip: WINDOWS_NO_POSIX_MODE,
+}, () => {
   const home = makeHome();
   const source = makePreparedSource();
   nodeFs.chmodSync(join(source, 'scripts/sample.mjs'), 0o755);
@@ -1477,7 +1516,9 @@ test('preparation refuses a stale receipt temporary before changing managed stat
   assert.equal(result.reused, false);
 });
 
-test('a receipt lock refuses concurrent preparation, install, and uninstall', () => {
+test('a receipt lock refuses concurrent preparation, install, and uninstall', {
+  skip: WINDOWS_NO_POSIX_FD,
+}, () => {
   const home = makeHome();
   installPayload(optionsFor(home));
   const firstSource = makePreparedSource();
@@ -1488,7 +1529,7 @@ test('a receipt lock refuses concurrent preparation, install, and uninstall', ()
   const fs = hookedFs((op, args) => {
     if (
       op === 'openSync' &&
-      String(args[0]).endsWith('/owner.json') &&
+      String(args[0]).replaceAll('\\', '/').endsWith('/owner.json') &&
       !nestedAttempted
     ) {
       nestedAttempted = true;
@@ -1760,7 +1801,9 @@ function interruptPreparedUninstall(
   });
   assert.throws(
     () => uninstallPayload(optionsFor(home, { fs })),
-    /uninstall stopped at .*scripts\/sample\.mjs: .*injected unlink failure/,
+    new RegExp(
+      `uninstall stopped at .*${pathSeg('scripts/sample.mjs')}: .*injected unlink failure`,
+    ),
   );
   assert.equal(continuationBeforeManifest, true);
   return {
@@ -2030,9 +2073,7 @@ test('discardPreparedCandidate removes an unavailable candidate with its receipt
   nodeFs.writeFileSync(sentinel, 'user note\n');
   const priorSnapshot = snapshot(prior.preparedPath);
   const unrelatedEntries = readReceiptEntries(home).filter(
-    (entry) =>
-      entry.path !== candidatePath &&
-      !entry.path.startsWith(`${candidatePath}/`),
+    (entry) => !isUnderPath(entry.path, candidatePath),
   );
 
   const result = discardPreparedCandidate({
@@ -2223,10 +2264,8 @@ test('discardPreparedCandidate removes a publication interrupted between its lin
   assert.ok(result.lines.includes(`removed ${failedPath}`));
   assert.equal(nodeFs.existsSync(candidatePath), false);
   assert.equal(
-    readReceiptEntries(home).some(
-      (entry) =>
-        entry.path === candidatePath ||
-        entry.path.startsWith(`${candidatePath}/`),
+    readReceiptEntries(home).some((entry) =>
+      isUnderPath(entry.path, candidatePath),
     ),
     false,
   );
@@ -2267,10 +2306,8 @@ test('discardPreparedCandidate takes a set whose manifest publication stopped be
   discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
   assert.equal(nodeFs.existsSync(candidatePath), false);
   assert.equal(
-    readReceiptEntries(home).some(
-      (entry) =>
-        entry.path === candidatePath ||
-        entry.path.startsWith(`${candidatePath}/`),
+    readReceiptEntries(home).some((entry) =>
+      isUnderPath(entry.path, candidatePath),
     ),
     false,
   );
@@ -2472,7 +2509,9 @@ test('the stable dispatcher preserves exact routing and helper checks', () => {
   );
 });
 
-test('pinned sessions dispatch their own skills and helpers after global current moves', () => {
+test('pinned sessions dispatch their own skills and helpers after global current moves', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const commitA = 'e'.repeat(40);
   const commitB = 'f'.repeat(40);
@@ -2564,7 +2603,9 @@ test('pinned sessions dispatch their own skills and helpers after global current
   );
 });
 
-test('an unpinned session keeps its bound global set after current moves, and a new session follows current', () => {
+test('an unpinned session keeps its bound global set after current moves, and a new session follows current', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const commitA = 'a'.repeat(40);
   const commitB = 'b'.repeat(40);
@@ -2628,7 +2669,9 @@ test('an unpinned session keeps its bound global set after current moves, and a 
   );
 });
 
-test('a standalone inspection outside Git selects the set behind the installed dispatcher entries', () => {
+test('a standalone inspection outside Git selects the set behind the installed dispatcher entries', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const commit = 'c'.repeat(40);
   const source = makeDispatchSource('Solo', 'scripts/sample.mjs');
@@ -2650,7 +2693,9 @@ test('a standalone inspection outside Git selects the set behind the installed d
   );
 });
 
-test('a failed candidate preparation keeps a bound session on its verified set and stops the candidate pin', () => {
+test('a failed candidate preparation keeps a bound session on its verified set and stops the candidate pin', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const commitA = 'a'.repeat(40);
   const commitB = 'b'.repeat(40);
@@ -2702,7 +2747,9 @@ test('a failed candidate preparation keeps a bound session on its verified set a
   assert.equal(candidate.report.recovery, 'reselect');
 });
 
-test('a missing prepared skill asks for preparation and a tampered one for reselection', () => {
+test('a missing prepared skill asks for preparation and a tampered one for reselection', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   for (const damage of ['missing', 'tampered'] as const) {
     const home = makeHome();
     const commit = 'd'.repeat(40);
@@ -2756,7 +2803,9 @@ test('a missing prepared skill asks for preparation and a tampered one for resel
   }
 });
 
-test('builds with identical frontmatter and instructions are told apart by their bundle digest', () => {
+test('builds with identical frontmatter and instructions are told apart by their bundle digest', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const sourceA = makeDispatchSource('A', 'scripts/sample.mjs', 'Same entry.');
   const sourceB = makeDispatchSource('B', 'scripts/sample.mjs', 'Same entry.');
@@ -2804,7 +2853,9 @@ test('builds with identical frontmatter and instructions are told apart by their
   }
 });
 
-test('a failed installer upgrade keeps the bound set and the dispatch entries usable', () => {
+test('a failed installer upgrade keeps the bound set and the dispatch entries usable', {
+  skip: WINDOWS_NO_DISTRIBUTION_SELECTION,
+}, () => {
   const home = makeHome();
   const commit = 'a'.repeat(40);
   const source = makeDispatchSource('A', 'scripts/sample.mjs');
@@ -2819,7 +2870,9 @@ test('a failed installer upgrade keeps the bound set and the dispatch entries us
   const fs = hookedFs((op, args) => {
     if (
       op === 'renameSync' &&
-      String(args[1]).endsWith(`/.agents/skills/${SKILL_RELATIVE}`)
+      String(args[1])
+        .replaceAll('\\', '/')
+        .endsWith(`/.agents/skills/${SKILL_RELATIVE}`)
     ) {
       throw new Error('injected replacement failure');
     }
@@ -2850,7 +2903,9 @@ test('a failed installer upgrade keeps the bound set and the dispatch entries us
   );
 });
 
-test('the installed entry uses the separately deployed activation command', () => {
+test('the installed entry uses the separately deployed activation command', {
+  skip: NO_LINKS,
+}, () => {
   const home = makeHome();
   const localBin = join(home, '.local/bin');
   const activationCommand = join(localBin, 'idd-activation');
@@ -2876,11 +2931,20 @@ test('the installed entry uses the separately deployed activation command', () =
   assert.ok(nodeFs.existsSync(activationCommand));
   assert.ok(nodeFs.existsSync(windowsActivationCommand));
 
-  const help = spawnSync(activationCommand, ['--help'], {
-    encoding: 'utf8',
-  });
-  assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /Usage:/);
+  if (process.platform === 'win32') {
+    // The deployed `.cmd` wrapper is what Windows entry text names; spawning
+    // the symlink to the `.mjs` helper is not a meaningful Windows check.
+    assert.equal(
+      nodeFs.readFileSync(windowsActivationCommand, 'utf8'),
+      '@echo off\r\nexit /b 0\r\n',
+    );
+  } else {
+    const help = spawnSync(activationCommand, ['--help'], {
+      encoding: 'utf8',
+    });
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /Usage:/);
+  }
 });
 
 test('a second install of the same version leaves files unchanged', () => {
@@ -2942,7 +3006,8 @@ test('a file added beside managed files survives, and its directory with it', ()
   const home = makeHome();
   const options = optionsFor(home);
   installPayload(options);
-  const extra = join(versionDirOf(home), '.github/instructions/notes.md');
+  const extra = join(versionDirOf(home), '.github', 'instructions', 'notes.md');
+  nodeFs.mkdirSync(dirname(extra), { recursive: true });
   nodeFs.writeFileSync(extra, 'mine\n');
 
   const result = uninstallPayload(options);
@@ -2953,10 +3018,13 @@ test('a file added beside managed files survives, and its directory with it', ()
     false,
   );
   assert.ok(
-    result.lines.some(
-      (line) =>
-        line.includes('.github/instructions') && line.includes('not empty'),
-    ),
+    result.lines.some((line) => {
+      const normalized = line.replaceAll('\\', '/');
+      return (
+        normalized.includes('.github/instructions') &&
+        normalized.includes('not empty')
+      );
+    }),
   );
   assert.ok(nodeFs.existsSync(receiptOf(home)));
 });
@@ -3230,13 +3298,15 @@ test('a failed receipt rewrite does not roll back and names the created paths it
   );
 });
 
-test('a failure in a later write rolls back this run and leaves nothing behind', () => {
+test('a failure in a later write rolls back this run and leaves nothing behind', {
+  skip: WINDOWS_NO_POSIX_FD,
+}, () => {
   const home = makeHome();
   const fs = hookedFs((op, args) => {
     if (
       op === 'openSync' &&
       isWriteCall(op, args) &&
-      String(args[0]).includes('/.agents/skills/')
+      String(args[0]).replaceAll('\\','/').includes('/.agents/skills/')
     ) {
       throw new Error('injected write failure');
     }
@@ -3257,7 +3327,9 @@ test('a failed upgrade restores the replaced skill file and the prior current ta
   const fs = hookedFs((op, args) => {
     if (
       op === 'renameSync' &&
-      String(args[1]).endsWith(`/.agents/skills/${SKILL_RELATIVE}`)
+      String(args[1])
+        .replaceAll('\\', '/')
+        .endsWith(`/.agents/skills/${SKILL_RELATIVE}`)
     ) {
       throw new Error('injected replacement failure');
     }
@@ -3573,7 +3645,9 @@ test('a listed skill file with a second hard link makes install refuse before an
   assert.deepEqual(snapshot(home), before);
 });
 
-test('a rollback keeps a listed path listed when this run recreated it and then failed', () => {
+test('a rollback keeps a listed path listed when this run recreated it and then failed', {
+  skip: WINDOWS_NO_POSIX_FD,
+}, () => {
   const home = makeHome();
   installPayload(optionsFor(home));
   const claude = skillFileOf(home, '.claude');
@@ -3583,7 +3657,7 @@ test('a rollback keeps a listed path listed when this run recreated it and then 
     if (
       op === 'openSync' &&
       isWriteCall(op, args) &&
-      String(args[0]).includes('/.agents/skills/')
+      String(args[0]).replaceAll('\\','/').includes('/.agents/skills/')
     ) {
       throw new Error('injected write failure');
     }
@@ -3616,16 +3690,19 @@ test('a receipt that lists a user symbolic link as a link entry is corrupt for i
 }, () => {
   const home = makeHome();
   const userLink = join(home, '.claude', 'skills', 'user-link');
+  // Keep a platform-native absolute target so readlink matches the receipt.
+  const linkTarget =
+    process.platform === 'win32'
+      ? join('C:\\elsewhere', 'user-owned')
+      : '/elsewhere/user-owned';
   nodeFs.mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
-  nodeFs.symlinkSync('/elsewhere/user-owned', userLink);
+  nodeFs.symlinkSync(linkTarget, userLink);
   nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
   nodeFs.writeFileSync(
     receiptOf(home),
     JSON.stringify({
       version: 1,
-      entries: [
-        { kind: 'link', path: userLink, target: '/elsewhere/user-owned' },
-      ],
+      entries: [{ kind: 'link', path: userLink, target: linkTarget }],
     }),
   );
   const before = snapshot(home);
@@ -3633,7 +3710,7 @@ test('a receipt that lists a user symbolic link as a link entry is corrupt for i
   assert.throws(() => installPayload(optionsFor(home)), /corrupt/);
   assert.throws(() => uninstallPayload(optionsFor(home)), /corrupt/);
   assert.deepEqual(snapshot(home), before);
-  assert.equal(nodeFs.readlinkSync(userLink), '/elsewhere/user-owned');
+  assert.equal(nodeFs.readlinkSync(userLink), linkTarget);
 });
 
 test('a receipt that lists a path the installer never creates is refused by install and uninstall', () => {
@@ -4057,7 +4134,7 @@ test('a receipt entry that is not a path the prune may touch is refused and the 
     {
       name: 'a non-normalized path that stays inside another skill',
       path: (home: string) =>
-        `${home}/.claude/skills/issue-authoring/../idd-spec-audit/SKILL.md`,
+        `${home}${sep}.claude${sep}skills${sep}issue-authoring${sep}..${sep}idd-spec-audit${sep}SKILL.md`,
       file: (home: string) =>
         join(home, '.claude', 'skills', 'idd-spec-audit', 'SKILL.md'),
       message: /not in normalized form/,
@@ -4226,7 +4303,9 @@ test('a stale temporary file beside a dropped skill file makes install refuse be
   assert.deepEqual(snapshot(home), before);
 });
 
-test('a dropped skill file edited after the plan stops the prune, keeps the edit, and a retry refuses it', () => {
+test('a dropped skill file edited after the plan stops the prune, keeps the edit, and a retry refuses it', {
+  skip: WINDOWS_NO_POSIX_FD,
+}, () => {
   const home = makeHome();
   installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
@@ -4502,7 +4581,9 @@ test('a skill directory swapped for a symbolic link after the plan is not follow
   assert.ok(nodeFs.existsSync(join(outside, 'draft-patterns.md')));
 });
 
-test('a failure in a late install step leaves the dropped skill files in place and listed', () => {
+test('a failure in a late install step leaves the dropped skill files in place and listed', {
+  skip: WINDOWS_NO_POSIX_FD,
+}, () => {
   const home = makeHome();
   installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
@@ -4806,7 +4887,7 @@ test('a symbolic-link XDG_DATA_HOME is refused by every entry point', {
 });
 
 test('a root-owned link above XDG_DATA_HOME is tolerated, and a link at HOME/.local is irrelevant when XDG_DATA_HOME points elsewhere', {
-  skip: NO_LINKS,
+  skip: NO_LINKS || WINDOWS_ROOT_OWNED_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-xdg-parent-');
   nodeFs.mkdirSync(join(parentReal, 'xdg'));
@@ -4834,7 +4915,7 @@ test('a root-owned link above XDG_DATA_HOME is tolerated, and a link at HOME/.lo
 });
 
 test('a HOME reached through a root-owned linked parent installs and uninstalls as before', {
-  skip: NO_LINKS,
+  skip: NO_LINKS || WINDOWS_ROOT_OWNED_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-realparent-');
   seedHomeIn(parentReal);
@@ -4943,7 +5024,7 @@ test('XDG_DATA_HOME exported as the default location does not hide a link above 
 });
 
 test('a CODEX_HOME outside HOME is declared by its parent: a root-owned link above the parent is tolerated, a link at the parent is refused', {
-  skip: NO_LINKS,
+  skip: NO_LINKS || WINDOWS_ROOT_OWNED_LINKS,
 }, () => {
   const home = makeHome();
   const parentReal = makeSandbox('user-global-codexparent-');
@@ -4975,7 +5056,7 @@ test('a CODEX_HOME outside HOME is declared by its parent: a root-owned link abo
 });
 
 test('an XDG_CONFIG_HOME outside HOME is a declared root: a root-owned link above it is tolerated', {
-  skip: NO_LINKS,
+  skip: NO_LINKS || WINDOWS_ROOT_OWNED_LINKS,
 }, () => {
   const home = makeHome();
   const parentReal = makeSandbox('user-global-cfgparent-');
@@ -5022,7 +5103,7 @@ test('a link planted above an entry-file directory during an install makes the e
 });
 
 test('a CODEX_HOME beside HOME under a root-owned linked ancestor does not make the other roots stricter', {
-  skip: NO_LINKS,
+  skip: NO_LINKS || WINDOWS_ROOT_OWNED_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-sharedparent-');
   seedHomeIn(parentReal);
@@ -5142,6 +5223,9 @@ test('a platform without the no-follow opens is refused once by install and unin
       O_NOFOLLOW: undefined,
       O_NONBLOCK: undefined,
     },
+    // On win32 the POSIX constants are already absent; force the Windows
+    // helper off so this case still proves the pre-mutation refusal (#5290).
+    windowsNoFollow: false,
   } as unknown as FsOps;
   const before = snapshot(home);
 

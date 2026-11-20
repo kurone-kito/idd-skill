@@ -98,8 +98,10 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
 
   The installer creates a harness directory itself, such as `~/.codex` or
   `~/.config/opencode`, when its parent exists and it is missing.
-- The installer refuses on Windows before any write. It needs no-follow file
-  opens, and the platform does not provide them.
+- On Windows, `HOME` (and every other declared root) must be a drive-letter or
+  UNC qualified path. The installer uses a Windows no-follow open for every
+  user-global read and exclusive create. A missing helper, or a symlink or
+  junction on an existing component, still refuses before any write.
 
 ## What gets written
 
