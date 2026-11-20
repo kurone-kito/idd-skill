@@ -54,12 +54,19 @@ if (
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Win32.SafeHandles;
 
 public static class IdNoFollow {
   public const uint GENERIC_READ = 0x80000000;
   public const uint GENERIC_WRITE = 0x40000000;
+  public const uint GENERIC_EXECUTE = 0x20000000;
+  public const uint SYNCHRONIZE = 0x00100000;
+  // NtCreateFile is stricter than CreateFileW: GetFileInformationByHandle
+  // needs FILE_READ_ATTRIBUTES even on a write-only create handle, and a
+  // RootDirectory handle needs FILE_TRAVERSE (covered by GENERIC_EXECUTE).
+  public const uint FILE_READ_ATTRIBUTES = 0x00000080;
+  public const uint FILE_WRITE_ATTRIBUTES = 0x00000100;
+  public const uint FILE_TRAVERSE = 0x00000020;
+  public const uint FILE_LIST_DIRECTORY = 0x00000001;
   public const uint FILE_SHARE_READ = 0x00000001;
   public const uint FILE_SHARE_WRITE = 0x00000002;
   public const uint FILE_SHARE_DELETE = 0x00000004;
@@ -72,6 +79,23 @@ public static class IdNoFollow {
   public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
   public const uint FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000;
   public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+  // NtCreateFile CreateDisposition values.
+  public const uint FILE_OPEN = 1;
+  public const uint FILE_CREATE = 2;
+
+  // NtCreateFile CreateOptions.
+  public const uint FILE_DIRECTORY_FILE = 0x00000001;
+  public const uint FILE_SEQUENTIAL_ONLY = 0x00000004;
+  public const uint FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
+  public const uint FILE_NON_DIRECTORY_FILE = 0x00000040;
+  public const uint FILE_OPEN_FOR_BACKUP_INTENT = 0x00004000;
+  public const uint FILE_OPEN_REPARSE_POINT = 0x00200000;
+
+  // OBJECT_ATTRIBUTES.Attributes: refuse reparse on the looked-up name
+  // and keep the relative open bound to RootDirectory (issue #5292).
+  public const uint OBJ_CASE_INSENSITIVE = 0x00000040;
+  public const uint OBJ_DONT_REPARSE = 0x00001000;
 
   [StructLayout(LayoutKind.Sequential)]
   public struct BY_HANDLE_FILE_INFORMATION {
@@ -87,6 +111,29 @@ public static class IdNoFollow {
     public uint FileIndexLow;
   }
 
+  [StructLayout(LayoutKind.Sequential)]
+  public struct UNICODE_STRING {
+    public ushort Length;
+    public ushort MaximumLength;
+    public IntPtr Buffer;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct OBJECT_ATTRIBUTES {
+    public int Length;
+    public IntPtr RootDirectory;
+    public IntPtr ObjectName;
+    public uint Attributes;
+    public IntPtr SecurityDescriptor;
+    public IntPtr SecurityQualityOfService;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct IO_STATUS_BLOCK {
+    public IntPtr Status;
+    public IntPtr Information;
+  }
+
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern IntPtr CreateFileW(
     string lpFileName,
@@ -96,6 +143,26 @@ public static class IdNoFollow {
     uint dwCreationDisposition,
     uint dwFlagsAndAttributes,
     IntPtr hTemplateFile);
+
+  [DllImport("ntdll.dll")]
+  public static extern int NtCreateFile(
+    out IntPtr FileHandle,
+    uint DesiredAccess,
+    ref OBJECT_ATTRIBUTES ObjectAttributes,
+    out IO_STATUS_BLOCK IoStatusBlock,
+    IntPtr AllocationSize,
+    uint FileAttributes,
+    uint ShareAccess,
+    uint CreateDisposition,
+    uint CreateOptions,
+    IntPtr EaBuffer,
+    uint EaLength);
+
+  [DllImport("ntdll.dll")]
+  public static extern uint RtlNtStatusToDosError(int Status);
+
+  [DllImport("kernel32.dll")]
+  public static extern void SetLastError(uint dwErrCode);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   public static extern bool CloseHandle(IntPtr hObject);
@@ -125,6 +192,88 @@ public static class IdNoFollow {
   public static extern uint GetFileAttributesW(string lpFileName);
 
   public const uint INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF;
+
+  /// <summary>
+  /// Open a single path component relative to an already-held parent
+  /// directory handle. Absolute CreateFileW still walks intermediate
+  /// reparse points even with FILE_FLAG_OPEN_REPARSE_POINT; this path
+  /// binds the lookup to RootDirectory with OBJ_DONT_REPARSE (#5292).
+  /// </summary>
+  /// <param name="kind">
+  /// 0 = file (FILE_NON_DIRECTORY_FILE), 1 = directory, 2 = either (inspect).
+  /// </param>
+  public static IntPtr CreateRelative(
+    IntPtr rootDirectory,
+    string name,
+    uint desiredAccess,
+    uint shareAccess,
+    uint createDisposition,
+    int kind)
+  {
+    if (rootDirectory == IntPtr.Zero || rootDirectory == INVALID_HANDLE_VALUE) {
+      return INVALID_HANDLE_VALUE;
+    }
+    if (string.IsNullOrEmpty(name) || name.IndexOf('\\') >= 0 || name.IndexOf('/') >= 0 || name.IndexOf('\0') >= 0) {
+      return INVALID_HANDLE_VALUE;
+    }
+
+    IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
+    IntPtr nameStruct = IntPtr.Zero;
+    try {
+      UNICODE_STRING unicodeName = new UNICODE_STRING();
+      unicodeName.Length = (ushort)(name.Length * 2);
+      unicodeName.MaximumLength = (ushort)(unicodeName.Length + 2);
+      unicodeName.Buffer = nameBuffer;
+
+      nameStruct = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));
+      Marshal.StructureToPtr(unicodeName, nameStruct, false);
+
+      OBJECT_ATTRIBUTES attributes = new OBJECT_ATTRIBUTES();
+      attributes.Length = Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES));
+      attributes.RootDirectory = rootDirectory;
+      attributes.ObjectName = nameStruct;
+      attributes.Attributes = OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE;
+      attributes.SecurityDescriptor = IntPtr.Zero;
+      attributes.SecurityQualityOfService = IntPtr.Zero;
+
+      uint createOptions = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT;
+      if (kind == 1) {
+        createOptions |= FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT;
+      } else if (kind == 0) {
+        createOptions |= FILE_NON_DIRECTORY_FILE | FILE_SEQUENTIAL_ONLY;
+      } else {
+        // Inspect: allow file or directory so Classify-Attributes can refuse.
+        createOptions |= FILE_OPEN_FOR_BACKUP_INTENT | FILE_SEQUENTIAL_ONLY;
+      }
+
+      IO_STATUS_BLOCK ioStatus;
+      IntPtr handle;
+      int status = NtCreateFile(
+        out handle,
+        desiredAccess | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+        ref attributes,
+        out ioStatus,
+        IntPtr.Zero,
+        FILE_ATTRIBUTE_NORMAL,
+        shareAccess,
+        createDisposition,
+        createOptions,
+        IntPtr.Zero,
+        0);
+      if (status < 0) {
+        // Windows PowerShell 5.1's Add-Type targets .NET Framework, which
+        // lacks Marshal.SetLastWin32Error; use kernel32 SetLastError instead.
+        SetLastError(RtlNtStatusToDosError(status));
+        return INVALID_HANDLE_VALUE;
+      }
+      return handle;
+    } finally {
+      if (nameStruct != IntPtr.Zero) {
+        Marshal.FreeHGlobal(nameStruct);
+      }
+      Marshal.FreeHGlobal(nameBuffer);
+    }
+  }
 }
 '@
 
@@ -135,6 +284,10 @@ function Get-Win32Error {
 # Directories are opened without FILE_SHARE_DELETE so a held handle blocks
 # rename/delete/replace of that component until the caller closes it. Files
 # allow read sharing only.
+#
+# Absolute CreateFileW still walks intermediate reparse points on the path
+# string even with FILE_FLAG_OPEN_REPARSE_POINT. Prefer Open-NoFollowRelative
+# once a parent directory handle is held (#5292).
 function Open-NoFollow(
   [string]$Path,
   [uint32]$Access,
@@ -142,11 +295,7 @@ function Open-NoFollow(
   [switch]$IsDirectory
 ) {
   $flags = [IdNoFollow]::FILE_FLAG_OPEN_REPARSE_POINT -bor [IdNoFollow]::FILE_FLAG_BACKUP_SEMANTICS -bor [IdNoFollow]::FILE_FLAG_SEQUENTIAL_SCAN
-  $share = if ($IsDirectory) {
-    [IdNoFollow]::FILE_SHARE_READ
-  } else {
-    [IdNoFollow]::FILE_SHARE_READ
-  }
+  $share = [IdNoFollow]::FILE_SHARE_READ
   $handle = [IdNoFollow]::CreateFileW(
     $Path,
     $Access,
@@ -155,6 +304,42 @@ function Open-NoFollow(
     $Disposition,
     $flags,
     [IntPtr]::Zero
+  )
+  if ($handle -eq [IdNoFollow]::INVALID_HANDLE_VALUE) {
+    return @{ ok = $false; error = (Get-Win32Error) }
+  }
+  return @{ ok = $true; handle = $handle }
+}
+
+# Open one path component relative to a held parent directory handle with
+# NtCreateFile(RootDirectory, OBJ_DONT_REPARSE). Keeps the lookup bound to
+# that directory object so a concurrent reparse on an intermediate absolute
+# path cannot redirect the final open (#5292).
+function Open-NoFollowRelative(
+  [IntPtr]$ParentHandle,
+  [string]$Name,
+  [uint32]$Access,
+  [uint32]$Disposition,
+  [switch]$IsDirectory,
+  [switch]$AllowAny
+) {
+  if ($Name -match '[\\/\0]' -or $Name -eq '.' -or $Name -eq '..') {
+    return @{ ok = $false; error = -1 }
+  }
+  $ntDisposition = if ($Disposition -eq [IdNoFollow]::CREATE_NEW) {
+    [IdNoFollow]::FILE_CREATE
+  } else {
+    [IdNoFollow]::FILE_OPEN
+  }
+  $kind = if ($AllowAny) { 2 } elseif ($IsDirectory) { 1 } else { 0 }
+  $share = [IdNoFollow]::FILE_SHARE_READ
+  $handle = [IdNoFollow]::CreateRelative(
+    $ParentHandle,
+    $Name,
+    $Access,
+    $share,
+    $ntDisposition,
+    $kind
   )
   if ($handle -eq [IdNoFollow]::INVALID_HANDLE_VALUE) {
     return @{ ok = $false; error = (Get-Win32Error) }
@@ -231,9 +416,11 @@ function Join-Component([string]$Parent, [string]$Name) {
 }
 
 # Walk every existing component from a handle opened with
-# FILE_FLAG_OPEN_REPARSE_POINT. Intermediate directory handles stay open in
-# HeldHandles until the caller finishes I/O, so a replace of those components
-# fails while the chain is held (no FILE_SHARE_DELETE).
+# FILE_FLAG_OPEN_REPARSE_POINT (root) or NtCreateFile relative to the held
+# parent (deeper names, issue #5292). Intermediate directory handles stay
+# open in HeldHandles until the caller finishes I/O, so a replace of those
+# components fails while the chain is held (no FILE_SHARE_DELETE), and the
+# final open cannot be redirected by an absolute-path reparse walk.
 function Assert-ExistingChain(
   [string]$Path,
   [switch]$FinalMustBeAbsent,
@@ -242,7 +429,9 @@ function Assert-ExistingChain(
   $parts = Split-AbsoluteComponents $Path
   $current = $parts.root
 
-  $rootOpen = Open-NoFollow $current ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
+  # GENERIC_EXECUTE supplies FILE_TRAVERSE so the final NtCreateFile can use
+  # the last held directory as RootDirectory (#5292).
+  $rootOpen = Open-NoFollow $current ([IdNoFollow]::GENERIC_READ -bor [IdNoFollow]::GENERIC_EXECUTE) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
   if (-not $rootOpen.ok) {
     Fail "cannot open path root: $current (win32=$($rootOpen.error))"
   }
@@ -264,10 +453,14 @@ function Assert-ExistingChain(
     $name = $parts.names[$i]
     $candidate = Join-Component $current $name
     $isFinal = ($i -eq ($parts.names.Count - 1))
+    $parentHandle = [IntPtr]$HeldHandles[$HeldHandles.Count - 1]
 
     if (-not $isFinal) {
-      # Classify from the no-follow handle, not from a followed path string.
-      $dirOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
+      # Intermediate walk keeps absolute CreateFileW with OPEN_REPARSE_POINT
+      # and holds the handle without FILE_SHARE_DELETE (issue #5287). Only the
+      # final open below is parent-relative (#5292); absolute CreateFileW still
+      # walks intermediate reparse points on the path string.
+      $dirOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ -bor [IdNoFollow]::GENERIC_EXECUTE) ([IdNoFollow]::OPEN_EXISTING) -IsDirectory
       if (-not $dirOpen.ok) {
         Fail "cannot open intermediate directory: $candidate (win32=$($dirOpen.error))"
       }
@@ -284,13 +477,20 @@ function Assert-ExistingChain(
       continue
     }
 
-    # Final component: classify from a no-follow handle, not GetFileAttributesW.
-    $finalOpen = Open-NoFollow $candidate ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    # Final component: classify from a parent-relative no-follow handle.
+    # AllowAny so a directory final still opens and Classify can refuse it.
+    $finalOpen = Open-NoFollowRelative $parentHandle $name ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING) -AllowAny
     if (-not $finalOpen.ok) {
       # For an exclusive create, a failed open of the final name is treated as
       # absent; CREATE_NEW still refuses if the name appears before the open.
       if ($FinalMustBeAbsent) {
-        return @{ parent = $current; final = $candidate; absent = $true }
+        return @{
+          parent = $current
+          final = $candidate
+          finalName = $name
+          parentHandle = $parentHandle
+          absent = $true
+        }
       }
       Fail "cannot open final component: $candidate (win32=$($finalOpen.error))"
     }
@@ -309,6 +509,8 @@ function Assert-ExistingChain(
       return @{
         parent = $current
         final = $candidate
+        finalName = $name
+        parentHandle = $parentHandle
         absent = $false
         kind = $kind
       }
@@ -377,9 +579,10 @@ function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
   $held = New-Object System.Collections.ArrayList
   try {
     $chain = Assert-ExistingChain $Path -HeldHandles $held
-    # Parent directory handles stay open for the final open and read so a
-    # concurrent replace of an intermediate component is blocked.
-    $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    # Parent directory handles stay open for the relative final open and
+    # read so a concurrent reparse on an absolute intermediate path cannot
+    # redirect the lookup (#5292).
+    $open = Open-NoFollowRelative ([IntPtr]$chain.parentHandle) ([string]$chain.finalName) ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
     if (-not $open.ok) {
       Fail "cannot open for read: $($chain.final) (win32=$($open.error))"
     }
@@ -389,7 +592,7 @@ function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
       $stageHeld = New-Object System.Collections.ArrayList
       try {
         $stageChain = Assert-ExistingChain $StagingPath -FinalMustBeAbsent -HeldHandles $stageHeld
-        $stageOpen = Open-NoFollow $stageChain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+        $stageOpen = Open-NoFollowRelative ([IntPtr]$stageChain.parentHandle) ([string]$stageChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
         if (-not $stageOpen.ok) {
           Fail "cannot create staging file: $($stageChain.final) (win32=$($stageOpen.error))"
         }
@@ -426,7 +629,7 @@ function Create-NoFollowFile([string]$Path, [byte[]]$Bytes) {
   $held = New-Object System.Collections.ArrayList
   try {
     $chain = Assert-ExistingChain $Path -FinalMustBeAbsent -HeldHandles $held
-    $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+    $open = Open-NoFollowRelative ([IntPtr]$chain.parentHandle) ([string]$chain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
     if (-not $open.ok) {
       Fail "exclusive create refused for $($chain.final) (win32=$($open.error))"
     }
@@ -477,13 +680,13 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
       Fail "destination is not a direct child of its verified parent: $Destination"
     }
 
-    $srcOpen = Open-NoFollow $sourceChain.final ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    $srcOpen = Open-NoFollowRelative ([IntPtr]$sourceChain.parentHandle) ([string]$sourceChain.finalName) ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
     if (-not $srcOpen.ok) {
       Fail "cannot open source for copy: $($sourceChain.final) (win32=$($srcOpen.error))"
     }
     try {
       $payload = Read-BytesFromHandle $srcOpen.handle $sourceChain.final
-      $destOpen = Open-NoFollow $destChain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+      $destOpen = Open-NoFollowRelative ([IntPtr]$destChain.parentHandle) ([string]$destChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
       if (-not $destOpen.ok) {
         Fail "exclusive create refused for $($destChain.final) (win32=$($destOpen.error))"
       }

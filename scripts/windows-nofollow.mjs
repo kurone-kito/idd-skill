@@ -11,9 +11,12 @@
 // symlink cannot redirect the final open. Windows, where those constants are
 // undefined, calls the sibling System32 PowerShell script with the script
 // path and the target path as process arguments
-// (decision-windows-nofollow-binding). Missing flags are never replaced with
-// zero. Large Windows reads return bytes through a caller-provided temp file
-// so the JSON stdout stays inside the process maxBuffer.
+// (decision-windows-nofollow-binding). That script opens deeper names with
+// NtCreateFile relative to the held parent and OBJ_DONT_REPARSE so an
+// absolute-path reparse walk cannot redirect the final open (#5292). Missing
+// flags are never replaced with zero. Large Windows reads return bytes
+// through a caller-provided temp file so the JSON stdout stays inside the
+// process maxBuffer.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {

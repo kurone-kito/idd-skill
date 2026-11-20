@@ -376,3 +376,33 @@ test('Windows missing open capability still refuses without || 0', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Windows nested final open stays on the held parent (#5292)', () => {
+  // Absolute CreateFileW would walk a junction substituted for an intermediate
+  // directory. The helper opens the final name relative to the held parent
+  // with NtCreateFile + OBJ_DONT_REPARSE, so a nested regular file still
+  // reads and an intermediate junction still refuses.
+  if (process.platform !== 'win32') return;
+
+  const dir = scratch();
+  try {
+    const mid = join(dir, 'mid');
+    mkdirSync(mid);
+    const file = join(mid, 'nested.txt');
+    writeFileSync(file, 'held-parent');
+    const bytes = readNoFollowFile(file, { scriptPath: SCRIPT });
+    assert.equal(bytes.toString('utf8'), 'held-parent');
+
+    const decoy = join(dir, 'decoy');
+    mkdirSync(decoy);
+    writeFileSync(join(decoy, 'nested.txt'), 'through-junction');
+    rmSync(mid, { recursive: true, force: true });
+    if (!trySymlink(decoy, mid, 'dir')) return;
+    assert.throws(
+      () => readNoFollowFile(file, { scriptPath: SCRIPT }),
+      /refuse|intermediate|reparse|junction|not a plain directory/i,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
