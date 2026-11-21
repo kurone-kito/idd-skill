@@ -1949,6 +1949,39 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       ].join('\n'),
       expectBlocked: true,
     },
+    {
+      name: 'colon-bound parameter literal here-string prose',
+      body: [
+        "Write-Output -InputObject:@'",
+        '// (PowerShell 5.1 note) mentions gh only in prose',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'colon-bound parameter here-string does not hide a later command',
+      body: [
+        "Write-Output -InputObject:@'",
+        'hello',
+        "'@",
+        'gh api repos/o/r',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'colon-bound parameter expandable here-string prose',
+      body: [
+        'Write-Output -InputObject:@"',
+        'bare gh prose only',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
   ];
   const scriptPaths: Record<string, string> = {};
   for (const fixture of fixtures) {

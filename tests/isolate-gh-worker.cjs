@@ -997,6 +997,10 @@ function blankPowerShellRange(characters, start, end) {
   }
 }
 
+// Characters that continue a PowerShell bareword, so an `@` after one of them
+// does not start a here-string. Keep this set identical to isolate-gh.mts.
+const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
+
 function blankPowerShellHereStrings(source) {
   const characters = [...source];
   const expandableHereStrings = [];
@@ -1051,9 +1055,14 @@ function blankPowerShellHereStrings(source) {
     if (character !== '@') continue;
     const hereQuote = characters[index + 1];
     if (hereQuote !== "'" && hereQuote !== '"') continue;
-    // PowerShell reads `@'` as a here-string only at the start of a token;
-    // `a@'` is a bareword followed by an ordinary string.
-    if (index > 0 && !/[\s(,=;|{&+]/u.test(characters[index - 1] ?? '')) {
+    // `@` directly after a bareword character continues that bareword, so
+    // `a@'` is `a@` followed by an ordinary string, not a here-string. Every
+    // other preceding character (`:` in `-Param:@'`, `(`, `=`, quotes, space)
+    // starts one, as the PowerShell parser does.
+    if (
+      index > 0 &&
+      POWERSHELL_BAREWORD_CONTINUATION.test(characters[index - 1] ?? '')
+    ) {
       continue;
     }
     let lookahead = index + 2;
