@@ -446,7 +446,10 @@ export function classifyClaimAssert(
  * has no worktree identity. That result is kept only when the assert exited
  * 1 with `action: stop`, the same contract as every other stop verdict,
  * and `occupancy_paths_match` is exactly null. That field is null unless
- * the probe is occupied, so a boolean here is an inconsistent envelope.
+ * the probe is occupied, so a boolean here is an inconsistent envelope. The
+ * later owner proofs (`claim_lock_matches`, `generated_tokens_match`,
+ * `agent_and_branch_match`) must also be exactly null, because the helper
+ * stops evaluating after the first failed proof.
  * An `unreadable` probe must list only the removed worktree path, and any
  * other listed path holds; an `absent` probe must list no paths. A zero exit,
  * any other action, a mismatched claim, an unreadable assert, or a live
@@ -512,6 +515,9 @@ function readPostRemovalKeep(
     evidence?: {
       owner_evidence?: {
         worktree_identity?: unknown;
+        claim_lock_matches?: unknown;
+        generated_tokens_match?: unknown;
+        agent_and_branch_match?: unknown;
         occupancy_probe?: unknown;
         occupancy_paths_match?: unknown;
       } | null;
@@ -540,6 +546,9 @@ function readPostRemovalKeep(
     (owner.occupancy_probe !== 'unreadable' &&
       owner.occupancy_probe !== 'absent') ||
     owner.occupancy_paths_match !== null ||
+    owner.claim_lock_matches !== null ||
+    owner.generated_tokens_match !== null ||
+    owner.agent_and_branch_match !== null ||
     localRecord === null ||
     localRecord.status !== owner.occupancy_probe ||
     !localPathsAgree(owner.occupancy_probe, localRecord.paths, worktree)

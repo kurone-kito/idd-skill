@@ -2115,6 +2115,45 @@ test('classifyPostRemovalClaimAssert holds when the unreadable list names anothe
   }
 });
 
+test('classifyPostRemovalClaimAssert holds when a later owner proof is not null', () => {
+  const localWorktree = {
+    status: 'unreadable',
+    paths: [WORKTREE],
+    reason: null,
+  };
+  for (const proofs of [
+    { claim_lock_matches: false },
+    { generated_tokens_match: true },
+    { generated_tokens_match: false },
+    { agent_and_branch_match: true },
+    { agent_and_branch_match: false },
+  ]) {
+    assert.deepEqual(
+      classifyPostRemovalClaimAssert(
+        postRemovalAssert({
+          evidence: {
+            owner_evidence: {
+              worktree_identity: false,
+              claim_lock_matches: null,
+              generated_tokens_match: null,
+              agent_and_branch_match: null,
+              occupancy_probe: 'unreadable',
+              occupancy_paths_match: null,
+              ...proofs,
+            },
+            local_worktree: localWorktree,
+          },
+        }),
+        CLAIM,
+        AGENT,
+        WORKTREE,
+      ),
+      { ok: false, code: 'owner-evidence-required' },
+      `proofs ${JSON.stringify(proofs)} must hold`,
+    );
+  }
+});
+
 test('a zero-exit post-removal envelope still holds after removal', () => {
   const kept = postRemovalAssert();
   const h = harness({

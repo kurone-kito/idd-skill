@@ -10433,7 +10433,9 @@ returns `owner_evidence_required` even though the active claim still matches.
 The flow keeps that result only when the assert exited 1 with `action`
 `stop`, the claim id and agent match, `worktree_identity` is false, the
 occupancy probe is `unreadable` or `absent`, and `occupancy_paths_match`
-is null. `evidence.local_worktree` must report the same status. An
+is null. The later owner proofs (`claim_lock_matches`,
+`generated_tokens_match`, and `agent_and_branch_match`) must all be null.
+`evidence.local_worktree` must report the same status. An
 `unreadable` probe lists only the removed worktree path, and any other
 listed path still holds; an `absent` probe lists no paths. A zero exit,
 any other action, a mismatched claim, an unreadable assert, a
