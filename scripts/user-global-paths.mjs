@@ -69,6 +69,11 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  readNoFollowFile,
+  writeExclusiveNoFollow,
+} from './windows-nofollow.mjs';
 
 const DEFAULT_FS = nodeFs;
 const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL } = nodeFs.constants;
@@ -90,19 +95,76 @@ function errorCode(error) {
   }
   return undefined;
 }
+const WINDOWS_NOFOLLOW_SCRIPT = 'windows-nofollow.ps1';
+const PLATFORM_REFUSAL =
+  'this platform does not support the no-follow and nonblocking opens required for user-global writes; refusing before any mutation';
 /**
- * The no-follow and nonblocking open flags. Every export calls this before
- * any mutation, so a platform without them (notably Windows) refuses first.
+ * Windows does not preserve POSIX permission bits the way `chmod`/`lstat`
+ * do on POSIX, so mode checks after a write are best-effort there.
+ */
+function fileModeMatches(mode, statMode) {
+  if (mode === undefined) return true;
+  if (process.platform === 'win32') return true;
+  return (statMode & 0o777) === mode;
+}
+function windowsNoFollowScriptCandidates(here) {
+  return [
+    join(here, WINDOWS_NOFOLLOW_SCRIPT),
+    join(here, '..', 'src', 'scripts', WINDOWS_NOFOLLOW_SCRIPT),
+  ];
+}
+function system32PowershellPath(env = process.env) {
+  const root = [env.SystemRoot, env.windir].find(
+    (candidate) => candidate !== undefined && isAbsolute(candidate),
+  );
+  return join(
+    root ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+}
+/** True when the Windows no-follow helper script and PowerShell are present. */
+export function isWindowsNoFollowOpenAvailable(deps = {}) {
+  if (deps.scriptPath !== undefined) {
+    return (
+      nodeFs.existsSync(deps.scriptPath) &&
+      nodeFs.existsSync(system32PowershellPath(deps.env ?? process.env))
+    );
+  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  return (
+    windowsNoFollowScriptCandidates(here).some((candidate) =>
+      nodeFs.existsSync(candidate),
+    ) && nodeFs.existsSync(system32PowershellPath(deps.env ?? process.env))
+  );
+}
+function resolveWindowsNoFollowDeps(fs) {
+  const override = fs.windowsNoFollow;
+  if (override === false) return null;
+  const deps =
+    typeof override === 'object' && override !== null ? override : {};
+  return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
+}
+/**
+ * The no-follow capability every export needs before mutation. POSIX keeps
+ * real `O_NOFOLLOW` / `O_NONBLOCK` (never substituted with zero). On Windows,
+ * the open from issue `#5287` succeeds when available and still refuses
+ * before any mutation when it is not.
  */
 function requirePlatformFlags(fs) {
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
-  if (noFollow === undefined || nonBlock === undefined) {
-    throw new Error(
-      'this platform does not support the no-follow and nonblocking opens required for user-global writes; refusing before any mutation',
-    );
+  // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
+  if (noFollow !== undefined && nonBlock !== undefined) {
+    return { mode: 'posix', noFollow, nonBlock };
   }
-  return { noFollow, nonBlock };
+  if (process.platform === 'win32') {
+    const deps = resolveWindowsNoFollowDeps(fs);
+    if (deps !== null) return { mode: 'windows', deps };
+  }
+  throw new Error(PLATFORM_REFUSAL);
 }
 /**
  * Paths must be absolute and already normalized. The kernel resolves a `..`
@@ -319,21 +381,52 @@ function createDirs(dirs, fs) {
   }
 }
 /** The SHA-256 of a regular file, opened without following a link. */
-function sha256Of(path, fs, flags) {
-  const fd = fs.openSync(path, O_RDONLY | flags.noFollow | flags.nonBlock);
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
-      throw new Error(`${path} is not a regular file`);
-    }
-    return createHash('sha256').update(fs.readFileSync(fd)).digest('hex');
-  } finally {
-    fs.closeSync(fd);
+function sha256Of(path, fs) {
+  return createHash('sha256').update(readNoFollowBytes(path, fs)).digest('hex');
+}
+/**
+ * Read a file that a containment walk just classified as a regular file.
+ * Used when the Windows no-follow helper refuses multi-hard-link names
+ * during atomic publish, after `lstat` already ruled out a reparse point on
+ * every component the walk covers.
+ */
+function readLstatVerifiedFile(path, walk, fs) {
+  if (walk.finalKind !== 'file' || walk.finalStat === null) {
+    throw new Error(`${path} is not a regular file`);
   }
+  let stat;
+  try {
+    stat = fs.lstatSync(path);
+  } catch (error) {
+    throw new Error(`could not re-stat ${path}: ${describe(error)}`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`${path} is not a regular file`);
+  }
+  if (
+    stat.dev !== walk.finalStat.dev ||
+    stat.ino !== walk.finalStat.ino ||
+    stat.nlink !== walk.finalStat.nlink
+  ) {
+    throw new Error(`${path} changed; refusing`);
+  }
+  // POSIX O_NOFOLLOW opens still work with nlink>1. Only the Windows helper
+  // refuses that shape, so keep the descriptor path everywhere else.
+  if (process.platform !== 'win32' || stat.nlink <= 1) {
+    return readNoFollowBytes(path, fs);
+  }
+  return Buffer.from(fs.readFileSync(path));
 }
 /** Read a regular file without following links or blocking on a special file. */
 function readNoFollowBytes(path, fs) {
-  const flags = requirePlatformFlags(fs);
-  const fd = fs.openSync(path, O_RDONLY | flags.noFollow | flags.nonBlock);
+  const capability = requirePlatformFlags(fs);
+  if (capability.mode === 'windows') {
+    return readNoFollowFile(path, capability.deps);
+  }
+  const fd = fs.openSync(
+    path,
+    O_RDONLY | capability.noFollow | capability.nonBlock,
+  );
   try {
     if (!fs.fstatSync(fd).isFile()) {
       throw new Error(`${path} is not a regular file`);
@@ -377,7 +470,7 @@ function staleTemps(dir, base, fs) {
     .map((name) => join(dir, name));
 }
 /** Whether `target` is still the entry `expected` describes. */
-function assertMatchesExpected(target, walk, expected, flags, fs) {
+function assertMatchesExpected(target, walk, expected, fs) {
   if (walk.finalKind !== expected.kind) {
     throw new Error(
       `${target} is ${walk.finalKind}, not the expected ${expected.kind}; refusing to remove it`,
@@ -389,7 +482,7 @@ function assertMatchesExpected(target, walk, expected, flags, fs) {
         `${target} has more than one hard link; refusing to remove it`,
       );
     }
-    if (sha256Of(target, fs, flags) !== expected.sha256.toLowerCase()) {
+    if (sha256Of(target, fs) !== expected.sha256.toLowerCase()) {
       throw new Error(
         `${target} changed: its SHA-256 does not match; refusing to remove it`,
       );
@@ -511,7 +604,7 @@ export function createDirectory(root, target, fs = DEFAULT_FS) {
  * content write fails after the create, the created file is removed.
  */
 export function writeNewFile(root, target, content, fs = DEFAULT_FS, mode) {
-  const flags = requirePlatformFlags(fs);
+  const capability = requirePlatformFlags(fs);
   if (
     mode !== undefined &&
     (!Number.isInteger(mode) || mode < 0 || mode > 0o777)
@@ -525,9 +618,27 @@ export function writeNewFile(root, target, content, fs = DEFAULT_FS, mode) {
     );
   }
   createDirs(walk.missingDirs, fs);
+  if (capability.mode === 'windows') {
+    try {
+      writeExclusiveNoFollow(target, content, capability.deps);
+    } catch (error) {
+      // The Windows helper deletes a failed CREATE_NEW by handle before
+      // close. Do not unlink here: a refused create may race with another
+      // writer that now owns the path (#5290 review).
+      throw new Error(`write to ${target} failed: ${describe(error)}`);
+    }
+    if (mode !== undefined) {
+      try {
+        fs.chmodSync(target, mode);
+      } catch (error) {
+        discardOwnFile(target, error, fs, `write to ${target} failed`);
+      }
+    }
+    return;
+  }
   const fd = fs.openSync(
     target,
-    O_WRONLY | O_CREAT | O_EXCL | flags.noFollow,
+    O_WRONLY | O_CREAT | O_EXCL | capability.noFollow,
     0o644,
   );
   let closed = false;
@@ -645,7 +756,9 @@ export function writeNewFileAtomically(
       published.finalStat.dev !== temporary.finalStat.dev ||
       published.finalStat.ino !== temporary.finalStat.ino ||
       published.finalStat.nlink !== 2 ||
-      !readNoFollowBytes(target, fs).equals(expected)
+      // After linkSync both names share nlink=2; the Windows helper refuses
+      // that shape, so re-read through the just-verified lstat walk instead.
+      !readLstatVerifiedFile(target, published, fs).equals(expected)
     ) {
       throw new Error(`${target} changed during atomic publication; refusing`);
     }
@@ -667,30 +780,31 @@ export function writeNewFileAtomically(
         `${path} is not a regular preparation temporary file; refusing`,
       );
     }
+    const modeMatches = fileModeMatches(mode, tempWalk.finalStat.mode);
+    const current = walkTo(root, target, fs);
+    // Resolve multi-link temps before any no-follow read: the Windows helper
+    // refuses nlink>1, and a recovered publish already shares the target inode.
+    if (tempWalk.finalStat.nlink > 1) {
+      if (
+        modeMatches &&
+        current.finalKind === 'file' &&
+        current.finalStat !== null &&
+        current.finalStat.dev === tempWalk.finalStat.dev &&
+        current.finalStat.ino === tempWalk.finalStat.ino &&
+        current.finalStat.nlink === 2 &&
+        readLstatVerifiedFile(target, current, fs).equals(expected)
+      ) {
+        fs.unlinkSync(path);
+        continue;
+      }
+      throw new Error(`${path} has more than one hard link; refusing`);
+    }
     const bytes = readNoFollowBytes(path, fs);
     if (
       bytes.length > expected.length ||
       !expected.subarray(0, bytes.length).equals(bytes)
     ) {
       throw new Error(`${path} is not a prefix of the expected file; refusing`);
-    }
-    const modeMatches =
-      mode === undefined || (tempWalk.finalStat.mode & 0o777) === mode;
-    const current = walkTo(root, target, fs);
-    if (tempWalk.finalStat.nlink > 1) {
-      if (
-        bytes.equals(expected) &&
-        modeMatches &&
-        current.finalKind === 'file' &&
-        current.finalStat !== null &&
-        current.finalStat.dev === tempWalk.finalStat.dev &&
-        current.finalStat.ino === tempWalk.finalStat.ino &&
-        current.finalStat.nlink === 2
-      ) {
-        fs.unlinkSync(path);
-        continue;
-      }
-      throw new Error(`${path} has more than one hard link; refusing`);
     }
     if (bytes.equals(expected) && modeMatches) {
       publishTemp(path, bytes);
@@ -708,7 +822,7 @@ export function writeNewFileAtomically(
         `${target} already exists with different bytes; refusing`,
       );
     }
-    if (mode !== undefined && (afterRecovery.finalStat.mode & 0o777) !== mode) {
+    if (!fileModeMatches(mode, afterRecovery.finalStat.mode)) {
       throw new Error(`${target} has an unexpected mode; refusing`);
     }
     return;
@@ -728,7 +842,7 @@ export function writeNewFileAtomically(
       `${temp} did not retain the complete expected bytes; refusing`,
     );
   }
-  if (mode !== undefined && (tempWalk.finalStat.mode & 0o777) !== mode) {
+  if (!fileModeMatches(mode, tempWalk.finalStat.mode)) {
     throw new Error(`${temp} did not retain the expected mode; refusing`);
   }
   publishTemp(temp, expected);
@@ -746,7 +860,7 @@ export function replaceFileByRename(
   content,
   fs = DEFAULT_FS,
 ) {
-  const flags = requirePlatformFlags(fs);
+  const capability = requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
   if (walk.finalKind !== 'file' || walk.finalStat === null) {
     throw new Error(
@@ -758,7 +872,7 @@ export function replaceFileByRename(
       `${target} has more than one hard link; refusing to replace it`,
     );
   }
-  if (sha256Of(target, fs, flags) !== expectedSha256.toLowerCase()) {
+  if (sha256Of(target, fs) !== expectedSha256.toLowerCase()) {
     throw new Error(
       `${target} changed: its SHA-256 does not match; refusing to replace it`,
     );
@@ -771,9 +885,25 @@ export function replaceFileByRename(
   }
   const temp = `${target}.tmp-${process.pid}`;
   const mode = walk.finalStat.mode & 0o777;
+  if (capability.mode === 'windows') {
+    try {
+      writeExclusiveNoFollow(temp, content, capability.deps);
+    } catch (error) {
+      // Same as writeNewFile: the helper owns CREATE_NEW cleanup; a refused
+      // create must not unlink a concurrent writer's temporary path.
+      throw new Error(`replacement of ${target} failed: ${describe(error)}`);
+    }
+    try {
+      fs.chmodSync(temp, mode);
+      fs.renameSync(temp, target);
+    } catch (error) {
+      discardOwnFile(temp, error, fs, `replacement of ${target} failed`);
+    }
+    return;
+  }
   const fd = fs.openSync(
     temp,
-    O_WRONLY | O_CREAT | O_EXCL | flags.noFollow,
+    O_WRONLY | O_CREAT | O_EXCL | capability.noFollow,
     mode,
   );
   let closed = false;
@@ -803,12 +933,12 @@ export function replaceFileByRename(
  * refused.
  */
 export function removeSingleEntry(root, target, expected, fs = DEFAULT_FS) {
-  const flags = requirePlatformFlags(fs);
+  requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
   if (walk.finalKind === 'absent') {
     throw new Error(`${target} does not exist; nothing to remove`);
   }
-  assertMatchesExpected(target, walk, expected, flags, fs);
+  assertMatchesExpected(target, walk, expected, fs);
   try {
     if (expected.kind === 'directory') {
       fs.rmdirSync(target);
@@ -869,6 +999,31 @@ export function repointCurrent(dataRoot, version, fs = DEFAULT_FS) {
   const temp = join(root, `${CURRENT}.tmp-${process.pid}`);
   fs.symlinkSync(versionDir, temp);
   try {
+    // POSIX rename replaces an existing symlink atomically. Windows returns
+    // EPERM when the destination already exists, so remove it first and then
+    // rename. If that rename fails, restore the previous target when possible.
+    if (process.platform === 'win32' && currentStat !== null) {
+      const previousTarget = fs.readlinkSync(current);
+      fs.unlinkSync(current);
+      try {
+        fs.renameSync(temp, current);
+      } catch (error) {
+        try {
+          fs.symlinkSync(previousTarget, current);
+        } catch (restoreError) {
+          discardOwnFile(
+            temp,
+            new Error(
+              `${describe(error)}; could not restore ${current} (${describe(restoreError)})`,
+            ),
+            fs,
+            `repoint of ${current} failed`,
+          );
+        }
+        discardOwnFile(temp, error, fs, `repoint of ${current} failed`);
+      }
+      return;
+    }
     fs.renameSync(temp, current);
   } catch (error) {
     discardOwnFile(temp, error, fs, `repoint of ${current} failed`);

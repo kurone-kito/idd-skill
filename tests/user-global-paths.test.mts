@@ -9,10 +9,9 @@
 // tests do not depend on who runs them; one test reads a real owner and skips
 // when that owner is root.
 //
-// Tests that use a real symbolic link or the real no-follow opens skip on
-// Windows, where `constants.O_NOFOLLOW` is undefined and every export refuses
-// by design. Tests that inject fixed flag values run on every platform, as do
-// the platform-refusal test and the export-list test.
+// Tests that must create a real symbolic link skip only when Windows denies
+// that creation. Other cases run on every platform once the Windows no-follow
+// open from issue `#5287` is wired (issue `#5290`).
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -36,14 +35,44 @@ const {
   writeNewFile,
 } = userGlobalPaths;
 
-const POSIX_ONLY =
-  process.platform === 'win32'
-    ? 'symbolic links and no-follow opens are unavailable on Windows (O_NOFOLLOW is undefined)'
-    : false;
+/**
+ * Skip only when this host cannot create a symbolic link (issue #5290).
+ * Historical name `posixTest` remains for the symlink-heavy cases.
+ */
+function symlinkSkipReason(): string | false {
+  if (process.platform !== 'win32') return false;
+  const dir = nodeFs.mkdtempSync(
+    join(nodeFs.realpathSync(tmpdir()), 'idd-symlink-probe-'),
+  );
+  const target = join(dir, 't');
+  const link = join(dir, 'l');
+  try {
+    nodeFs.writeFileSync(target, 'x');
+    nodeFs.symlinkSync(target, link);
+    return false;
+  } catch {
+    return 'symbolic link creation is denied on this Windows host';
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
-/** Run a POSIX-only test everywhere else, with a named skip reason on Windows. */
-function posixTest(name: string, run: () => void): void {
-  test(name, { skip: POSIX_ONLY }, run);
+const POSIX_ONLY = symlinkSkipReason();
+
+/** Run a test that may create a symbolic link; skip when creation is denied. */
+function posixTest(
+  name: string,
+  runOrOptions: (() => void) | { skip?: string | boolean },
+  maybeRun?: () => void,
+): void {
+  if (typeof runOrOptions === 'function') {
+    test(name, { skip: POSIX_ONLY }, runOrOptions);
+    return;
+  }
+  if (maybeRun === undefined) {
+    throw new Error('posixTest requires a function');
+  }
+  test(name, { skip: POSIX_ONLY || runOrOptions.skip || false }, maybeRun);
 }
 
 interface Box {
@@ -106,6 +135,9 @@ function withoutNoFollow(): FsOps {
       O_NOFOLLOW: undefined,
       O_NONBLOCK: undefined,
     },
+    // On win32 the POSIX constants are already absent; force the Windows
+    // helper off so this case still proves the pre-mutation refusal (#5290).
+    windowsNoFollow: false,
   });
 }
 
@@ -167,6 +199,10 @@ function snapshot(dir: string): string[] {
   return entries;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function assertThrowsMatching(run: () => void, pattern: RegExp): void {
   assert.throws(run, (error: unknown) => {
     assert.ok(error instanceof Error);
@@ -175,6 +211,12 @@ function assertThrowsMatching(run: () => void, pattern: RegExp): void {
   });
 }
 
+/** Skip tests that inject POSIX fd write/close failures or Unix mode bits. */
+const POSIX_FD_ONLY =
+  process.platform === 'win32'
+    ? 'POSIX open/write/close injection and Unix mode bits are unavailable on Windows'
+    : false;
+
 // --- Exports and platform (every platform) ---------------------------------
 
 test('exports the containment entry points and the two ceiling helpers', () => {
@@ -182,6 +224,7 @@ test('exports the containment entry points and the two ceiling helpers', () => {
     'assertRealChain',
     'checkContainment',
     'createDirectory',
+    'isWindowsNoFollowOpenAvailable',
     'removeSingleEntry',
     'replaceFileByRename',
     'repointCurrent',
@@ -303,6 +346,7 @@ posixTest(
 
 posixTest(
   'writeNewFileAtomically replaces a complete temporary file with the wrong mode',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -843,7 +887,7 @@ posixTest(
       nodeFs.symlinkSync(join(root, '0.2.0'), stale);
       assertThrowsMatching(
         () => repointCurrent(root, '0.2.0'),
-        new RegExp(`${stale.replaceAll('.', '\\.')}.*remove it by hand`),
+        new RegExp(`${escapeRegExp(stale)}.*remove it by hand`),
       );
       assert.equal(
         nodeFs.readlinkSync(join(root, 'current')),
@@ -905,7 +949,7 @@ posixTest(
       });
       assertThrowsMatching(
         () => repointCurrent(root, '0.2.0', fs),
-        new RegExp(`leftover path: ${leftover.replaceAll('.', '\\.')}`),
+        new RegExp(`leftover path: ${escapeRegExp(leftover)}`),
       );
     });
   },
@@ -915,6 +959,7 @@ posixTest(
 
 posixTest(
   'a failed content write removes the file the create-only write made',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -935,6 +980,7 @@ posixTest(
 
 posixTest(
   'a failed content write whose removal also fails names the leftover path',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -949,7 +995,7 @@ posixTest(
       });
       assertThrowsMatching(
         () => writeNewFile(box.dataRoot, target, 'x', fs),
-        new RegExp(`leftover path: ${target.replaceAll('.', '\\.')}`),
+        new RegExp(`leftover path: ${escapeRegExp(target)}`),
       );
     });
   },
@@ -957,6 +1003,7 @@ posixTest(
 
 posixTest(
   'a failed close is retried once and the created file is removed',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -981,6 +1028,7 @@ posixTest(
 
 posixTest(
   'a failed close during replacement is retried once and leaves the file unchanged',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -1013,6 +1061,7 @@ posixTest(
 
 posixTest(
   'replaceFileByRename keeps the original permission bits under a restrictive umask',
+  { skip: POSIX_FD_ONLY },
   () => {
     withBox((box) => {
       makeRoot(box);
@@ -1101,7 +1150,7 @@ posixTest(
       const before = snapshot(box.home);
       assertThrowsMatching(
         () => writeNewFile(box.dataRoot, join(box.dataRoot, 'x.txt'), 'x'),
-        new RegExp(`could not create ${box.dataRoot.replaceAll('.', '\\.')}`),
+        new RegExp(`could not create ${escapeRegExp(box.dataRoot)}`),
       );
       assert.deepEqual(snapshot(box.home), before);
     });
@@ -1130,7 +1179,7 @@ posixTest(
             'x',
             fs,
           ),
-        new RegExp(`could not create ${second.replaceAll('.', '\\.')}`),
+        new RegExp(`could not create ${escapeRegExp(second)}`),
       );
       assert.equal(nodeFs.existsSync(box.dataRoot), true);
       assert.equal(nodeFs.existsSync(second), false);
@@ -1427,7 +1476,11 @@ posixTest(
       const link = join(box.base, 'home-link');
       nodeFs.symlinkSync(real, link);
       const root = join(link, '.local', 'share', 'idd-skill');
-      for (const ceiling of [link, `${link}/`]) {
+      // A trailing `/` is normalized on POSIX; on Windows it is a distinct,
+      // non-normalized spelling, so only probe it off win32.
+      const ceilings =
+        process.platform === 'win32' ? [link] : [link, `${link}/`];
+      for (const ceiling of ceilings) {
         assertThrowsMatching(
           () => assertRealChain(root, declaring(ceiling)),
           /symbolic link on the path/,
@@ -1465,6 +1518,15 @@ posixTest(
       const fs = withCeilings(ownedBy(0, linked), [home]);
 
       assertRealChain(root, fs);
+      // The Windows no-follow open refuses every reparse point, including a
+      // root-owned link above the ceiling that POSIX open would follow.
+      if (process.platform === 'win32') {
+        assertThrowsMatching(
+          () => writeNewFile(root, join(root, 'f.txt'), 'ok', fs),
+          /reparse|junction|symlink|not a plain directory/i,
+        );
+        return;
+      }
       writeNewFile(root, join(root, 'f.txt'), 'ok', fs);
       assert.equal(
         nodeFs.readFileSync(
@@ -1629,6 +1691,9 @@ posixTest(
       const equal: string[] = [];
       assertRealChain(box.home, lstatSpy(equal, [box.home]));
       assert.deepEqual(equal, expected);
+
+      // A ceiling of "/" is POSIX-only; Windows has no single-root `/`.
+      if (process.platform === 'win32') return;
 
       // Order is the contract: the primary root is declared first.
       const primaryFirst: string[] = [];

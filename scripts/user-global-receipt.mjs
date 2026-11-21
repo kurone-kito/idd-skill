@@ -10,7 +10,12 @@
 import * as nodeFs from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
-import { checkContainment, writeNewFile } from './user-global-paths.mjs';
+import {
+  checkContainment,
+  isWindowsNoFollowOpenAvailable,
+  writeNewFile,
+} from './user-global-paths.mjs';
+import { readNoFollowFile } from './windows-nofollow.mjs';
 
 /** The receipt file name inside the data root. */
 const RECEIPT_FILENAME = 'receipt.json';
@@ -66,20 +71,34 @@ export function findStaleReceiptTemps(dataRoot, fs = DEFAULT_FS) {
 function readNoFollowText(path, fs) {
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
-  if (noFollow === undefined || nonBlock === undefined) {
-    throw new Error(
-      'this platform does not support the no-follow opens the receipt needs; refusing',
+  // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
+  if (noFollow !== undefined && nonBlock !== undefined) {
+    const fd = fs.openSync(
+      path,
+      nodeFs.constants.O_RDONLY | noFollow | nonBlock,
     );
-  }
-  const fd = fs.openSync(path, nodeFs.constants.O_RDONLY | noFollow | nonBlock);
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
-      throw new Error(`${path} is not a regular file`);
+    try {
+      if (!fs.fstatSync(fd).isFile()) {
+        throw new Error(`${path} is not a regular file`);
+      }
+      return fs.readFileSync(fd, 'utf8');
+    } finally {
+      fs.closeSync(fd);
     }
-    return fs.readFileSync(fd, 'utf8');
-  } finally {
-    fs.closeSync(fd);
   }
+  if (process.platform === 'win32') {
+    const override = fs.windowsNoFollow;
+    if (override !== false) {
+      const deps =
+        typeof override === 'object' && override !== null ? override : {};
+      if (isWindowsNoFollowOpenAvailable(deps)) {
+        return readNoFollowFile(path, deps).toString('utf8');
+      }
+    }
+  }
+  throw new Error(
+    'this platform does not support the no-follow opens the receipt needs; refusing',
+  );
 }
 function corrupt(path, reason) {
   throw new Error(
