@@ -226,9 +226,10 @@ export function classifyClaimAssert(raw, claimId, agentId) {
  * 1 with `action: stop`, the same contract as every other stop verdict,
  * and `occupancy_paths_match` is exactly null. That field is null unless
  * the probe is occupied, so a boolean here is an inconsistent envelope.
- * An `unreadable` probe must list the removed worktree path; an `absent`
- * probe must list no paths. A zero exit, any other action, a mismatched
- * claim, an unreadable assert, or a live occupied worktree is not kept. Checks before step 5 keep
+ * An `unreadable` probe must list only the removed worktree path, and any
+ * other listed path holds; an `absent` probe must list no paths. A zero exit,
+ * any other action, a mismatched claim, an unreadable assert, or a live
+ * occupied worktree is not kept. Checks before step 5 keep
  * {@link classifyClaimAssert}. Observed 2026-11-21 on host win32 during
  * cleanup of issue #5290 (PR #5296), recorded in issue #5299.
  */
@@ -252,8 +253,15 @@ function localPathsAgree(probe, paths, worktree) {
   }
   if (probe === 'absent') return paths.length === 0;
   if (probe !== 'unreadable') return false;
-  const wanted = canonicalPathKey(worktree, () => null);
-  return paths.some((entry) => canonicalPathKey(entry, () => null) === wanted);
+  // Only the removed worktree's own record may stay unreadable. Any other
+  // listed path is an unrelated, ambiguous registration, so hold on it.
+  const [only] = paths;
+  return (
+    paths.length === 1 &&
+    typeof only === 'string' &&
+    canonicalPathKey(only, () => null) ===
+      canonicalPathKey(worktree, () => null)
+  );
 }
 function readPostRemovalKeep(raw, claimId, agentId, worktree) {
   let parsed;

@@ -2086,6 +2086,35 @@ test('a mismatched assert after removal still holds claim-lost and skips the rem
   );
 });
 
+test('classifyPostRemovalClaimAssert holds when the unreadable list names another path', () => {
+  const ownerEvidence = {
+    worktree_identity: false,
+    occupancy_probe: 'unreadable',
+    occupancy_paths_match: null,
+  };
+  for (const paths of [
+    [WORKTREE, '/tmp/other'],
+    ['/tmp/other', WORKTREE],
+    ['/tmp/other'],
+  ]) {
+    assert.deepEqual(
+      classifyPostRemovalClaimAssert(
+        postRemovalAssert({
+          evidence: {
+            owner_evidence: ownerEvidence,
+            local_worktree: { status: 'unreadable', paths, reason: null },
+          },
+        }),
+        CLAIM,
+        AGENT,
+        WORKTREE,
+      ),
+      { ok: false, code: 'owner-evidence-required' },
+      `paths ${JSON.stringify(paths)} must hold`,
+    );
+  }
+});
+
 test('a zero-exit post-removal envelope still holds after removal', () => {
   const kept = postRemovalAssert();
   const h = harness({

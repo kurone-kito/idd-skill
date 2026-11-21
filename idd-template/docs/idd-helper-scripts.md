@@ -10417,10 +10417,11 @@ The flow keeps that result only when the assert exited 1 with `action`
 `stop`, the claim id and agent match, `worktree_identity` is false, the
 occupancy probe is `unreadable` or `absent`, and `occupancy_paths_match`
 is null. `evidence.local_worktree` must report the same status. An
-`unreadable` probe lists the removed worktree path; an `absent` probe
-lists no paths. A zero exit, any other action, a mismatched claim, an
-unreadable assert, a contradictory local-worktree record, or a live
-occupied worktree still holds.
+`unreadable` probe lists only the removed worktree path, and any other
+listed path still holds; an `absent` probe lists no paths. A zero exit,
+any other action, a mismatched claim, an unreadable assert, a
+contradictory local-worktree record, or a live occupied worktree still
+holds.
 Checks before step 5 are unchanged. Observed
 2026-11-21 on host `win32` during cleanup of issue `#5290` (PR `#5296`),
 recorded in issue `#5299`.
