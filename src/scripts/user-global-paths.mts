@@ -741,20 +741,9 @@ export function writeNewFile(
     try {
       writeExclusiveNoFollow(target, content, capability.deps);
     } catch (error) {
-      // Exclusive create may leave the new path when a later write fails;
-      // remove only that leftover. A refused create must not unlink a
-      // pre-existing path.
-      try {
-        if (fs.lstatSync(target).isFile()) {
-          discardOwnFile(target, error, fs, `write to ${target} failed`);
-        }
-      } catch (inspectError) {
-        if (errorCode(inspectError) !== 'ENOENT') {
-          throw new Error(
-            `write to ${target} failed: ${describe(error)}; could not inspect leftover (${describe(inspectError)})`,
-          );
-        }
-      }
+      // The Windows helper removes its own CREATE_NEW leftover on failure.
+      // Do not unlink here: a refused create may race with another writer
+      // that now owns the path (#5290 review).
       throw new Error(`write to ${target} failed: ${describe(error)}`);
     }
     if (mode !== undefined) {
@@ -1029,17 +1018,8 @@ export function replaceFileByRename(
     try {
       writeExclusiveNoFollow(temp, content, capability.deps);
     } catch (error) {
-      try {
-        if (fs.lstatSync(temp).isFile()) {
-          discardOwnFile(temp, error, fs, `replacement of ${target} failed`);
-        }
-      } catch (inspectError) {
-        if (errorCode(inspectError) !== 'ENOENT') {
-          throw new Error(
-            `replacement of ${target} failed: ${describe(error)}; could not inspect leftover (${describe(inspectError)})`,
-          );
-        }
-      }
+      // Same as writeNewFile: the helper owns CREATE_NEW cleanup; a refused
+      // create must not unlink a concurrent writer's temporary path.
       throw new Error(`replacement of ${target} failed: ${describe(error)}`);
     }
     try {

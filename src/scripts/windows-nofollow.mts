@@ -667,8 +667,10 @@ export function readNoFollowFile(
 
 /**
  * Create `path` exclusively and write `content` without following links.
- * If the exclusive create succeeds and a later write fails, the new file
- * remains only at the caller-chosen path; this helper does not delete it.
+ * On Windows the PowerShell helper removes a CREATE_NEW leftover itself
+ * when a later inspect/write fails, so a refused create never invites the
+ * caller to unlink a concurrent writer's file. On POSIX, a failed write
+ * after `O_EXCL` leaves the new path for the caller to discard.
  */
 // audit:ignore-dead-export: callers land in later Windows roadmap children (#5290); this child only adds the primitive
 export function writeExclusiveNoFollow(

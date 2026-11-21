@@ -129,9 +129,9 @@ function sha256Of(bytes: Buffer | string): string {
  * The no-follow capability `readRegular` needs. POSIX keeps real
  * `O_NOFOLLOW` / `O_NONBLOCK`; Windows uses the open from issue `#5287`.
  */
-function requireNoFollowFlags(fs: FsOps):
-  | { mode: 'posix'; noFollow: number; nonBlock: number }
-  | { mode: 'windows' } {
+function requireNoFollowFlags(
+  fs: FsOps,
+): { mode: 'posix'; noFollow: number; nonBlock: number } | { mode: 'windows' } {
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
   // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
