@@ -89,6 +89,7 @@ function postRemovalAssert(
           occupancy_probe: 'unreadable',
           occupancy_paths_match: null,
         },
+        local_worktree: { status: 'unreadable', paths: [], reason: null },
       },
       ...overrides,
     }),
@@ -2171,6 +2172,27 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
   assert.deepEqual(
     classifyPostRemovalClaimAssert(
       postRemovalAssert({ evidence: { owner_evidence: null } }),
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: null,
+          },
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/tmp/other'],
+            reason: null,
+          },
+        },
+      }),
       CLAIM,
       AGENT,
     ),

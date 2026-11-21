@@ -248,6 +248,9 @@ function readPostRemovalKeep(raw, claimId, agentId) {
   const routing = parsed;
   const active = routing.active_claim;
   const owner = routing.evidence?.owner_evidence;
+  const local = routing.evidence?.local_worktree;
+  const localRecord =
+    local !== null && typeof local === 'object' ? local : null;
   if (
     raw.exitCode !== 1 ||
     owner === undefined ||
@@ -262,7 +265,11 @@ function readPostRemovalKeep(raw, claimId, agentId) {
     owner.worktree_identity !== false ||
     (owner.occupancy_probe !== 'unreadable' &&
       owner.occupancy_probe !== 'absent') ||
-    owner.occupancy_paths_match !== null
+    owner.occupancy_paths_match !== null ||
+    localRecord === null ||
+    localRecord.status !== owner.occupancy_probe ||
+    !Array.isArray(localRecord.paths) ||
+    localRecord.paths.length !== 0
   ) {
     return null;
   }
