@@ -488,11 +488,36 @@ type PreMergeReadinessSummary = ReturnType<
   typeof buildPreMergeReadinessSummary
 >;
 
+type ScopeOverrunPathSetConflict = {
+  recordedFiles: readonly string[];
+  liveFiles: readonly string[];
+};
+
 type ScopeOverrunReport = {
   status: 'missing' | 'invalid' | 'valid';
   reason: string;
   recordedHeadSha: string | null;
+  /**
+   * Set only when `record-conflict` is a live path-set mismatch. Stripped
+   * before the schema-bound `claim.scopeOverrun` object is published; the
+   * blocker detail is what names both lists.
+   */
+  pathSetConflict?: ScopeOverrunPathSetConflict;
 };
+
+/** Public scope-overrun object plus the blocker sentence that names a path mismatch. */
+export function publishScopeOverrun(report: ScopeOverrunReport): {
+  report: Omit<ScopeOverrunReport, 'pathSetConflict'>;
+  blockerDetail: string;
+} {
+  const { pathSetConflict, ...publicReport } = report;
+  const base = `scope overrun ${report.status}: ${report.reason}`;
+  if (!pathSetConflict) return { report: publicReport, blockerDetail: base };
+  return {
+    report: publicReport,
+    blockerDetail: `${base}; recorded=${JSON.stringify(pathSetConflict.recordedFiles)}; live=${JSON.stringify(pathSetConflict.liveFiles)}`,
+  };
+}
 
 export type PreMergeReadinessReport = Omit<
   PreMergeReadinessSummary,
@@ -687,15 +712,24 @@ export function resolveScopeOverrunReadiness(
       'scope-overrun audit could not read the current PR branch and HEAD',
     );
   }
+  const filesDiffer = !sameStringList(record.candidateFiles, canonicalFiles);
   if (
     record.pullRequestNumber !== input.pullRequestNumber ||
     record.branch !== branch ||
-    !sameStringList(record.candidateFiles, canonicalFiles)
+    filesDiffer
   ) {
     return {
       status: 'invalid',
       reason: 'record-conflict',
       recordedHeadSha: record.headSha,
+      ...(filesDiffer
+        ? {
+            pathSetConflict: {
+              recordedFiles: [...record.candidateFiles].sort(compareUtf8),
+              liveFiles: [...canonicalFiles],
+            },
+          }
+        : {}),
     };
   }
   if (record.headSha !== headSha) {
@@ -2750,10 +2784,13 @@ export function collectPreMergeReadiness(
     },
   );
 
+  const publishedScopeOverrun =
+    scopeOverrun === undefined || scopeOverrun === null
+      ? null
+      : publishScopeOverrun(scopeOverrun);
   const reportSummary =
-    scopeOverrun !== undefined &&
-    scopeOverrun !== null &&
-    scopeOverrun.status !== 'valid'
+    publishedScopeOverrun !== null &&
+    publishedScopeOverrun.report.status !== 'valid'
       ? {
           ...summary,
           ready: false,
@@ -2761,7 +2798,7 @@ export function collectPreMergeReadiness(
             ...(summary.blockers as Array<Record<string, unknown>>),
             {
               gate: 'scope-overrun',
-              detail: `scope overrun ${scopeOverrun.status}: ${scopeOverrun.reason}`,
+              detail: publishedScopeOverrun.blockerDetail,
             },
           ],
         }
@@ -2788,10 +2825,12 @@ export function collectPreMergeReadiness(
 
   return {
     ...reportSummary,
-    ...(scopeOverrun === undefined || scopeOverrun === null
+    ...(publishedScopeOverrun === null
       ? {}
       : {
-          claim: Object.assign({}, reportSummary.claim, { scopeOverrun }),
+          claim: Object.assign({}, reportSummary.claim, {
+            scopeOverrun: publishedScopeOverrun.report,
+          }),
         }),
     ...(provisionalRead === undefined ? {} : { provisionalRead }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null

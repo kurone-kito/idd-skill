@@ -6014,9 +6014,13 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
 
 Issue `#4674` adds a durable `scope-overrun` record for the candidate-file
 limit detected during B3 or push validation. It snapshots the issue number,
-the effort value observed at that time, and the canonical candidate-file set.
-The record does not reread the ordinary issue effort marker later, so an edit
-to that marker cannot rewrite the snapshot.
+the effort value observed at that time, and the live changed-path set for
+the head being recorded. `--candidate-files` carries that set. It is not
+the issue body's `## Candidate files` section. F2/F3 readiness rebuilds the
+same set from the pull request: changed paths, with rename sources included
+and sync targets and generated mirrors excluded. The record does not reread
+the ordinary issue effort marker later, so an edit to that marker cannot
+rewrite the snapshot.
 
 This change does not invoke the helper automatically; the detecting session
 must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`. F2/F3
@@ -6032,8 +6036,8 @@ node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
 ```
 
 This first record is pre-push and has no PR fields. Once a pull request exists,
-append a post-push record with the same issue, effort, and candidate files, plus
-the observed PR number, branch, and full 40-character head SHA:
+append a post-push record with the same issue, effort, and live changed-path
+set, plus the observed PR number, branch, and full 40-character head SHA:
 
 ```sh
 node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
@@ -6042,13 +6046,20 @@ node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
   --pull-request <pr> --branch <branch> --head-sha <40-hex> [--apply]
 ```
 
-`--candidate-files` is a JSON array. The renderer sorts paths by UTF-8 byte
-order, rejects duplicates and non-canonical spellings such as absolute paths,
-backslashes, empty segments, `.` / `..` segments, or leading/trailing
-whitespace, and allows spaces inside a path. The visible note lists every
-sorted path in code spans so a reviewer can inspect the exact snapshot. This
-closes the aliasing and unreadable-list cases raised during review of pull
-request `#4688` on 2026-10-24 ([canonical path spellings](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595793),
+`--candidate-files` is a JSON array of the live changed-path set F2/F3 will
+recompute for the recorded head. Pass that set, not the paths under the
+issue's `## Candidate files` heading. A post-push record whose `files=`
+list is only that section, while the pull request also changed other
+non-generated paths, stays `invalid` with `record-conflict`. The
+scope-overrun blocker detail then names both sorted lists as `recorded=`
+and `live=` JSON arrays, so the next record can copy the live set. The
+renderer sorts paths by UTF-8 byte order, rejects duplicates and
+non-canonical spellings such as absolute paths, backslashes, empty
+segments, `.` / `..` segments, or leading/trailing whitespace, and allows
+spaces inside a path. The visible note lists every sorted path in code
+spans so a reviewer can inspect the exact snapshot. This closes the
+aliasing and unreadable-list cases raised during review of pull request
+`#4688` on 2026-10-24 ([canonical path spellings](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595793),
 [visible candidate list](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595801)).
 
 For a local target, the marker prefix comes from this repository's configured
@@ -6071,18 +6082,20 @@ record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
 requires each record comment's author to be in the configured trusted marker
 actor list and `lastEditedAt` to be explicitly `null`.
 
-The immutable snapshot for a lineage is its issue number, effort, and canonical
-candidate-file set. Every record in that lineage must keep those values.
-Changed candidate files or effort return `invalid` with `record-conflict`; a
-record for another issue returns `invalid` with `record-issue-mismatch`. Keep
-the original issue's record lineage intact. If the candidate-file set changes,
+The immutable snapshot for a lineage is its issue number, effort, and live
+changed-path set. Every record in that lineage must keep those values.
+A changed path set or effort returns `invalid` with `record-conflict`. When
+the recorded `files=` list and the live set differ, the blocker detail
+names both sorted lists. A record for another issue returns `invalid` with
+`record-issue-mismatch`. Keep the original issue's record lineage intact.
+If the changed-path set changes,
 create a new issue with a new initial pre-push snapshot instead of editing or
 replacing the original snapshot. These mismatches remain fail-closed.
 This changed-scope dead end was raised during review of pull request `#4688`
 on 2026-10-24 ([immutable snapshot contract](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4370115461)).
 
 A pre-push record may be followed by post-push records only when the issue,
-effort, and candidate-file set stay the same. Every post-push record in that
+effort, and live changed-path set stay the same. Every post-push record in that
 lineage also keeps the same PR number and branch. When the pushed head changes,
 the newest append-only record by GitHub's `createdAt` timestamp and numeric
 comment ID is active; earlier records remain for audit. A new head needs a new
@@ -6149,7 +6162,7 @@ pin the facts below against the unchanged `resolveScopeOverrunReadiness()`.
 | Pull request and branch | A post-push record carries `pr=` and `branch=`. Once an owner decision names the recorded head and that head is the live head, the audit compares them with the live PR number and head ref, and a mismatch is `record-conflict`. A pre-push record carries neither. | Yes for a post-push record, checked only after such a decision. No for a pre-push record. |
 | Historical base and head | A post-push record names its head in `head=`. No record stores a base SHA, and the audit computes a merge base only for the live head. | Head: yes, as the record's own statement; the audit does not check that the commit is still reachable. Base: no. Recomputing it from Git needs the earlier head commit to stay reachable, and no helper does that. |
 | Current base and head | The audit reads the live PR head and the merge base of `refs/remotes/origin/<base>` and that head (`readMergeBaseSha`). | Yes at audit time. The scope audit does not store them. |
-| Canonical path sets | The earlier set is the record's `files=` list, supplied by the caller through `--candidate-files` and never recomputed from Git. The current set is recomputed live from changed files, rename sources, sync targets, and generated mirrors read at the merge base. A lineage holds one set: every record must share `effort` and the sorted set, so a record with another set is `record-conflict`. | Current set: yes. Earlier set: only as the author's list; no helper recomputes it at a recorded head, and the lineage cannot hold a second set for the current head. |
+| Canonical path sets | The earlier set is the record's `files=` list, supplied by the caller through `--candidate-files` and never recomputed from Git. That flag is the live changed-path set, not the issue body's `## Candidate files` section. The current set is recomputed live from changed files, rename sources, sync targets, and generated mirrors read at the merge base. A lineage holds one set: every record must share `effort` and the sorted set, so a record with another set is `record-conflict`. When the recorded list and the live set differ, the scope-overrun blocker detail names both sorted lists. | Current set: yes. Earlier set: only as the author's list; no helper recomputes it at a recorded head, and the lineage cannot hold a second set for the current head. |
 | Record authorship | The GitHub comment author (`authorLogin`) is checked against the trusted marker actors resolved at audit time. `agent=` is self-reported, and a shared GitHub login cannot say which process or person wrote an unmarked comment. | Author login: yes. Which actor wrote it: no. |
 | Edit status | `lastEditedAt` must be explicitly `null` for each record and decision; any other value or an unknown one is `record-edited-or-unknown` or `decision-edited-or-unknown`. | Whether a comment was edited at all: yes. What an edited comment said before: no. |
 <!-- dprint-ignore-end -->

@@ -248,6 +248,16 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
   '--closing-issues': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
+/** Public scope-overrun object plus the blocker sentence that names a path mismatch. */
+export function publishScopeOverrun(report) {
+  const { pathSetConflict, ...publicReport } = report;
+  const base = `scope overrun ${report.status}: ${report.reason}`;
+  if (!pathSetConflict) return { report: publicReport, blockerDetail: base };
+  return {
+    report: publicReport,
+    blockerDetail: `${base}; recorded=${JSON.stringify(pathSetConflict.recordedFiles)}; live=${JSON.stringify(pathSetConflict.liveFiles)}`,
+  };
+}
 /**
  * Audit a claim-bound issue against the PR's canonical changed paths. A
  * record is valid only when trusted, unedited post-push evidence names this
@@ -383,15 +393,24 @@ export function resolveScopeOverrunReadiness(input) {
       'scope-overrun audit could not read the current PR branch and HEAD',
     );
   }
+  const filesDiffer = !sameStringList(record.candidateFiles, canonicalFiles);
   if (
     record.pullRequestNumber !== input.pullRequestNumber ||
     record.branch !== branch ||
-    !sameStringList(record.candidateFiles, canonicalFiles)
+    filesDiffer
   ) {
     return {
       status: 'invalid',
       reason: 'record-conflict',
       recordedHeadSha: record.headSha,
+      ...(filesDiffer
+        ? {
+            pathSetConflict: {
+              recordedFiles: [...record.candidateFiles].sort(compareUtf8),
+              liveFiles: [...canonicalFiles],
+            },
+          }
+        : {}),
     };
   }
   if (record.headSha !== headSha) {
@@ -2269,10 +2288,13 @@ export function collectPreMergeReadiness(
       autoWaiverRunVerified,
     },
   );
+  const publishedScopeOverrun =
+    scopeOverrun === undefined || scopeOverrun === null
+      ? null
+      : publishScopeOverrun(scopeOverrun);
   const reportSummary =
-    scopeOverrun !== undefined &&
-    scopeOverrun !== null &&
-    scopeOverrun.status !== 'valid'
+    publishedScopeOverrun !== null &&
+    publishedScopeOverrun.report.status !== 'valid'
       ? {
           ...summary,
           ready: false,
@@ -2280,7 +2302,7 @@ export function collectPreMergeReadiness(
             ...summary.blockers,
             {
               gate: 'scope-overrun',
-              detail: `scope overrun ${scopeOverrun.status}: ${scopeOverrun.reason}`,
+              detail: publishedScopeOverrun.blockerDetail,
             },
           ],
         }
@@ -2305,10 +2327,12 @@ export function collectPreMergeReadiness(
     : null;
   return {
     ...reportSummary,
-    ...(scopeOverrun === undefined || scopeOverrun === null
+    ...(publishedScopeOverrun === null
       ? {}
       : {
-          claim: Object.assign({}, reportSummary.claim, { scopeOverrun }),
+          claim: Object.assign({}, reportSummary.claim, {
+            scopeOverrun: publishedScopeOverrun.report,
+          }),
         }),
     ...(provisionalRead === undefined ? {} : { provisionalRead }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
