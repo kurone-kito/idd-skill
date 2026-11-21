@@ -13062,9 +13062,18 @@ export function computePreMergeReadinessBlockers(
     const scopeOverrun = preMergeAsRecord(scopeClaim.scopeOverrun);
     const status = String(scopeOverrun.status ?? '');
     if (status !== 'valid') {
+      const recorded = scopeOverrun.recordedFiles;
+      const live = scopeOverrun.liveFiles;
+      const lists =
+        Array.isArray(recorded) &&
+        Array.isArray(live) &&
+        recorded.every((item) => typeof item === 'string') &&
+        live.every((item) => typeof item === 'string')
+          ? `; recorded=${JSON.stringify(recorded)}; live=${JSON.stringify(live)}`
+          : '';
       blockers.push({
         gate: 'scope-overrun',
-        detail: `scope overrun ${status || 'unavailable'}: ${String(scopeOverrun.reason ?? 'missing reason')}`,
+        detail: `scope overrun ${status || 'unavailable'}: ${String(scopeOverrun.reason ?? 'missing reason')}${lists}`,
       });
     }
   }
