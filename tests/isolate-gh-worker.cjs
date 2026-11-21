@@ -989,6 +989,116 @@ function stripShellCommentsAndQuotedHereDocuments(source) {
   return { source: output.join(''), unquotedHereDocuments };
 }
 
+function blankPowerShellRange(characters, start, end) {
+  for (let index = start; index < end; index += 1) {
+    if (characters[index] !== '\n' && characters[index] !== '\r') {
+      characters[index] = ' ';
+    }
+  }
+}
+
+function blankPowerShellHereStrings(source) {
+  const characters = [...source];
+  const expandableHereStrings = [];
+  let quote = null;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote === "'") {
+      if (character === "'" && characters[index + 1] === "'") index += 1;
+      else if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '`') index += 1;
+      else if (character === '"') quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '<' && characters[index + 1] === '#') {
+      let depth = 1;
+      index += 2;
+      while (index < characters.length && depth > 0) {
+        if (characters[index] === '<' && characters[index + 1] === '#') {
+          depth += 1;
+          index += 2;
+        } else if (characters[index] === '#' && characters[index + 1] === '>') {
+          depth -= 1;
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      index -= 1;
+      continue;
+    }
+    if (character === '#') {
+      while (index < characters.length && characters[index] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (character !== '@') continue;
+    const hereQuote = characters[index + 1];
+    if (hereQuote !== "'" && hereQuote !== '"') continue;
+    let lookahead = index + 2;
+    let validOpener = true;
+    while (
+      lookahead < characters.length &&
+      characters[lookahead] !== '\n' &&
+      characters[lookahead] !== '\r'
+    ) {
+      if (characters[lookahead] !== ' ' && characters[lookahead] !== '\t') {
+        validOpener = false;
+        break;
+      }
+      lookahead += 1;
+    }
+    if (!validOpener) continue;
+    let lineStart = lookahead;
+    if (characters[lineStart] === '\r' && characters[lineStart + 1] === '\n') {
+      lineStart += 2;
+    } else if (
+      characters[lineStart] === '\n' ||
+      characters[lineStart] === '\r'
+    ) {
+      lineStart += 1;
+    } else {
+      continue;
+    }
+    let closer = -1;
+    let cursor = lineStart;
+    while (cursor < characters.length) {
+      if (characters[cursor] === hereQuote && characters[cursor + 1] === '@') {
+        closer = cursor;
+        break;
+      }
+      while (cursor < characters.length && characters[cursor] !== '\n') {
+        cursor += 1;
+      }
+      if (cursor >= characters.length) break;
+      cursor += 1;
+    }
+    if (closer < 0) continue;
+    if (hereQuote === '"') {
+      expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
+    }
+    blankPowerShellRange(characters, index, closer + 2);
+    index = closer + 1;
+  }
+  return { source: characters.join(''), expandableHereStrings };
+}
+
 function stripPowerShellComments(source) {
   const characters = [...source];
   let quote = null;
@@ -1050,6 +1160,14 @@ function stripPowerShellComments(source) {
     }
   }
   return characters.join('');
+}
+
+function stripPowerShellCommentsAndHereStrings(source) {
+  const blanked = blankPowerShellHereStrings(source);
+  return {
+    source: stripPowerShellComments(blanked.source),
+    expandableHereStrings: blanked.expandableHereStrings,
+  };
 }
 
 function readPowerShellSubexpression(source, start) {
@@ -1144,11 +1262,14 @@ function shellGhCommand(
           stripShellLineContinuations(String(command)),
         )
       : null;
+  const powershellSource =
+    flavor === 'powershell'
+      ? stripPowerShellCommentsAndHereStrings(String(command))
+      : null;
   const parsedSource =
     posixSource?.source ??
-    (flavor === 'powershell'
-      ? stripPowerShellComments(String(command))
-      : String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ '));
+    powershellSource?.source ??
+    String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ ');
   const substitutions =
     flavor === 'posix'
       ? [
@@ -1158,7 +1279,12 @@ function shellGhCommand(
           ) ?? []),
         ]
       : flavor === 'powershell'
-        ? powerShellSubstitutions(parsedSource)
+        ? [
+            ...powerShellSubstitutions(parsedSource),
+            ...(powershellSource?.expandableHereStrings.flatMap(
+              powerShellSubstitutions,
+            ) ?? []),
+          ]
         : [];
   for (const substitution of substitutions) {
     const nested = shellGhCommand(substitution, env, flavor, cwd);

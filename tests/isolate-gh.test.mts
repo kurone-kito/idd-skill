@@ -1839,3 +1839,191 @@ test('path shim: windows powershell resolves gh through the guard bin', {
   );
   assertCaughtByShim(run);
 });
+
+test('PowerShell -File here-string regions stay out of command-position scans', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-gh-ps-herestring-'));
+  const ledgerPath = join(root, 'attempts.jsonl');
+  const shell = 'powershell.exe';
+  const fixtures: Array<{
+    name: string;
+    body: string;
+    expectBlocked: boolean;
+  }> = [
+    {
+      name: 'literal here-string prose',
+      body: [
+        "$x = @'",
+        '// (PowerShell 5.1 note) mentions gh only in prose',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string prose',
+      body: [
+        '$x = @"',
+        'bare powershell and gh prose only',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string substitution',
+      body: [
+        '$x = @"',
+        '$(gh api repos/o/r)',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'command outside here-string',
+      body: ["$x = @'", 'safe prose', "'@", 'gh api repos/o/r', ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'unterminated here-string opener',
+      body: ["$x = @'", 'unterminated body', 'gh api repos/o/r', ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'mid-line at-quote is not an opener',
+      body: [
+        "Write-Output ok; $x = @' still-more-on-same-line",
+        'gh api repos/o/r',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+  ];
+  const scriptPaths: Record<string, string> = {};
+  for (const fixture of fixtures) {
+    const scriptPath = join(root, `${fixture.name.replaceAll(' ', '-')}.ps1`);
+    writeFileSync(scriptPath, fixture.body, 'utf8');
+    scriptPaths[fixture.name] = scriptPath;
+  }
+  const literalScript = join(root, 'worker-literal.ps1');
+  writeFileSync(
+    literalScript,
+    ["$x = @'", '// (PowerShell 5.1 note)', "'@", 'Write-Output ok', ''].join(
+      '\n',
+    ),
+    'utf8',
+  );
+
+  const childSource = `
+const { Worker } = require('node:worker_threads');
+const childProcess = require('node:child_process');
+const fixtures = ${JSON.stringify(
+    fixtures.map((fixture) => ({
+      name: fixture.name,
+      scriptPath: scriptPaths[fixture.name],
+      expectBlocked: fixture.expectBlocked,
+    })),
+  )};
+const shell = ${JSON.stringify(shell)};
+const results = [];
+for (const fixture of fixtures) {
+  try {
+    childProcess.spawnSync(
+      shell,
+      ['-NoProfile', '-NonInteractive', '-File', fixture.scriptPath],
+    );
+    results.push({ name: fixture.name, blocked: false });
+  } catch (error) {
+    results.push({
+      name: fixture.name,
+      blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+    });
+  }
+}
+try {
+  childProcess.spawnSync(
+    shell,
+    ['-NoProfile', '-NonInteractive', '-Command', 'gh api repos/o/r'],
+  );
+  results.push({ name: 'powershell -Command', blocked: false });
+} catch (error) {
+  results.push({
+    name: 'powershell -Command',
+    blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+  });
+}
+const workerSource = ${JSON.stringify(`
+const { parentPort, workerData } = require('node:worker_threads');
+const childProcess = require('node:child_process');
+try {
+  childProcess.spawnSync(workerData.shell, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-File',
+    workerData.scriptPath,
+  ]);
+  parentPort.postMessage({ blocked: false });
+} catch (error) {
+  parentPort.postMessage({
+    blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+  });
+}
+`)};
+const worker = new Worker(workerSource, {
+  eval: true,
+  workerData: {
+    shell,
+    scriptPath: ${JSON.stringify(literalScript)},
+  },
+});
+worker.once('message', (message) => {
+  results.push({ name: 'worker literal here-string', blocked: message.blocked });
+  process.stdout.write(JSON.stringify(results));
+});
+worker.once('error', (error) => {
+  console.error(error);
+  process.exitCode = 2;
+});
+`;
+
+  try {
+    const child = spawnSync(process.execPath, ['-e', childSource], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
+        IDD_TEST_GH_GUARD_ALLOWED_STUBS: '[]',
+        IDD_TEST_GH_GUARD_SELF_CHECK: '1',
+      },
+    });
+    assert.equal(child.status, 1, child.stderr);
+    assert.match(child.stderr, /owning test process must fail/u);
+    const results = JSON.parse(child.stdout) as Array<{
+      name: string;
+      blocked: boolean;
+    }>;
+    const expected = new Map<string, boolean>([
+      ...fixtures.map(
+        (fixture) => [fixture.name, fixture.expectBlocked] as const,
+      ),
+      ['powershell -Command', true],
+      ['worker literal here-string', false],
+    ]);
+    assert.equal(results.length, expected.size);
+    for (const result of results) {
+      assert.equal(
+        result.blocked,
+        expected.get(result.name),
+        `${result.name}: expected blocked=${String(expected.get(result.name))}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
