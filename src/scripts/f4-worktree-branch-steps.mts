@@ -494,6 +494,7 @@ function readPostRemovalKeep(
   if (
     raw.exitCode !== 1 ||
     owner === undefined ||
+    owner === null ||
     routing.state !== 'owner_evidence_required' ||
     routing.action !== 'stop' ||
     routing.reason !== 'claim-id-match-without-independent-owner-evidence' ||

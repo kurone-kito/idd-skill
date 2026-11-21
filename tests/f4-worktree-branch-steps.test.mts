@@ -2170,6 +2170,14 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
   );
   assert.deepEqual(
     classifyPostRemovalClaimAssert(
+      postRemovalAssert({ evidence: { owner_evidence: null } }),
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
       postRemovalAssert({
         evidence: {
           owner_evidence: {
