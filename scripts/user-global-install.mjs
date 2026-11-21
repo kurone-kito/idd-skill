@@ -72,6 +72,7 @@ import {
   assertRealChain,
   checkContainment,
   createDirectory,
+  isWindowsNoFollowOpenAvailable,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
@@ -88,6 +89,7 @@ import {
   checkSchemaKeywords,
   validate as validateSchema,
 } from './validate-schemas.mjs';
+import { readNoFollowFile } from './windows-nofollow.mjs';
 
 /**
  * The version pattern from issue #4242, duplicated here because #4242 keeps
@@ -166,20 +168,71 @@ function sha256Hex(bytes) {
 function readNoFollowBytes(path, fs) {
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
-  if (noFollow === undefined || nonBlock === undefined) {
-    throw new Error(
-      'this platform does not support the no-follow opens the installer needs; refusing',
+  // Never coerce a missing flag with `|| 0` / `?? 0` (issue #3891 / #3934).
+  if (noFollow !== undefined && nonBlock !== undefined) {
+    const fd = fs.openSync(
+      path,
+      nodeFs.constants.O_RDONLY | noFollow | nonBlock,
     );
-  }
-  const fd = fs.openSync(path, nodeFs.constants.O_RDONLY | noFollow | nonBlock);
-  try {
-    if (!fs.fstatSync(fd).isFile()) {
-      throw new Error(`${path} is not a regular file`);
+    try {
+      if (!fs.fstatSync(fd).isFile()) {
+        throw new Error(`${path} is not a regular file`);
+      }
+      return fs.readFileSync(fd);
+    } finally {
+      fs.closeSync(fd);
     }
-    return fs.readFileSync(fd);
-  } finally {
-    fs.closeSync(fd);
   }
+  if (process.platform === 'win32') {
+    const override = fs.windowsNoFollow;
+    if (override !== false) {
+      const deps =
+        typeof override === 'object' && override !== null ? override : {};
+      if (isWindowsNoFollowOpenAvailable(deps)) {
+        return readNoFollowFile(path, deps);
+      }
+    }
+  }
+  throw new Error(
+    'this platform does not support the no-follow opens the installer needs; refusing',
+  );
+}
+/**
+ * Read a path already classified as a regular file by `lstat`. The Windows
+ * no-follow helper refuses multi-hard-link names; after that lstat ruled out
+ * a reparse point, re-check identity and read through the verified path so
+ * interrupted publication pairs (nlink=2) can still be hashed (#5290).
+ * Re-stat with the same bigint mode as `prior`: Windows inode values from
+ * number and bigint `lstat` are not interchangeable.
+ */
+function readLstatVerifiedBytes(path, prior, fs) {
+  const useBigInt = typeof prior.ino === 'bigint';
+  let stat;
+  try {
+    stat = useBigInt
+      ? fs.lstatSync(path, { bigint: true })
+      : fs.lstatSync(path);
+  } catch (error) {
+    throw new Error(`could not re-stat ${path}: ${describe(error)}`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`${path} is not a regular file`);
+  }
+  if (
+    stat.dev !== prior.dev ||
+    stat.ino !== prior.ino ||
+    stat.nlink !== prior.nlink
+  ) {
+    throw new Error(`${path} changed; refusing`);
+  }
+  const nlink =
+    typeof stat.nlink === 'bigint' ? Number(stat.nlink) : stat.nlink;
+  // POSIX O_NOFOLLOW opens still work with nlink>1. Only the Windows helper
+  // refuses that shape, so keep the descriptor path everywhere else.
+  if (process.platform !== 'win32' || nlink === 1) {
+    return readNoFollowBytes(path, fs);
+  }
+  return Buffer.from(fs.readFileSync(path));
 }
 /**
  * Refuse when the parent of a path that must be created is absent or is not
@@ -1114,7 +1167,7 @@ function scanPreparedTree(root, fs, expectedFiles) {
         `${path} is an unrecognized temporary file in the prepared set`,
       );
     }
-    const bytes = readNoFollowBytes(path, fs);
+    const bytes = readLstatVerifiedBytes(path, stat, fs);
     if (
       bytes.length > expected.length ||
       !expected.subarray(0, bytes.length).equals(bytes)
@@ -1419,7 +1472,15 @@ function assertPreparedReceiptEntriesMatchManifests(
         `${manifestPath} is not a regular published manifest; refusing`,
       );
     }
-    const manifestBytes = readNoFollowBytes(manifestPath, ctx.fs);
+    // Interrupted publication can leave nlink=2; hash here, then the plan's
+    // hard-link check refuses removal. The Windows helper cannot open that
+    // shape, so use the verified lstat path (#5290).
+    const manifestStat = ctx.fs.lstatSync(manifestPath);
+    const manifestBytes = readLstatVerifiedBytes(
+      manifestPath,
+      manifestStat,
+      ctx.fs,
+    );
     const expectedManifestEntry = {
       kind: 'file',
       path: manifestPath,
@@ -1499,7 +1560,14 @@ function checkUninstallContinuation(ctx, commit, group, continuation) {
   let continuationWritten = false;
   const walk = checkContainment(ctx.preparedRoot, continuationPath, ctx.fs);
   if (walk.finalKind === 'file') {
-    const bytes = readNoFollowBytes(continuationPath, ctx.fs);
+    // A publication interrupted between link and unlink leaves nlink=2; the
+    // Windows helper refuses that shape, so hash through the verified lstat.
+    const continuationStat = ctx.fs.lstatSync(continuationPath);
+    const bytes = readLstatVerifiedBytes(
+      continuationPath,
+      continuationStat,
+      ctx.fs,
+    );
     if (sha256Hex(bytes) !== continuation.sha256) {
       throw new Error(
         `${continuationPath} does not match its receipt entry, so it cannot show which prepared files an earlier uninstall validated; refusing`,
@@ -1604,16 +1672,23 @@ function verifyPreparedTree(ctx, build, expected, receiptEntries, options) {
         `${path} is not recorded with its expected hash in the receipt`,
       );
     }
-    const expectedMode = expected.fileModes.get(path);
-    if (
-      expectedMode === undefined ||
-      (ctx.fs.lstatSync(path).mode & 0o777) !== expectedMode
-    ) {
-      throw new Error(
-        `${path} has a mode that differs from the prepared source`,
-      );
+    // Windows does not preserve POSIX permission bits; skip the mode check.
+    if (process.platform !== 'win32') {
+      const expectedMode = expected.fileModes.get(path);
+      if (
+        expectedMode === undefined ||
+        (ctx.fs.lstatSync(path).mode & 0o777) !== expectedMode
+      ) {
+        throw new Error(
+          `${path} has a mode that differs from the prepared source`,
+        );
+      }
     }
-    if (sha256Hex(readNoFollowBytes(path, ctx.fs)) !== expectedEntry.sha256) {
+    const fileStat = ctx.fs.lstatSync(path);
+    if (
+      sha256Hex(readLstatVerifiedBytes(path, fileStat, ctx.fs)) !==
+      expectedEntry.sha256
+    ) {
       throw new Error(
         `${path} differs from the source bytes; refusing to reuse or overwrite it`,
       );
@@ -2108,7 +2183,7 @@ function discardPreparedCandidateWithContext(ctx, commit) {
         stat.nlink === 2n &&
         stat.dev === targetStat.dev &&
         stat.ino === targetStat.ino &&
-        sha256Hex(readNoFollowBytes(path, fs)) === expected
+        sha256Hex(readLstatVerifiedBytes(path, stat, fs)) === expected
       );
     });
   };
@@ -2182,7 +2257,8 @@ function discardPreparedCandidateWithContext(ctx, commit) {
         targetFile.stat.dev === stat.dev &&
         targetFile.stat.ino === stat.ino &&
         stat.ino !== 0n &&
-        fileEntries.get(target) === sha256Hex(readNoFollowBytes(path, fs))
+        fileEntries.get(target) ===
+          sha256Hex(readLstatVerifiedBytes(path, stat, fs))
       ) {
         pairedTemporaries.push({ path, target });
         pairedTargets.add(target);
@@ -2197,7 +2273,7 @@ function discardPreparedCandidateWithContext(ctx, commit) {
         );
         continue;
       }
-      const sha256 = sha256Hex(readNoFollowBytes(path, fs));
+      const sha256 = sha256Hex(readLstatVerifiedBytes(path, stat, fs));
       const temporary = fileEntries.has(path)
         ? null
         : name.match(temporaryPattern);

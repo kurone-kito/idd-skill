@@ -60,11 +60,13 @@ using Microsoft.Win32.SafeHandles;
 public static class IdNoFollow {
   public const uint GENERIC_READ = 0x80000000;
   public const uint GENERIC_WRITE = 0x40000000;
+  public const uint DELETE = 0x00010000;
   public const uint FILE_SHARE_READ = 0x00000001;
   public const uint FILE_SHARE_WRITE = 0x00000002;
   public const uint FILE_SHARE_DELETE = 0x00000004;
   public const uint OPEN_EXISTING = 3;
   public const uint CREATE_NEW = 1;
+  public const int FileDispositionInfo = 4;
   public const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
   public const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
   public const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
@@ -120,6 +122,19 @@ public static class IdNoFollow {
     uint nNumberOfBytesToWrite,
     out uint lpNumberOfBytesWritten,
     IntPtr lpOverlapped);
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct FILE_DISPOSITION_INFO {
+    [MarshalAs(UnmanagedType.U1)]
+    public bool DeleteFile;
+  }
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool SetFileInformationByHandle(
+    IntPtr hFile,
+    int FileInformationClass,
+    ref FILE_DISPOSITION_INFO lpFileInformation,
+    uint dwBufferSize);
 
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   public static extern uint GetFileAttributesW(string lpFileName);
@@ -364,13 +379,29 @@ function Write-BytesToHandle([IntPtr]$Handle, [byte[]]$Bytes, [string]$Label) {
     [Array]::Copy($Bytes, $offset, $chunk, 0, $chunkSize)
     $written = [uint32]0
     if (-not [IdNoFollow]::WriteFile($Handle, $chunk, [uint32]$chunkSize, [ref]$written, [IntPtr]::Zero)) {
-      Fail "write failed after exclusive create at $Label (win32=$(Get-Win32Error)); leftover path: $Label"
+      Fail "write failed after exclusive create at $Label (win32=$(Get-Win32Error))"
     }
     if ($written -eq 0) {
-      Fail "write made no progress after exclusive create at $Label; leftover path: $Label"
+      Fail "write made no progress after exclusive create at $Label"
     }
     $offset += [int]$written
   }
+}
+
+function Mark-HandleForDelete([IntPtr]$Handle) {
+  if ($Handle -eq [IntPtr]::Zero -or $Handle -eq [IdNoFollow]::INVALID_HANDLE_VALUE) {
+    return
+  }
+  $info = New-Object IdNoFollow+FILE_DISPOSITION_INFO
+  $info.DeleteFile = $true
+  # FILE_DISPOSITION_INFO is one byte; bind cleanup to this handle so a
+  # path recreate after close cannot be deleted by name (#5290 review).
+  [void][IdNoFollow]::SetFileInformationByHandle(
+    $Handle,
+    [IdNoFollow]::FileDispositionInfo,
+    [ref]$info,
+    [uint32]1
+  )
 }
 
 function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
@@ -426,11 +457,14 @@ function Create-NoFollowFile([string]$Path, [byte[]]$Bytes) {
   $held = New-Object System.Collections.ArrayList
   try {
     $chain = Assert-ExistingChain $Path -FinalMustBeAbsent -HeldHandles $held
-    $open = Open-NoFollow $chain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+    # DELETE access lets a failed create mark disposition on the same handle
+    # before close, so cleanup cannot race a path-based recreate (#5290).
+    $access = [IdNoFollow]::GENERIC_WRITE -bor [IdNoFollow]::DELETE
+    $open = Open-NoFollow $chain.final $access ([IdNoFollow]::CREATE_NEW)
     if (-not $open.ok) {
       Fail "exclusive create refused for $($chain.final) (win32=$($open.error))"
     }
-    $created = $true
+    $keepCreated = $false
     try {
       $info = Get-HandleInfo $open.handle
       if ($null -eq $info) {
@@ -441,8 +475,12 @@ function Create-NoFollowFile([string]$Path, [byte[]]$Bytes) {
         Fail "created handle is not a regular file: $($chain.final) ($kind)"
       }
       Write-BytesToHandle $open.handle $Bytes $chain.final
-      Write-Result @{ ok = $true; path = $chain.final; created = $created } 0
+      $keepCreated = $true
+      Write-Result @{ ok = $true; path = $chain.final; created = $true } 0
     } finally {
+      if (-not $keepCreated) {
+        Mark-HandleForDelete $open.handle
+      }
       Close-HandleSafe $open.handle
     }
   } finally {
@@ -483,10 +521,12 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
     }
     try {
       $payload = Read-BytesFromHandle $srcOpen.handle $sourceChain.final
-      $destOpen = Open-NoFollow $destChain.final ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+      $destAccess = [IdNoFollow]::GENERIC_WRITE -bor [IdNoFollow]::DELETE
+      $destOpen = Open-NoFollow $destChain.final $destAccess ([IdNoFollow]::CREATE_NEW)
       if (-not $destOpen.ok) {
         Fail "exclusive create refused for $($destChain.final) (win32=$($destOpen.error))"
       }
+      $keepCreated = $false
       try {
         $info = Get-HandleInfo $destOpen.handle
         if ($null -eq $info) {
@@ -497,8 +537,12 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
           Fail "created handle is not a regular file: $($destChain.final) ($kind)"
         }
         Write-BytesToHandle $destOpen.handle $payload.buffer $destChain.final
+        $keepCreated = $true
         Write-Result @{ ok = $true; path = $destChain.final; created = $true } 0
       } finally {
+        if (-not $keepCreated) {
+          Mark-HandleForDelete $destOpen.handle
+        }
         Close-HandleSafe $destOpen.handle
       }
     } finally {

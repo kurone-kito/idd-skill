@@ -4,14 +4,14 @@
 // src/scripts/user-global-install.mts.
 //
 // Every test runs against a sandbox HOME passed through `env` and `homedir`,
-// so no test writes to the real home directory. The installer refuses on
-// Windows before any write, so each test skips there.
+// so no test writes to the real home directory. Tests that must create a
+// real symbolic link skip only when Windows denies that creation.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { after, test as nodeTest } from 'node:test';
 import {
   installPayload,
@@ -30,17 +30,30 @@ const ENTRY_TEXT = nodeFs.readFileSync(
 );
 const BEGIN = '<!-- idd-skill:user-global:begin -->';
 const END = '<!-- idd-skill:user-global:end -->';
-const NO_INSTALL =
-  process.platform === 'win32'
-    ? 'the installer refuses on Windows before any write: no-follow opens are unavailable'
-    : false;
+/**
+ * Skip only when this host cannot create a symbolic link (issue #5290).
+ */
+function symlinkSkipReason(): string | false {
+  if (process.platform !== 'win32') return false;
+  const dir = nodeFs.mkdtempSync(
+    join(nodeFs.realpathSync(tmpdir()), 'idd-symlink-probe-'),
+  );
+  const target = join(dir, 't');
+  const link = join(dir, 'l');
+  try {
+    nodeFs.writeFileSync(target, 'x');
+    nodeFs.symlinkSync(target, link);
+    return false;
+  } catch {
+    return 'symbolic link creation is denied on this Windows host';
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
-const test = ((name: string, ...rest: unknown[]) => {
-  const fn = rest[rest.length - 1] as () => void;
-  const options =
-    rest.length === 2 ? (rest[0] as { skip?: string | boolean }) : {};
-  return nodeTest(name, { ...options, skip: NO_INSTALL || options.skip }, fn);
-}) as unknown as typeof nodeTest;
+const NO_LINKS = symlinkSkipReason();
+
+const test = nodeTest;
 
 const sandboxes: string[] = [];
 
@@ -372,7 +385,7 @@ for (const [label, body] of [
 }
 
 test('a symbolic-link entry file is refused, and its target is unchanged', {
-  skip: NO_INSTALL,
+  skip: NO_LINKS,
 }, () => {
   const home = freshHome();
   const outside = join(home, 'outside.md');
@@ -383,7 +396,7 @@ test('a symbolic-link entry file is refused, and its target is unchanged', {
 });
 
 test('a symbolic-link entry file inside the harness directory is refused too', {
-  skip: NO_INSTALL,
+  skip: NO_LINKS,
 }, () => {
   const home = freshHome();
   const inside = join(home, '.claude', 'real.md');
@@ -394,7 +407,7 @@ test('a symbolic-link entry file inside the harness directory is refused too', {
 });
 
 test('a symbolic-link harness directory is refused and its target is unchanged', {
-  skip: NO_INSTALL,
+  skip: NO_LINKS,
 }, () => {
   const home = freshHome({ codex: false });
   const realDir = join(home, 'real-codex');
@@ -404,9 +417,7 @@ test('a symbolic-link harness directory is refused and its target is unchanged',
   assert.deepEqual(nodeFs.readdirSync(realDir), []);
 });
 
-test('an entry file with more than one hard link is refused', {
-  skip: NO_INSTALL,
-}, () => {
+test('an entry file with more than one hard link is refused', () => {
   const home = freshHome();
   const claude = filesOf(home).claude;
   nodeFs.writeFileSync(claude, 'user\n');
@@ -536,6 +547,7 @@ test('install writes only the entry files and the harness directory it records',
     (path) =>
       !before.has(path) &&
       !path.startsWith(dataRootOf(home)) &&
+      !path.includes(`${sep}skills`) &&
       !path.includes('/skills'),
   );
   assert.deepEqual(
@@ -696,7 +708,7 @@ test('uninstall refuses a stale entry temporary before it removes anything', () 
 });
 
 test('uninstall refuses when a link replaces the config directory above the entry file', {
-  skip: NO_INSTALL,
+  skip: NO_LINKS,
 }, () => {
   const home = freshHome();
   installPayload(optionsFor(home));
@@ -773,7 +785,7 @@ test('a failed receipt write after an entry rewrite restores the entry file', ()
 });
 
 test('uninstall refuses a link above an absent recorded entry file', {
-  skip: NO_INSTALL,
+  skip: NO_LINKS,
 }, () => {
   const home = freshHome();
   nodeFs.mkdirSync(join(home, '.config', 'opencode'));
@@ -963,7 +975,8 @@ test('uninstall refuses an AGENTS.md block when no recorded entry text is left t
   installPayload(optionsFor(home));
   const entryText = (receiptOf(home) as ReceiptJson).entries.find(
     (entry) =>
-      entry.kind === 'file' && entry.path.endsWith('/user-global/entry.md'),
+      entry.kind === 'file' &&
+      entry.path.replaceAll('\\', '/').endsWith('/user-global/entry.md'),
   );
   assert.ok(entryText);
   nodeFs.rmSync(entryText.path);
@@ -1070,7 +1083,8 @@ test('an upgrade refuses an AGENTS.md rewrite when no recorded entry text is lef
   installPayload(optionsFor(home));
   const entryText = (receiptOf(home) as ReceiptJson).entries.find(
     (entry) =>
-      entry.kind === 'file' && entry.path.endsWith('/user-global/entry.md'),
+      entry.kind === 'file' &&
+      entry.path.replaceAll('\\', '/').endsWith('/user-global/entry.md'),
   );
   assert.ok(entryText);
   nodeFs.rmSync(entryText.path);
