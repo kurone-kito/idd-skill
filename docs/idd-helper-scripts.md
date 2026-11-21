@@ -10418,7 +10418,8 @@ The flow keeps that result only when the assert exited 1 with `action`
 occupancy probe is `unreadable` or `absent`, and `occupancy_paths_match`
 is null. That field is null unless the probe is occupied, so a boolean
 is an inconsistent envelope. A zero exit, any other action, a mismatched
-claim, an unreadable assert, or a live occupied worktree still holds. Checks before step 5 are unchanged. Observed
+claim, an unreadable assert, or a live occupied worktree still holds.
+Checks before step 5 are unchanged. Observed
 2026-11-21 on host `win32` during cleanup of issue `#5290` (PR `#5296`),
 recorded in issue `#5299`.
 
