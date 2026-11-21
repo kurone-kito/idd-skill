@@ -447,8 +447,9 @@ export function classifyClaimAssert(
  * 1 with `action: stop`, the same contract as every other stop verdict,
  * and `occupancy_paths_match` is exactly null. That field is null unless
  * the probe is occupied, so a boolean here is an inconsistent envelope.
- * A zero exit, any other action, a mismatched claim, an unreadable assert,
- * or a live occupied worktree is not kept. Checks before step 5 keep
+ * An `unreadable` probe must list the removed worktree path; an `absent`
+ * probe must list no paths. A zero exit, any other action, a mismatched
+ * claim, an unreadable assert, or a live occupied worktree is not kept. Checks before step 5 keep
  * {@link classifyClaimAssert}. Observed 2026-11-21 on host win32 during
  * cleanup of issue #5290 (PR #5296), recorded in issue #5299.
  */
@@ -456,17 +457,36 @@ export function classifyPostRemovalClaimAssert(
   raw: SpawnedResult,
   claimId: string,
   agentId: string,
+  worktree: string,
 ): { ok: true; branch: string } | { ok: false; code: HoldCode } {
   const ordinary = classifyClaimAssert(raw, claimId, agentId);
   if (ordinary.ok) return ordinary;
-  const kept = readPostRemovalKeep(raw, claimId, agentId);
+  const kept = readPostRemovalKeep(raw, claimId, agentId, worktree);
   return kept ?? ordinary;
+}
+
+function localPathsAgree(
+  probe: unknown,
+  paths: unknown,
+  worktree: string,
+): boolean {
+  if (
+    !Array.isArray(paths) ||
+    paths.some((entry) => typeof entry !== 'string')
+  ) {
+    return false;
+  }
+  if (probe === 'absent') return paths.length === 0;
+  if (probe !== 'unreadable') return false;
+  const wanted = canonicalPathKey(worktree, () => null);
+  return paths.some((entry) => canonicalPathKey(entry, () => null) === wanted);
 }
 
 function readPostRemovalKeep(
   raw: SpawnedResult,
   claimId: string,
   agentId: string,
+  worktree: string,
 ): { ok: true; branch: string } | null {
   let parsed: unknown;
   try {
@@ -514,8 +534,7 @@ function readPostRemovalKeep(
     owner.occupancy_paths_match !== null ||
     localRecord === null ||
     localRecord.status !== owner.occupancy_probe ||
-    !Array.isArray(localRecord.paths) ||
-    localRecord.paths.length !== 0
+    !localPathsAgree(owner.occupancy_probe, localRecord.paths, worktree)
   ) {
     return null;
   }
@@ -1517,9 +1536,18 @@ function runPlan(
   // 4. Claim check before step 6. Apply has already removed the worktree,
   // so an expected post-removal occupancy result is kept. A dry run has
   // not removed it, and still requires a normal assert.
-  const claimPost = (
-    input.apply ? classifyPostRemovalClaimAssert : classifyClaimAssert
-  )(deps.assertClaim(worktree), input.claimId, input.agentId);
+  const claimPost = input.apply
+    ? classifyPostRemovalClaimAssert(
+        deps.assertClaim(worktree),
+        input.claimId,
+        input.agentId,
+        worktree,
+      )
+    : classifyClaimAssert(
+        deps.assertClaim(worktree),
+        input.claimId,
+        input.agentId,
+      );
   if (!claimPost.ok) {
     return holdAt(5, 'claim-check', 'before-step-6', {
       code: claimPost.code,

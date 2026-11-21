@@ -89,7 +89,11 @@ function postRemovalAssert(
           occupancy_probe: 'unreadable',
           occupancy_paths_match: null,
         },
-        local_worktree: { status: 'unreadable', paths: [], reason: null },
+        local_worktree: {
+          status: 'unreadable',
+          paths: [WORKTREE],
+          reason: null,
+        },
       },
       ...overrides,
     }),
@@ -2121,12 +2125,15 @@ test('the post-removal assert shape still holds before step 5 and does not remov
 });
 
 test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy result', () => {
-  assert.deepEqual(classifyPostRemovalClaimAssert(claimOk(), CLAIM, AGENT), {
-    ok: true,
-    branch: BRANCH,
-  });
   assert.deepEqual(
-    classifyPostRemovalClaimAssert(postRemovalAssert(), CLAIM, AGENT),
+    classifyPostRemovalClaimAssert(claimOk(), CLAIM, AGENT, WORKTREE),
+    {
+      ok: true,
+      branch: BRANCH,
+    },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(postRemovalAssert(), CLAIM, AGENT, WORKTREE),
     { ok: true, branch: BRANCH },
   );
   assert.deepEqual(
@@ -2134,6 +2141,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       { ...postRemovalAssert(), exitCode: 0 },
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2142,6 +2150,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       { ...postRemovalAssert(), exitCode: 2 },
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2150,6 +2159,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       postRemovalAssert({ action: 'keep' }),
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2166,6 +2176,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       }),
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2174,6 +2185,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       postRemovalAssert({ evidence: { owner_evidence: null } }),
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2195,6 +2207,25 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       }),
       CLAIM,
       AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: null,
+          },
+          local_worktree: { status: 'unreadable', paths: [], reason: null },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2211,6 +2242,7 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       }),
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'owner-evidence-required' },
   );
@@ -2222,11 +2254,17 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       },
       CLAIM,
       AGENT,
+      WORKTREE,
     ),
     { ok: false, code: 'claim-lost' },
   );
   assert.deepEqual(
-    classifyPostRemovalClaimAssert({ exitCode: 1, stdout: '' }, CLAIM, AGENT),
+    classifyPostRemovalClaimAssert(
+      { exitCode: 1, stdout: '' },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
     { ok: false, code: 'claim-lost' },
   );
 });
