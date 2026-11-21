@@ -2157,6 +2157,22 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
       postRemovalAssert({
         evidence: {
           owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: false,
+          },
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
             worktree_identity: true,
             occupancy_probe: 'occupied',
             occupancy_paths_match: false,

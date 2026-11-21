@@ -223,7 +223,9 @@ export function classifyClaimAssert(raw, claimId, agentId) {
  * `owner_evidence_required` while the issue markers still match: a prunable
  * record for that path makes the occupancy probe unreadable, and the path
  * has no worktree identity. That result is kept only when the assert exited
- * 1 with `action: stop`, the same contract as every other stop verdict.
+ * 1 with `action: stop`, the same contract as every other stop verdict,
+ * and `occupancy_paths_match` is exactly null. That field is null unless
+ * the probe is occupied, so a boolean here is an inconsistent envelope.
  * A zero exit, any other action, a mismatched claim, an unreadable assert,
  * or a live occupied worktree is not kept. Checks before step 5 keep
  * {@link classifyClaimAssert}. Observed 2026-11-21 on host win32 during
@@ -259,7 +261,7 @@ function readPostRemovalKeep(raw, claimId, agentId) {
     owner.worktree_identity !== false ||
     (owner.occupancy_probe !== 'unreadable' &&
       owner.occupancy_probe !== 'absent') ||
-    owner.occupancy_paths_match === true
+    owner.occupancy_paths_match !== null
   ) {
     return null;
   }
