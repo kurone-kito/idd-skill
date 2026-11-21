@@ -182,15 +182,18 @@ require of a human-or-model-driven session.
 | F1 | Final branch-state check | `branch-conflict-state` | branch state is `dirty`/`unknown` (hold), or still `computing` after the fixed re-poll budget |
 | F2 | Pre-merge condition check (mechanical evidence read) | `pre-merge-readiness`, `advisory-wait-state` | helper evidence is missing/invalid/disagrees with live state **and** the harness cannot itself perform the written prose fallback — see Recommendation |
 | F2 | Pre-merge condition check (prose fallback) | **no deterministic helper — judgment-heavy, out of scope for this mode** | the harness cannot pass this gate; it must hand off |
-| F2.5 | Merge-policy handoff | routing only; under `human_merge` / `separate_merge_agent`, post a handoff comment and stop | n/a — stopping cleanly **is** the in-scope outcome for this mode (see Recommendation) |
+| F2.5 | Merge-policy handoff | routing only. A string applies to every tier and does not read a tier name. An object has `frontier`, `middle-tier`, and `lightweight`. A resolved `fully_autonomous_merge` continues at the standard handoff and then F3 after the existing gates. A resolved `human_merge` posts the handoff comment and keeps the claim. A resolved `separate_merge_agent` posts that comment and releases the claim only when `ready` is true and the guard passes. The lite file does not evaluate standard step 5. An unresolved object tier stays unrecognized. The lite profile has no F3 file and does not run `gh pr merge`. `mergePolicyAck` stays diagnostic | n/a — the resolved route is the in-scope outcome (see Recommendation) |
 <!-- dprint-ignore-end -->
 
-F3-onward (autonomous merge execution) is not in this table: the existing
-weak-tier guardrail already says "do not run the autonomous merge phases
-(F3 onward) on this tier" (see
-[Weak-model guardrails](idd-workflow.md#weak-model-guardrails)), and this
-mode's target class is a strict subset of that same tier boundary, so the
-exclusion carries over unchanged.
+F3 is not a separate row: a resolved `fully_autonomous_merge` continues
+at the standard handoff, which runs F3 after the existing gates. A
+recorded value is one string for every tier, which does not read a tier
+name, or an object with `frontier`, `middle-tier`, and `lightweight`.
+The lite profile has no F3 file and does not run `gh pr merge`.
+`mergePolicyAck` stays diagnostic. The older guardrail said "do not run
+the autonomous merge phases (F3 onward) on this tier" (see
+[Weak-model guardrails](idd-workflow.md#weak-model-guardrails)); that
+sentence described the hold before this route.
 
 The **E4-E8** and **F2 prose-fallback** rows are not an oversight; they are
 the same judgment-heavy boundary
@@ -428,7 +431,7 @@ exactly to the mechanical rows of the Section 1 contract table: claim
 (A5), worktree/install setup (B1), the atomic generation/repair call
 itself (B2-C6, E9), PR-submit (D1-D4), review snapshot and the mechanical
 E9/E13/E14/E15 fix-and-re-review chain, and the F2 mechanical
-helper-evidence read through the F2.5 handoff-stop. This recommendation
+helper-evidence read through the F2.5 handoff. This recommendation
 does **not** extend to full, unsupervised single-issue autonomy: **E4-E8
 review-triage classification and F2's prose fallback have no deterministic
 helper today, in this mode or the lite profile**, so a harness-orchestrated
@@ -436,8 +439,11 @@ session must escalate to a stronger model or a human at those exact gates
 rather than attempting to fake judgment through the harness. This is the
 same in-scope/judgment-heavy boundary `docs/weak-model-lite-profile-design.md`
 already drew for the lite profile, reused rather than re-derived (see
-Section 1). F3-onward autonomous merge remains out of scope for this tier
-entirely, matching the existing weak-tier guardrail.
+Section 1). A resolved `fully_autonomous_merge` is in scope through the
+standard handoff: F3 runs after the existing gates. A string applies to
+every tier. An object names `frontier`, `middle-tier`, and
+`lightweight`. The lite profile has no F3 file and does not run
+`gh pr merge`. `mergePolicyAck` stays diagnostic.
 
 Reasoning:
 

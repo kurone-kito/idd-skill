@@ -35,12 +35,18 @@ Choose exactly one merge policy before unattended runs begin:
   gate and a separately authorized merge-capable actor performs the
   final merge path
 
-Propose `human_merge` as the default unless the operator explicitly
-opts in to `fully_autonomous_merge`. For public or OSS repositories, or
-whenever lightweight-tier ("weak-model") sessions run the loop
-unattended, recommend keeping `human_merge` (or `separate_merge_agent`)
-instead of opting in to `fully_autonomous_merge`, since that tier
-should not run the autonomous merge phases. See
+Propose `human_merge` unless the operator opts in. A value is one
+string for every tier, reading no tier name, or an object with
+`frontier`, `middle-tier`, and `lightweight`. Standard:
+`fully_autonomous_merge` runs F3 after the gates;
+`separate_merge_agent` keeps handoff step 5; an unresolved object
+tier holds.
+A lite string is that enum. An object resolves only at exit 0.
+On lite, `fully_autonomous_merge` continues at the standard
+handoff, and lite does not run `gh pr merge`. `mergePolicyAck` stays
+diagnostic. A weak-model loop follows the resolved enum. Do not
+replace a resolved `fully_autonomous_merge` or `separate_merge_agent`
+with `human_merge`. See
 [Model capability expectations](../idd-workflow.md#model-capability-expectations).
 
 ### Credential scope

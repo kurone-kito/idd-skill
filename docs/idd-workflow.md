@@ -253,8 +253,23 @@ When a lightweight-tier model runs any part of this loop:
   there as future nuance, not as a scope change here. This note does not
   change #909/#1342 or `idd-review-triage.instructions.md`'s
   lite-profile exclusion.
-- Do not run the autonomous merge phases (F3 onward) on this tier. See
-  the merge-policy recommendation for weak-model sessions at
+- Follow the resolved merge policy, including on this tier. A recorded
+  value is one string for every tier, which does not read a tier name,
+  or an object with `frontier`, `middle-tier`, and `lightweight`. On
+  the standard profile a resolved `fully_autonomous_merge` runs F3
+  after the existing gates. `separate_merge_agent` keeps handoff step
+  5, including no release post when the claim was already lost. An
+  unresolved object tier is the unknown-policy hold. On the lite
+  profile a schema-valid object whose named tier exits 0 is resolved.
+  A resolved `fully_autonomous_merge` continues at the standard
+  handoff. The lite profile has no F3 file and does not run
+  `gh pr merge`. A resolved `human_merge` keeps the claim. A resolved
+  `separate_merge_agent` releases the claim only when `ready` is true
+  and the guard passes. The lite file does not evaluate standard step
+  5. `mergePolicyAck` stays diagnostic. The older sentence, "do not run
+  the autonomous merge phases (F3 onward) on this tier," described the
+  hold that the operator lifted once the handoff resolved this route.
+  See
   <https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy>.
 - This is additional to, not a replacement for, the uniform C-phase
   objective diff validation floor in
@@ -391,12 +406,19 @@ The F1-F2 and F2.5 rows cover a **partial** slice of their standard
 files only, per the design's phase scoping: the lite F1-F2 file
 covers just F1's read-only branch check and reading the
 `pre-merge-readiness` helper verdict, never the standard file's
-written prose fallback; the lite F2.5 file covers just the
-handoff-stop outcome, never autonomous-merge routing. Neither falls
-back to the standard file for its excluded sub-case within the same
-phase — both instead treat that sub-case as a stop-and-ask condition
-(a broken/missing helper for F1-F2; anything but the handoff-stop
-outcome for F2.5) — a nuance the table above cannot show by itself.
+written prose fallback. The lite F2.5 file reads the recorded
+policy. A string is one enum for every tier and does not read a tier
+name. An object has `frontier`, `middle-tier`, and `lightweight`.
+A schema-valid object whose named tier exits 0 is resolved. A
+resolved `fully_autonomous_merge` continues at the standard handoff,
+which then runs F3 after the existing gates. The lite profile has no
+F3 file and does not run `gh pr merge`. A resolved `human_merge`
+keeps the claim. A resolved `separate_merge_agent` releases the claim
+only when `ready` is true and the guard passes. The lite file does
+not evaluate standard step 5. Any other value stays unrecognized.
+`mergePolicyAck` stays diagnostic. A broken or missing F1-F2 helper
+stays a stop-and-ask condition — a nuance the table above cannot
+show by itself.
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own, so they never appear as
@@ -417,13 +439,17 @@ this file in
 
 **Explicit fallback.** Every phase without a row above falls back to
 its standard instruction file — this is the documented default, not
-an implied gap. A0-A4 Discover, A4.5 Suitability, E4-E8 Review-triage,
-and F3-F5 Merge are **permanently excluded by design**: the design's
+an implied gap. Discover, Suitability, and Review-triage stay on the
+standard file. The lite profile has no F3 file. A recorded value is
+one string for every tier, which does not read a tier name, or an
+object with `frontier`, `middle-tier`, and `lightweight`. A resolved
+`fully_autonomous_merge` continues at the standard handoff, which
+runs F3 after the existing gates. `mergePolicyAck` stays diagnostic.
+The older wording said F3-F5 Merge was permanently excluded; that
+described the hold before this route. See the design's
 [non-goals](weak-model-lite-profile-design.md#target-model-class-and-non-goals)
-and phase-scoping table exclude open-ended selection, judgment-heavy
-classification, and autonomous merge from the condensed profile
-entirely, regardless of roadmap progress. A future phase without a row
-and without a listed exclusion reason would instead mean an in-scope,
+and phase-scoping table. A future phase without a row and without a
+listed exclusion reason would instead mean an in-scope,
 not-yet-shipped lite file — none exist as of this writing.
 
 A lite-opted-in session encountering any of these phases reads the
