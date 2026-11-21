@@ -218,6 +218,50 @@ export function classifyClaimAssert(raw, claimId, agentId) {
   return { ok: false, code: 'claim-lost' };
 }
 /**
+ * The claim check after an applied step 5. The worktree path is already
+ * gone, so `resume-claim-routing --assert --worktree <removed>` can return
+ * `owner_evidence_required` while the issue markers still match: a prunable
+ * record for that path makes the occupancy probe unreadable, and the path
+ * has no worktree identity. That result is kept. A mismatched claim, an
+ * unreadable assert, or a live occupied worktree is not. Checks before
+ * step 5 keep {@link classifyClaimAssert}. Observed 2026-11-21 on host
+ * win32 during cleanup of issue #5290 (PR #5296), recorded in issue #5299.
+ */
+export function classifyPostRemovalClaimAssert(raw, claimId, agentId) {
+  const ordinary = classifyClaimAssert(raw, claimId, agentId);
+  if (ordinary.ok) return ordinary;
+  const kept = readPostRemovalKeep(raw, claimId, agentId);
+  return kept ?? ordinary;
+}
+function readPostRemovalKeep(raw, claimId, agentId) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw.stdout);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const routing = parsed;
+  const active = routing.active_claim;
+  const owner = routing.evidence?.owner_evidence;
+  if (
+    owner === undefined ||
+    routing.state !== 'owner_evidence_required' ||
+    routing.reason !== 'claim-id-match-without-independent-owner-evidence' ||
+    routing.claim_id_checked !== claimId ||
+    active?.claim_id !== claimId ||
+    active?.agent_id !== agentId ||
+    typeof active?.branch !== 'string' ||
+    owner.worktree_identity !== false ||
+    (owner.occupancy_probe !== 'unreadable' &&
+      owner.occupancy_probe !== 'absent') ||
+    owner.occupancy_paths_match === true
+  ) {
+    return null;
+  }
+  return { ok: true, branch: active.branch };
+}
+/**
  * The comparison key for one filesystem path: its real location when it can be
  * read, folded to lower case on Windows, where paths are case-insensitive. Two
  * spellings of one directory must map to the same key before any identity
@@ -1074,12 +1118,12 @@ function runPlan(input, deps, steps) {
       outcome.hold,
     );
   }
-  // 4. Claim check before step 6.
-  const claimPost = classifyClaimAssert(
-    deps.assertClaim(worktree),
-    input.claimId,
-    input.agentId,
-  );
+  // 4. Claim check before step 6. Apply has already removed the worktree,
+  // so an expected post-removal occupancy result is kept. A dry run has
+  // not removed it, and still requires a normal assert.
+  const claimPost = (
+    input.apply ? classifyPostRemovalClaimAssert : classifyClaimAssert
+  )(deps.assertClaim(worktree), input.claimId, input.agentId);
   if (!claimPost.ok) {
     return holdAt(5, 'claim-check', 'before-step-6', {
       code: claimPost.code,

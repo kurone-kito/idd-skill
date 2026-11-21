@@ -10408,6 +10408,18 @@ fast-forward of the development branch (the pull request base ref), the worktree
 and local-branch removal under the clone-scoped lock with a second claim check,
 and the remote branch.
 
+After an applied step 5 removes the worktree, the claim check before step 6
+still reads the issue markers through `resume-claim-routing --assert` with
+that removed path. A prunable record for the removed path makes the occupancy
+probe `unreadable`, and the path has no worktree identity, so the assert
+returns `owner_evidence_required` even though the active claim still matches.
+The flow keeps that result when the claim id and agent match,
+`worktree_identity` is false, and the occupancy probe is `unreadable` or
+`absent`. A mismatched claim, an unreadable assert, or a live occupied
+worktree still holds. Checks before step 5 are unchanged. Observed
+2026-11-21 on host `win32` during cleanup of issue `#5290` (PR `#5296`),
+recorded in issue `#5299`.
+
 Dry-run is the default. It runs the proof, claim, and read-only
 development-branch checks, and the step 5 inspection, and it reports `would-run`
 for the fetch, the fast-forward, and each removal. `--apply` performs them.
