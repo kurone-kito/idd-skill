@@ -6052,8 +6052,12 @@ issue's `## Candidate files` heading. A post-push record whose `files=`
 list is only that section, while the pull request also changed other
 non-generated paths, stays `invalid` with `record-conflict`. The
 scope-overrun blocker detail then names both sorted lists as `recorded=`
-and `live=` JSON arrays, so the next record can copy the live set. The
-renderer sorts paths by UTF-8 byte order, rejects duplicates and
+and `live=` JSON arrays. Those lists identify the mismatch. A later
+record on this issue cannot replace them with the live set:
+`resolveScopeOverrunEvidence()` rejects a lineage whose path sets
+differ, and an owner decision cannot clear that conflict. Use the live
+set as the initial snapshot of a new issue, as the lineage rule below
+describes. The renderer sorts paths by UTF-8 byte order, rejects duplicates and
 non-canonical spellings such as absolute paths, backslashes, empty
 segments, `.` / `..` segments, or leading/trailing whitespace, and allows
 spaces inside a path. The visible note lists every sorted path in code
