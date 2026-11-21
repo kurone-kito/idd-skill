@@ -1138,6 +1138,22 @@
               "type": ["string", "null"],
               "description": "The full head SHA of the post-push scope-overrun record that evidence resolution selected, whatever the status, so an invalid result (for example a record-conflict from a PR, branch, or candidate-file mismatch) can carry it too. Null when no post-push record was selected: no record, a pre-push-only record, or evidence rejected before a record was selected. Read status and reason, not this field, for validity.",
               "pattern": "^[0-9a-f]{40}$"
+            },
+            "recordedFiles": {
+              "type": "array",
+              "description": "Sorted recorded files= list. Present only when record-conflict is a live path-set mismatch, so F3 can name both sets. Absent for every other result.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "liveFiles": {
+              "type": "array",
+              "description": "Sorted live changed-path set for the same mismatch. Present only together with recordedFiles.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }

@@ -4714,6 +4714,16 @@ test('computePreMergeReadinessBlockers: scope-overrun detail names the field tha
     scopeOverrunDetail({}),
     'scope overrun unavailable: missing reason',
   );
+  assert.equal(
+    scopeOverrunDetail({
+      status: 'invalid',
+      reason: 'record-conflict',
+      recordedHeadSha: 'a'.repeat(40),
+      recordedFiles: ['src/declared.mts'],
+      liveFiles: ['src/also-changed.mts', 'src/declared.mts'],
+    }),
+    'scope overrun invalid: record-conflict; recorded=["src/declared.mts"]; live=["src/also-changed.mts","src/declared.mts"]',
+  );
 });
 
 test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field before checking trust', () => {

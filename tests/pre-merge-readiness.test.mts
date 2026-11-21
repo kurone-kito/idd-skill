@@ -50,6 +50,7 @@ import {
   mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  publishScopeOverrun,
   readRepositoryContentAtRef,
   readScopeOverrunMergeBaseForRepo,
   readScopeOverrunMergeBaseSha,
@@ -593,6 +594,55 @@ test('pre-merge readiness preserves scope evidence after the issue body no longe
   );
   assert.equal(result?.status, 'invalid');
   assert.equal(result?.reason, 'record-conflict');
+});
+
+test('pre-merge readiness names both path sets when a record lists only the issue section', () => {
+  const issueSection = ['src/declared.mts'];
+  const livePaths = ['src/also-changed.mts', 'src/declared.mts'];
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue: scopeOverrunIssue(issueSection),
+      changedFiles: livePaths,
+      comments: [
+        scopeOverrunRecordComment({ candidateFiles: issueSection }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(result?.status, 'invalid');
+  assert.equal(result?.reason, 'record-conflict');
+  assert.deepEqual(result?.pathSetConflict, {
+    recordedFiles: issueSection,
+    liveFiles: livePaths,
+  });
+  const published = result ? publishScopeOverrun(result) : null;
+  assert.deepEqual(published?.report, {
+    status: 'invalid',
+    reason: 'record-conflict',
+    recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    recordedFiles: issueSection,
+    liveFiles: livePaths,
+  });
+  assert.equal(
+    published?.blockerDetail,
+    'scope overrun invalid: record-conflict; recorded=["src/declared.mts"]; live=["src/also-changed.mts","src/declared.mts"]',
+  );
+
+  const matching = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue: scopeOverrunIssue(livePaths),
+      changedFiles: livePaths,
+      comments: [
+        scopeOverrunRecordComment({ candidateFiles: livePaths }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.deepEqual(matching, {
+    status: 'valid',
+    reason: 'accepted',
+    recordedHeadSha: SCOPE_OVERRUN_HEAD,
+  });
 });
 
 // kurone-kito/idd-skill#5219: read-only evidence for whether the existing
