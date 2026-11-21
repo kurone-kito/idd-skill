@@ -11035,11 +11035,14 @@ by hand. Rationale and observed cases:
     existing gates, including when the session is lightweight-tier.
     `separate_merge_agent` keeps handoff step 5, including no release
     post when the claim was already lost. An unresolved object tier is
-    the unknown-policy hold. On the lite profile a schema-valid object
-    whose declared tier is one of those three names and whose resolver
-    exits 0 is resolved; a missing or invalid tier, and any other
-    non-zero exit, stays unrecognized. A resolved
-    `fully_autonomous_merge` continues at the standard handoff. The
+    the unknown-policy hold. On the lite profile a schema-valid object is
+    resolved only when `git fetch origin {development-branch}` succeeds (a
+    failed fetch never falls back to a local ref), `config.json` matches
+    `origin/{development-branch}`, the operator named one of those three tiers,
+    and the resolver exits 0 with stdout exactly one of the three enums. Any
+    other result stays unrecognized. A resolved
+    `fully_autonomous_merge` continues at the standard handoff, which runs F3
+    after the existing gates. The
     lite profile has no F3 file and does not run `gh pr merge`. A
     resolved `human_merge` keeps the claim. A resolved
     `separate_merge_agent` releases the claim only when `ready` is

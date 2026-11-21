@@ -184,7 +184,7 @@ their own targets.
     [IDD helper script evaluation](idd-helper-scripts.md)) over prose
     judgment wherever one exists for the current step;
   - drafting output for human review rather than running the
-    autonomous merge phases.
+    autonomous merge phases, unless the lite F2.5 route resolves `fully_autonomous_merge`.
 - **Large-context, non-self-directing** (named out-of-band class):
   models that clear the context-sufficiency bar but cannot reliably
   self-direct a multi-turn execution loop. They are **not** admitted
@@ -253,22 +253,31 @@ When a lightweight-tier model runs any part of this loop:
   there as future nuance, not as a scope change here. This note does not
   change #909/#1342 or `idd-review-triage.instructions.md`'s
   lite-profile exclusion.
-- Follow the resolved merge policy, including on this tier. A recorded
-  value is one string for every tier, which does not read a tier name,
-  or an object with `frontier`, `middle-tier`, and `lightweight`. On
-  the standard profile a resolved `fully_autonomous_merge` runs F3
-  after the existing gates. `separate_merge_agent` keeps handoff step
-  5, including no release post when the claim was already lost. An
-  unresolved object tier is the unknown-policy hold. On the lite
-  profile a schema-valid object whose named tier exits 0 is resolved.
+- Follow the resolved merge policy, including on this tier. A recorded value
+  is one string for every tier, which does not read a tier name, or an object
+  with `frontier`, `middle-tier`, and `lightweight`, each one of `human_merge`,
+  `fully_autonomous_merge`, or `separate_merge_agent`. On the standard profile a
+  resolved `fully_autonomous_merge` runs F3 after the existing gates.
+  `separate_merge_agent` keeps handoff step 5: the first branch runs only when
+  repository documentation explicitly records that this session is the
+  designated merge-capable actor and the documented resume condition is
+  satisfied, and the Otherwise branch keeps both bullets, including no release
+  post when the claim was already lost. An unresolved object tier is the
+  unknown-policy hold. On the lite
+  profile a schema-valid object is resolved only when `git fetch origin
+  {development-branch}` succeeds (a failed fetch never falls back to a local
+  ref), `config.json` matches `origin/{development-branch}`, the operator named
+  one of those three tiers, and the resolver exits 0 with stdout exactly one of
+  the three enums.
+  Any other result stays unrecognized.
   A resolved `fully_autonomous_merge` continues at the standard
   handoff. The lite profile has no F3 file and does not run
   `gh pr merge`. A resolved `human_merge` keeps the claim. A resolved
   `separate_merge_agent` releases the claim only when `ready` is true
-  and the guard passes. The lite file does not evaluate standard step
-  5. `mergePolicyAck` stays diagnostic. The older sentence, "do not run
-  the autonomous merge phases (F3 onward) on this tier," described the
-  hold that the operator lifted once the handoff resolved this route.
+  and the guard passes. The lite file does not evaluate standard step 5.
+  `mergePolicyAck` stays diagnostic. The older sentence, "do not run the
+  autonomous merge phases (F3 onward) on this tier," described the hold that
+  ends only when the F2.5 handoff resolves this route.
   See
   <https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy>.
 - This is additional to, not a replacement for, the uniform C-phase
@@ -408,9 +417,15 @@ covers just F1's read-only branch check and reading the
 `pre-merge-readiness` helper verdict, never the standard file's
 written prose fallback. The lite F2.5 file reads the recorded
 policy. A string is one enum for every tier and does not read a tier
-name. An object has `frontier`, `middle-tier`, and `lightweight`.
-A schema-valid object whose named tier exits 0 is resolved. A
-resolved `fully_autonomous_merge` continues at the standard handoff,
+name. An object has `frontier`, `middle-tier`, and `lightweight`, each a
+known enum.
+A schema-valid object is resolved only when `git fetch origin
+{development-branch}` succeeds (a failed fetch never falls back to a local ref),
+`config.json` matches `origin/{development-branch}`, the operator named one of
+those three tiers, and the resolver exits 0 with stdout exactly one of the three
+enums. Any
+other result stays unrecognized. A resolved
+`fully_autonomous_merge` continues at the standard handoff,
 which then runs F3 after the existing gates. The lite profile has no
 F3 file and does not run `gh pr merge`. A resolved `human_merge`
 keeps the claim. A resolved `separate_merge_agent` releases the claim

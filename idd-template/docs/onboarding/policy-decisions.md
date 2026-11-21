@@ -35,19 +35,17 @@ Choose exactly one merge policy before unattended runs begin:
   gate and a separately authorized merge-capable actor performs the
   final merge path
 
-Propose `human_merge` unless the operator opts in. A value is one
-string for every tier, reading no tier name, or an object with
-`frontier`, `middle-tier`, and `lightweight`. Standard:
-`fully_autonomous_merge` runs F3 after the gates;
-`separate_merge_agent` keeps handoff step 5; an unresolved object
-tier holds.
-A lite string is that enum. An object resolves only at exit 0.
-On lite, `fully_autonomous_merge` continues at the standard
-handoff, and lite does not run `gh pr merge`. `mergePolicyAck` stays
-diagnostic. A weak-model loop follows the resolved enum. Do not
-replace a resolved `fully_autonomous_merge` or `separate_merge_agent`
-with `human_merge`. See
-[Model capability expectations](../idd-workflow.md#model-capability-expectations).
+Propose `human_merge` unless the operator opts in to
+`fully_autonomous_merge`. For public or OSS repositories, recommend
+`human_merge` or `separate_merge_agent` instead. A value is one string for
+every tier, or an object with `frontier`, `middle-tier`, and `lightweight`.
+Standard: `fully_autonomous_merge` runs F3 after the gates;
+`separate_merge_agent` keeps handoff step 5; an unresolved object tier
+holds. On lite, an object resolves only when `git fetch origin` succeeds,
+`config.json` matches `origin`, the operator named one of the three tiers,
+and the resolver exits 0 with one enum.
+`fully_autonomous_merge` continues at the standard handoff, which runs F3;
+lite runs no `gh pr merge`. `mergePolicyAck` stays diagnostic.
 
 ### Credential scope
 
