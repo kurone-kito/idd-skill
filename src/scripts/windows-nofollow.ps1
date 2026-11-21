@@ -22,14 +22,14 @@ function Fail([string]$Reason, [string]$Code = 'refuse') {
 }
 
 if ($args.Count -lt 2) {
-  Fail 'usage: windows-nofollow.ps1 <read|create|copy> <path> [dest-or-bytes]' 'usage'
+  Fail 'usage: windows-nofollow.ps1 <read|create|copy|probe-relative> <path> [dest-or-bytes]' 'usage'
 }
 
 $Mode = [string]$args[0]
 $TargetPath = [string]$args[1]
 $DestPath = if ($args.Count -ge 3) { [string]$args[2] } else { $null }
 
-if ($Mode -notin @('read', 'create', 'copy')) {
+if ($Mode -notin @('read', 'create', 'copy', 'probe-relative')) {
   Fail "unknown mode: $Mode" 'usage'
 }
 if ([string]::IsNullOrWhiteSpace($TargetPath)) {
@@ -161,8 +161,12 @@ public static class IdNoFollow {
   [DllImport("ntdll.dll")]
   public static extern uint RtlNtStatusToDosError(int Status);
 
-  [DllImport("kernel32.dll")]
+  // SetLastError = true so Marshal.GetLastWin32Error() sees the translated
+  // status after SetLastError on the Windows PS 5.1 / .NET Framework host.
+  [DllImport("kernel32.dll", SetLastError = true)]
   public static extern void SetLastError(uint dwErrCode);
+
+  public static int LastDosError;
 
   [DllImport("kernel32.dll", SetLastError = true)]
   public static extern bool CloseHandle(IntPtr hObject);
@@ -202,14 +206,20 @@ public static class IdNoFollow {
   /// <param name="kind">
   /// 0 = file (FILE_NON_DIRECTORY_FILE), 1 = directory, 2 = either (inspect).
   /// </param>
+  /// <param name="needWriteAttributes">
+  /// When true, also request FILE_WRITE_ATTRIBUTES (create/write only).
+  /// Read opens must stay read-only so ACLs without that right still work.
+  /// </param>
   public static IntPtr CreateRelative(
     IntPtr rootDirectory,
     string name,
     uint desiredAccess,
     uint shareAccess,
     uint createDisposition,
-    int kind)
+    int kind,
+    bool needWriteAttributes)
   {
+    LastDosError = 0;
     if (rootDirectory == IntPtr.Zero || rootDirectory == INVALID_HANDLE_VALUE) {
       return INVALID_HANDLE_VALUE;
     }
@@ -246,11 +256,16 @@ public static class IdNoFollow {
         createOptions |= FILE_OPEN_FOR_BACKUP_INTENT | FILE_SEQUENTIAL_ONLY;
       }
 
+      uint access = desiredAccess | SYNCHRONIZE | FILE_READ_ATTRIBUTES;
+      if (needWriteAttributes) {
+        access |= FILE_WRITE_ATTRIBUTES;
+      }
+
       IO_STATUS_BLOCK ioStatus;
       IntPtr handle;
       int status = NtCreateFile(
         out handle,
-        desiredAccess | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+        access,
         ref attributes,
         out ioStatus,
         IntPtr.Zero,
@@ -262,8 +277,11 @@ public static class IdNoFollow {
         0);
       if (status < 0) {
         // Windows PowerShell 5.1's Add-Type targets .NET Framework, which
-        // lacks Marshal.SetLastWin32Error; use kernel32 SetLastError instead.
-        SetLastError(RtlNtStatusToDosError(status));
+        // lacks Marshal.SetLastWin32Error; use kernel32 SetLastError and
+        // keep LastDosError so callers do not depend on a stale cache.
+        uint dos = RtlNtStatusToDosError(status);
+        LastDosError = (int)dos;
+        SetLastError(dos);
         return INVALID_HANDLE_VALUE;
       }
       return handle;
@@ -321,7 +339,8 @@ function Open-NoFollowRelative(
   [uint32]$Access,
   [uint32]$Disposition,
   [switch]$IsDirectory,
-  [switch]$AllowAny
+  [switch]$AllowAny,
+  [switch]$NeedWriteAttributes
 ) {
   if ($Name -match '[\\/\0]' -or $Name -eq '.' -or $Name -eq '..') {
     return @{ ok = $false; error = -1 }
@@ -339,10 +358,13 @@ function Open-NoFollowRelative(
     $Access,
     $share,
     $ntDisposition,
-    $kind
+    $kind,
+    [bool]$NeedWriteAttributes
   )
   if ($handle -eq [IdNoFollow]::INVALID_HANDLE_VALUE) {
-    return @{ ok = $false; error = (Get-Win32Error) }
+    $dos = [IdNoFollow]::LastDosError
+    if ($dos -eq 0) { $dos = Get-Win32Error }
+    return @{ ok = $false; error = $dos }
   }
   return @{ ok = $true; handle = $handle }
 }
@@ -592,7 +614,7 @@ function Read-NoFollowFile([string]$Path, [string]$StagingPath) {
       $stageHeld = New-Object System.Collections.ArrayList
       try {
         $stageChain = Assert-ExistingChain $StagingPath -FinalMustBeAbsent -HeldHandles $stageHeld
-        $stageOpen = Open-NoFollowRelative ([IntPtr]$stageChain.parentHandle) ([string]$stageChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+        $stageOpen = Open-NoFollowRelative ([IntPtr]$stageChain.parentHandle) ([string]$stageChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW) -NeedWriteAttributes
         if (-not $stageOpen.ok) {
           Fail "cannot create staging file: $($stageChain.final) (win32=$($stageOpen.error))"
         }
@@ -629,7 +651,7 @@ function Create-NoFollowFile([string]$Path, [byte[]]$Bytes) {
   $held = New-Object System.Collections.ArrayList
   try {
     $chain = Assert-ExistingChain $Path -FinalMustBeAbsent -HeldHandles $held
-    $open = Open-NoFollowRelative ([IntPtr]$chain.parentHandle) ([string]$chain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+    $open = Open-NoFollowRelative ([IntPtr]$chain.parentHandle) ([string]$chain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW) -NeedWriteAttributes
     if (-not $open.ok) {
       Fail "exclusive create refused for $($chain.final) (win32=$($open.error))"
     }
@@ -686,7 +708,7 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
     }
     try {
       $payload = Read-BytesFromHandle $srcOpen.handle $sourceChain.final
-      $destOpen = Open-NoFollowRelative ([IntPtr]$destChain.parentHandle) ([string]$destChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW)
+      $destOpen = Open-NoFollowRelative ([IntPtr]$destChain.parentHandle) ([string]$destChain.finalName) ([IdNoFollow]::GENERIC_WRITE) ([IdNoFollow]::CREATE_NEW) -NeedWriteAttributes
       if (-not $destOpen.ok) {
         Fail "exclusive create refused for $($destChain.final) (win32=$($destOpen.error))"
       }
@@ -713,6 +735,42 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
   }
 }
 
+# Deterministic seam for #5292: hold the parent directory handle, then open
+# the final name only via NtCreateFile(RootDirectory, OBJ_DONT_REPARSE). A
+# concurrent absolute-path reparse walk cannot feed this open.
+function Probe-RelativeFinal([string]$Path) {
+  $held = New-Object System.Collections.ArrayList
+  try {
+    $chain = Assert-ExistingChain $Path -HeldHandles $held
+    $open = Open-NoFollowRelative ([IntPtr]$chain.parentHandle) ([string]$chain.finalName) ([IdNoFollow]::GENERIC_READ) ([IdNoFollow]::OPEN_EXISTING)
+    if (-not $open.ok) {
+      Fail "probe-relative cannot open final: $($chain.final) (win32=$($open.error))"
+    }
+    try {
+      $payload = Read-BytesFromHandle $open.handle $chain.final
+      $hasher = [System.Security.Cryptography.SHA256]::Create()
+      try {
+        $hashBytes = $hasher.ComputeHash($payload.buffer)
+      } finally {
+        $hasher.Dispose()
+      }
+      $sha = [System.BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant()
+      Write-Result @{
+        ok = $true
+        via = 'relative'
+        path = $chain.final
+        parent = $chain.parent
+        sha256 = $sha
+        nlink = $payload.nlink
+      } 0
+    } finally {
+      Close-HandleSafe $open.handle
+    }
+  } finally {
+    Close-HandleList $held
+  }
+}
+
 switch ($Mode) {
   'read' { Read-NoFollowFile $TargetPath $DestPath }
   'create' {
@@ -732,5 +790,6 @@ switch ($Mode) {
     Create-NoFollowFile $TargetPath $bytes
   }
   'copy' { Copy-NoFollowFile $TargetPath $DestPath }
+  'probe-relative' { Probe-RelativeFinal $TargetPath }
   default { Fail "unknown mode: $Mode" 'usage' }
 }

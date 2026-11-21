@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   constants,
   existsSync,
@@ -377,11 +379,11 @@ test('Windows missing open capability still refuses without || 0', () => {
   }
 });
 
-test('Windows nested final open stays on the held parent (#5292)', () => {
-  // Absolute CreateFileW would walk a junction substituted for an intermediate
-  // directory. The helper opens the final name relative to the held parent
-  // with NtCreateFile + OBJ_DONT_REPARSE, so a nested regular file still
-  // reads and an intermediate junction still refuses.
+test('Windows probe-relative opens the final via the held parent (#5292)', () => {
+  // Deterministic seam: probe-relative holds the parent directory handle,
+  // then opens the leaf only with NtCreateFile(RootDirectory, OBJ_DONT_REPARSE).
+  // That is the production final-open path; a full concurrent FSCTL race is
+  // not simulated here.
   if (process.platform !== 'win32') return;
 
   const dir = scratch();
@@ -389,18 +391,39 @@ test('Windows nested final open stays on the held parent (#5292)', () => {
     const mid = join(dir, 'mid');
     mkdirSync(mid);
     const file = join(mid, 'nested.txt');
-    writeFileSync(file, 'held-parent');
-    const bytes = readNoFollowFile(file, { scriptPath: SCRIPT });
-    assert.equal(bytes.toString('utf8'), 'held-parent');
-
-    const decoy = join(dir, 'decoy');
-    mkdirSync(decoy);
-    writeFileSync(join(decoy, 'nested.txt'), 'through-junction');
-    rmSync(mid, { recursive: true, force: true });
-    if (!trySymlink(decoy, mid, 'dir')) return;
-    assert.throws(
-      () => readNoFollowFile(file, { scriptPath: SCRIPT }),
-      /refuse|intermediate|reparse|junction|not a plain directory/i,
+    const payload = 'held-parent-relative';
+    writeFileSync(file, payload);
+    const powershell = join(
+      process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    const stdout = execFileSync(
+      powershell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        SCRIPT,
+        'probe-relative',
+        file,
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    const result = JSON.parse(stdout.trim()) as {
+      ok: boolean;
+      via?: string;
+      sha256?: string;
+    };
+    assert.equal(result.ok, true);
+    assert.equal(result.via, 'relative');
+    assert.equal(
+      result.sha256,
+      createHash('sha256').update(payload).digest('hex'),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

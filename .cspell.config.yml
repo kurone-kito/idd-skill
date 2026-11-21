@@ -35,6 +35,7 @@ words:
   - isort
   - Kiro
   - kurone
+  - ntdll
   - ONNX
   - octocat
   - OGDS
