@@ -1051,6 +1051,11 @@ function blankPowerShellHereStrings(source) {
     if (character !== '@') continue;
     const hereQuote = characters[index + 1];
     if (hereQuote !== "'" && hereQuote !== '"') continue;
+    // PowerShell reads `@'` as a here-string only at the start of a token;
+    // `a@'` is a bareword followed by an ordinary string.
+    if (index > 0 && !/[\s(,=;|{&+]/u.test(characters[index - 1] ?? '')) {
+      continue;
+    }
     let lookahead = index + 2;
     let validOpener = true;
     while (
@@ -1089,7 +1094,9 @@ function blankPowerShellHereStrings(source) {
       if (cursor >= characters.length) break;
       cursor += 1;
     }
-    if (closer < 0) continue;
+    // An opener with no closer makes the script's here-string structure
+    // unknown. Blank nothing, so every command-position scan sees all text.
+    if (closer < 0) return { source, expandableHereStrings: [] };
     if (hereQuote === '"') {
       expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
     }
@@ -1250,6 +1257,29 @@ function powerShellSubstitutions(source) {
   return substitutions;
 }
 
+/**
+ * `$()` subexpressions inside an expandable `@"…"@` body. The body starts
+ * outside any quote state: PowerShell expands `$()` there, and quote
+ * characters in the body are literal text, not string delimiters.
+ */
+function expandableHereStringSubstitutions(body) {
+  const substitutions = [];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === '`') {
+      index += 1;
+      continue;
+    }
+    if (body.startsWith('$(', index)) {
+      const nested = readPowerShellSubexpression(body, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
 function shellGhCommand(
   command,
   env,
@@ -1282,7 +1312,7 @@ function shellGhCommand(
         ? [
             ...powerShellSubstitutions(parsedSource),
             ...(powershellSource?.expandableHereStrings.flatMap(
-              powerShellSubstitutions,
+              expandableHereStringSubstitutions,
             ) ?? []),
           ]
         : [];

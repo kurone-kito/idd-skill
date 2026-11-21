@@ -1903,6 +1903,52 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       ].join('\n'),
       expectBlocked: true,
     },
+    {
+      name: 'bareword at-quote before a string is not an opener',
+      body: [
+        "Write-Output a@'",
+        "'",
+        'gh api repos/o/r',
+        "$x = @'",
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'expandable here-string apostrophe prose only',
+      body: [
+        '$x = @"',
+        "Don't mention gh here",
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string apostrophe before substitution',
+      body: [
+        '$x = @"',
+        "Don't run $(gh api repos/o/r)",
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'unterminated opener before a closed expandable span',
+      body: [
+        "$a = @'",
+        "Write-Output ok'",
+        '$b = @"',
+        'gh api repos/o/r',
+        '"@',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
   ];
   const scriptPaths: Record<string, string> = {};
   for (const fixture of fixtures) {
