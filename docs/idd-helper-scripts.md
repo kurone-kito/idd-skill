@@ -11028,11 +11028,26 @@ by hand. Rationale and observed cases:
     driving the IDD loop and may have left feedback with **no E-phase
     disposition at all, or a thread left unresolved**, letting a merge
     complete — by whichever actor was authorized to run it — with that
-    feedback unaddressed. (Per this project's
-    [Weak-model guardrails](idd-workflow.md#weak-model-guardrails), a
-    lightweight-tier session must not itself run the autonomous merge
-    phases, so the sweep audits the aftermath of that policy, not a
-    weak-model self-merge.) The sweep detects exactly those two gaps —
+    feedback unaddressed. A recorded merge policy is one string for
+    every tier, which does not read a tier name, or an object with
+    `frontier`, `middle-tier`, and `lightweight`. On the standard
+    profile a resolved `fully_autonomous_merge` runs F3 after the
+    existing gates, including when the session is lightweight-tier.
+    `separate_merge_agent` keeps handoff step 5, including no release
+    post when the claim was already lost. An unresolved object tier is
+    the unknown-policy hold. On the lite profile a schema-valid object
+    whose declared tier is one of those three names and whose resolver
+    exits 0 is resolved; a missing or invalid tier, and any other
+    non-zero exit, stays unrecognized. A resolved
+    `fully_autonomous_merge` continues at the standard handoff. The
+    lite profile has no F3 file and does not run `gh pr merge`. A
+    resolved `human_merge` keeps the claim. A resolved
+    `separate_merge_agent` releases the claim only when `ready` is
+    true and the guard passes. The lite file does not evaluate
+    standard step 5. `mergePolicyAck` stays diagnostic. The older
+    sentence said a lightweight-tier session must not itself run the
+    autonomous merge phases; that hold is lifted when the resolved
+    policy allows the merge. The sweep detects exactly those two gaps —
     it has **no backstop** for a _false-but-present_ disposition or an
     already-resolved thread; see the boundary recorded in
     `idd-design-rationale.md`.

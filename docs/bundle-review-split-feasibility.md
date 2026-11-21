@@ -88,11 +88,19 @@ substantially:
 sibling for E1-E3 (`lite/idd-review-snapshot-lite.instructions.md`) and
 for E9-E15 (`lite/idd-review-fix-lite.instructions.md`) — but **not** for
 E4-E8. The very next paragraph, on "Explicit fallback," states this is
-deliberate: "A0-A4 Discover, A4.5 Suitability, **E4-E8 Review-triage**,
-and F3-F5 Merge are **permanently excluded by design**... the design's
-non-goals and phase-scoping table exclude open-ended selection,
-judgment-heavy classification, and autonomous merge from the condensed
-profile entirely." A lite-opted-in session reads the full, standard
+deliberate: Discover, Suitability, and Review-triage stay on the
+standard file. The lite profile has no F3 file. A recorded merge policy
+is one string for every tier, which does not read a tier name, or an
+object with `frontier`, `middle-tier`, and `lightweight`. A resolved
+`fully_autonomous_merge` continues at the standard handoff, which runs
+F3 after the existing gates. A resolved `human_merge` keeps the claim. A resolved
+`separate_merge_agent` releases the claim only when `ready` is true
+and the guard passes. The lite file does not evaluate standard step
+5. An unresolved object tier stays unrecognized. The lite file does
+not run `gh pr merge`.
+`mergePolicyAck` stays diagnostic. The older wording said F3-F5 Merge
+was permanently excluded; that described the hold before this route.
+A lite-opted-in session reads the full, standard
 `idd-review-triage.instructions.md` for E4-E8 exactly like a
 standard-tier session.
 
