@@ -222,10 +222,12 @@ export function classifyClaimAssert(raw, claimId, agentId) {
  * gone, so `resume-claim-routing --assert --worktree <removed>` can return
  * `owner_evidence_required` while the issue markers still match: a prunable
  * record for that path makes the occupancy probe unreadable, and the path
- * has no worktree identity. That result is kept. A mismatched claim, an
- * unreadable assert, or a live occupied worktree is not. Checks before
- * step 5 keep {@link classifyClaimAssert}. Observed 2026-11-21 on host
- * win32 during cleanup of issue #5290 (PR #5296), recorded in issue #5299.
+ * has no worktree identity. That result is kept only when the assert exited
+ * 1 with `action: stop`, the same contract as every other stop verdict.
+ * A zero exit, any other action, a mismatched claim, an unreadable assert,
+ * or a live occupied worktree is not kept. Checks before step 5 keep
+ * {@link classifyClaimAssert}. Observed 2026-11-21 on host win32 during
+ * cleanup of issue #5290 (PR #5296), recorded in issue #5299.
  */
 export function classifyPostRemovalClaimAssert(raw, claimId, agentId) {
   const ordinary = classifyClaimAssert(raw, claimId, agentId);
@@ -245,8 +247,10 @@ function readPostRemovalKeep(raw, claimId, agentId) {
   const active = routing.active_claim;
   const owner = routing.evidence?.owner_evidence;
   if (
+    raw.exitCode !== 1 ||
     owner === undefined ||
     routing.state !== 'owner_evidence_required' ||
+    routing.action !== 'stop' ||
     routing.reason !== 'claim-id-match-without-independent-owner-evidence' ||
     routing.claim_id_checked !== claimId ||
     active?.claim_id !== claimId ||

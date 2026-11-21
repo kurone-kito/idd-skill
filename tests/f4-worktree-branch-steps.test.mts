@@ -2081,6 +2081,30 @@ test('a mismatched assert after removal still holds claim-lost and skips the rem
   );
 });
 
+test('a zero-exit post-removal envelope still holds after removal', () => {
+  const kept = postRemovalAssert();
+  const h = harness({
+    autoDelete: false,
+    claims: [
+      claimOk(),
+      claimOk(),
+      claimOk(),
+      claimOk(),
+      { ...kept, exitCode: 0 },
+    ],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'owner-evidence-required');
+  assert.equal(
+    report.steps.find(
+      (entry) =>
+        entry.step === 'claim-check' && entry.phase === 'before-step-6',
+    )?.status,
+    'held',
+  );
+  assert.deepEqual(h.remoteCalls, []);
+});
+
 test('the post-removal assert shape still holds before step 5 and does not remove the worktree', () => {
   const h = harness({
     claims: [claimOk(), claimOk(), claimOk(), postRemovalAssert()],
@@ -2103,6 +2127,30 @@ test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy resul
   assert.deepEqual(
     classifyPostRemovalClaimAssert(postRemovalAssert(), CLAIM, AGENT),
     { ok: true, branch: BRANCH },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      { ...postRemovalAssert(), exitCode: 0 },
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      { ...postRemovalAssert(), exitCode: 2 },
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({ action: 'keep' }),
+      CLAIM,
+      AGENT,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
   );
   assert.deepEqual(
     classifyPostRemovalClaimAssert(
