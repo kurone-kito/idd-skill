@@ -741,9 +741,9 @@ export function writeNewFile(
     try {
       writeExclusiveNoFollow(target, content, capability.deps);
     } catch (error) {
-      // The Windows helper removes its own CREATE_NEW leftover on failure.
-      // Do not unlink here: a refused create may race with another writer
-      // that now owns the path (#5290 review).
+      // The Windows helper deletes a failed CREATE_NEW by handle before
+      // close. Do not unlink here: a refused create may race with another
+      // writer that now owns the path (#5290 review).
       throw new Error(`write to ${target} failed: ${describe(error)}`);
     }
     if (mode !== undefined) {
