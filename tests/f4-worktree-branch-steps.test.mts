@@ -4,6 +4,7 @@ import type { RemoteBranchDeleteVerdict } from '../src/scripts/delete-remote-bra
 import {
   ancestorChain,
   classifyClaimAssert,
+  classifyPostRemovalClaimAssert,
   classifyPrimaryRefusal,
   classifyProofEnvelope,
   classifyReleasedClaimLock,
@@ -67,6 +68,37 @@ const input = (
   apply: true,
   ...overrides,
 });
+
+function postRemovalAssert(
+  overrides: Record<string, unknown> = {},
+): SpawnedResult {
+  return {
+    exitCode: 1,
+    stdout: JSON.stringify({
+      state: 'owner_evidence_required',
+      action: 'stop',
+      reason: 'claim-id-match-without-independent-owner-evidence',
+      claim_id_checked: CLAIM,
+      active_claim: { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH },
+      evidence: {
+        owner_evidence: {
+          worktree_identity: false,
+          claim_lock_matches: null,
+          generated_tokens_match: null,
+          agent_and_branch_match: null,
+          occupancy_probe: 'unreadable',
+          occupancy_paths_match: null,
+        },
+        local_worktree: {
+          status: 'unreadable',
+          paths: [WORKTREE],
+          reason: null,
+        },
+      },
+      ...overrides,
+    }),
+  };
+}
 
 function claimOk(): SpawnedResult {
   return {
@@ -1984,6 +2016,256 @@ test('released lock classifier rejects absent and foreign locks', () => {
       AGENT,
     ),
     false,
+  );
+});
+
+test('a post-removal assert with matching markers completes and skips step 6', () => {
+  const h = harness({
+    claims: [claimOk(), claimOk(), claimOk(), claimOk(), postRemovalAssert()],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.status, 'complete');
+  assert.equal(report.reason, null);
+  assert.equal(
+    report.steps.find(
+      (entry) =>
+        entry.step === 'claim-check' && entry.phase === 'before-step-6',
+    )?.status,
+    'passed',
+  );
+  assert.equal(
+    report.steps.find((entry) => entry.step === 'step-6')?.status,
+    'skipped',
+  );
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    true,
+  );
+  assert.deepEqual(h.remoteCalls, []);
+});
+
+test('a post-removal assert still runs step 6 when delete_branch_on_merge is false', () => {
+  const h = harness({
+    autoDelete: false,
+    claims: [claimOk(), claimOk(), claimOk(), claimOk(), postRemovalAssert()],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.status, 'complete');
+  assert.deepEqual(h.remoteCalls, [
+    `dry-run:${BRANCH}:${HEAD}`,
+    `apply:${BRANCH}:${HEAD}`,
+  ]);
+});
+
+test('a mismatched assert after removal still holds claim-lost and skips the remote delete', () => {
+  const lost = {
+    exitCode: 1,
+    stdout: JSON.stringify({ state: 'non_inheritable', action: 'stop' }),
+  };
+  const h = harness({
+    claims: [claimOk(), claimOk(), claimOk(), claimOk(), lost],
+    autoDelete: false,
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'claim-lost');
+  assert.equal(
+    report.steps.find(
+      (entry) =>
+        entry.step === 'claim-check' && entry.phase === 'before-step-6',
+    )?.status,
+    'held',
+  );
+  assert.deepEqual(h.remoteCalls, []);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    true,
+  );
+});
+
+test('a zero-exit post-removal envelope still holds after removal', () => {
+  const kept = postRemovalAssert();
+  const h = harness({
+    autoDelete: false,
+    claims: [
+      claimOk(),
+      claimOk(),
+      claimOk(),
+      claimOk(),
+      { ...kept, exitCode: 0 },
+    ],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'owner-evidence-required');
+  assert.equal(
+    report.steps.find(
+      (entry) =>
+        entry.step === 'claim-check' && entry.phase === 'before-step-6',
+    )?.status,
+    'held',
+  );
+  assert.deepEqual(h.remoteCalls, []);
+});
+
+test('the post-removal assert shape still holds before step 5 and does not remove the worktree', () => {
+  const h = harness({
+    claims: [claimOk(), claimOk(), claimOk(), postRemovalAssert()],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'owner-evidence-required');
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('classifyPostRemovalClaimAssert keeps only the removed-path occupancy result', () => {
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(claimOk(), CLAIM, AGENT, WORKTREE),
+    {
+      ok: true,
+      branch: BRANCH,
+    },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(postRemovalAssert(), CLAIM, AGENT, WORKTREE),
+    { ok: true, branch: BRANCH },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      { ...postRemovalAssert(), exitCode: 0 },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      { ...postRemovalAssert(), exitCode: 2 },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({ action: 'keep' }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: false,
+          },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({ evidence: { owner_evidence: null } }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: null,
+          },
+          local_worktree: {
+            status: 'occupied',
+            paths: ['/tmp/other'],
+            reason: null,
+          },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: null,
+          },
+          local_worktree: { status: 'unreadable', paths: [], reason: null },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: true,
+            occupancy_probe: 'occupied',
+            occupancy_paths_match: false,
+          },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      {
+        exitCode: 1,
+        stdout: JSON.stringify({ state: 'non_inheritable', action: 'stop' }),
+      },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'claim-lost' },
+  );
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      { exitCode: 1, stdout: '' },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'claim-lost' },
   );
 });
 
