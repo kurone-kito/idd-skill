@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   constants,
   existsSync,
@@ -371,6 +373,57 @@ test('Windows missing open capability still refuses without || 0', () => {
           },
         }),
       /does not support the no-follow/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Windows probe-relative opens the final via the held parent (#5292)', () => {
+  // Deterministic seam: probe-relative holds the parent directory handle,
+  // then opens the leaf only with NtCreateFile(RootDirectory, OBJ_DONT_REPARSE).
+  // That is the production final-open path; a full concurrent FSCTL race is
+  // not simulated here.
+  if (process.platform !== 'win32') return;
+
+  const dir = scratch();
+  try {
+    const mid = join(dir, 'mid');
+    mkdirSync(mid);
+    const file = join(mid, 'nested.txt');
+    const payload = 'held-parent-relative';
+    writeFileSync(file, payload);
+    const powershell = join(
+      process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    const stdout = execFileSync(
+      powershell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        SCRIPT,
+        'probe-relative',
+        file,
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    const result = JSON.parse(stdout.trim()) as {
+      ok: boolean;
+      via?: string;
+      sha256?: string;
+    };
+    assert.equal(result.ok, true);
+    assert.equal(result.via, 'relative');
+    assert.equal(
+      result.sha256,
+      createHash('sha256').update(payload).digest('hex'),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
