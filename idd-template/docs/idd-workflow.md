@@ -183,7 +183,9 @@ their own targets.
     [IDD helper script evaluation](idd-helper-scripts.md)) over prose
     judgment wherever one exists for the current step;
   - drafting output for human review rather than running the
-    autonomous merge phases, unless the lite F2.5 route resolves `fully_autonomous_merge`.
+    autonomous merge phases, unless the F2.5 merge handoff resolves the
+    merge policy to the enum `fully_autonomous_merge` (a raw
+    `mergePolicy` value does not count).
 - **Large-context, non-self-directing** (named out-of-band class):
   models that clear the context-sufficiency bar but cannot reliably
   self-direct a multi-turn execution loop. They are **not** admitted
