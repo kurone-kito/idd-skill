@@ -620,6 +620,8 @@ test('pre-merge readiness names both path sets when a record lists only the issu
     status: 'invalid',
     reason: 'record-conflict',
     recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    recordedFiles: issueSection,
+    liveFiles: livePaths,
   });
   assert.equal(
     published?.blockerDetail,

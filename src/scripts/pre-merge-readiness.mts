@@ -498,24 +498,49 @@ type ScopeOverrunReport = {
   reason: string;
   recordedHeadSha: string | null;
   /**
-   * Set only when `record-conflict` is a live path-set mismatch. Stripped
-   * before the schema-bound `claim.scopeOverrun` object is published; the
-   * blocker detail is what names both lists.
+   * Set only when `record-conflict` is a live path-set mismatch. Published
+   * as `recordedFiles` and `liveFiles` so F3's reducer can name both lists.
    */
   pathSetConflict?: ScopeOverrunPathSetConflict;
 };
 
+type PublishedScopeOverrun = {
+  status: ScopeOverrunReport['status'];
+  reason: string;
+  recordedHeadSha: string | null;
+  /** Present only for a live path-set mismatch. F3 reads these arrays. */
+  recordedFiles?: readonly string[];
+  liveFiles?: readonly string[];
+};
+
 /** Public scope-overrun object plus the blocker sentence that names a path mismatch. */
 export function publishScopeOverrun(report: ScopeOverrunReport): {
-  report: Omit<ScopeOverrunReport, 'pathSetConflict'>;
+  report: PublishedScopeOverrun;
   blockerDetail: string;
 } {
-  const { pathSetConflict, ...publicReport } = report;
   const base = `scope overrun ${report.status}: ${report.reason}`;
-  if (!pathSetConflict) return { report: publicReport, blockerDetail: base };
+  const conflict = report.pathSetConflict;
+  if (!conflict) {
+    return {
+      report: {
+        status: report.status,
+        reason: report.reason,
+        recordedHeadSha: report.recordedHeadSha,
+      },
+      blockerDetail: base,
+    };
+  }
+  const recordedFiles = conflict.recordedFiles;
+  const liveFiles = conflict.liveFiles;
   return {
-    report: publicReport,
-    blockerDetail: `${base}; recorded=${JSON.stringify(pathSetConflict.recordedFiles)}; live=${JSON.stringify(pathSetConflict.liveFiles)}`,
+    report: {
+      status: report.status,
+      reason: report.reason,
+      recordedHeadSha: report.recordedHeadSha,
+      recordedFiles,
+      liveFiles,
+    },
+    blockerDetail: `${base}; recorded=${JSON.stringify(recordedFiles)}; live=${JSON.stringify(liveFiles)}`,
   };
 }
 

@@ -250,12 +250,29 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
 };
 /** Public scope-overrun object plus the blocker sentence that names a path mismatch. */
 export function publishScopeOverrun(report) {
-  const { pathSetConflict, ...publicReport } = report;
   const base = `scope overrun ${report.status}: ${report.reason}`;
-  if (!pathSetConflict) return { report: publicReport, blockerDetail: base };
+  const conflict = report.pathSetConflict;
+  if (!conflict) {
+    return {
+      report: {
+        status: report.status,
+        reason: report.reason,
+        recordedHeadSha: report.recordedHeadSha,
+      },
+      blockerDetail: base,
+    };
+  }
+  const recordedFiles = conflict.recordedFiles;
+  const liveFiles = conflict.liveFiles;
   return {
-    report: publicReport,
-    blockerDetail: `${base}; recorded=${JSON.stringify(pathSetConflict.recordedFiles)}; live=${JSON.stringify(pathSetConflict.liveFiles)}`,
+    report: {
+      status: report.status,
+      reason: report.reason,
+      recordedHeadSha: report.recordedHeadSha,
+      recordedFiles,
+      liveFiles,
+    },
+    blockerDetail: `${base}; recorded=${JSON.stringify(recordedFiles)}; live=${JSON.stringify(liveFiles)}`,
   };
 }
 /**
