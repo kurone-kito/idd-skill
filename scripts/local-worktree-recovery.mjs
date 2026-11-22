@@ -7887,9 +7887,17 @@ export function copyPathWithSafeSymlinks(
   };
   const copyEntry = (source, destination) => {
     const sourceStat = lstatSync(source);
-    // The identity baseline is taken with the same lstat as sourceStat, before
-    // any copy, so a replaced ancestor cannot move the baseline to another file.
+    // The bigint identity is a second lstat taken right after sourceStat. A
+    // replaced ancestor between the two calls would split them across files,
+    // so refuse unless both name the same file. The number fields are the
+    // bigint values converted to numbers, so the comparison converts them too.
     const sourceIdentity = lstatSync(source, { bigint: true });
+    if (
+      Number(sourceIdentity.dev) !== sourceStat.dev ||
+      Number(sourceIdentity.ino) !== sourceStat.ino
+    ) {
+      throw new Error(`source changed while it was measured: ${source}`);
+    }
     const parentReal = ensureDestinationParent(destination);
     if (sourceStat.isSymbolicLink()) {
       const linkText = readlinkSync(source, 'utf8');
