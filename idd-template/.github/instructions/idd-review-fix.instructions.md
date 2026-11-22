@@ -261,6 +261,36 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
+**First-push secondary hold (optional, standard profile).** Apply this only when
+`advisoryWait.firstFixPushSecondaryWait` is set in `.github/idd/config.json`,
+and only to the first E12 push of a head. Without the setting, do not wait for
+any secondary bot before this push. With it, capture the PR head before the
+first poll with `gh pr view {pr-number} --json headRefOid --jq .headRefOid` into
+`PR_HEAD_SHA`, and start the duration when this push is otherwise ready (after
+post-fix-validate, before the claim revalidation gate). The secondary bots are
+the set that `secondaryQuietWindow` covers: `advisoryBotLogins` and
+`advisoryWait.secondaryBotLogin`, minus both identities of the primary bot, or,
+when no `advisoryBotLogins` resolves, the distributed bots `coderabbitai[bot]`
+and `chatgpt-codex-connector[bot]`. An empty set holds for the full duration.
+Every `advisoryWait.pollInterval`, under the E15 wake-up rule, re-read the PR
+head, and if it differs from `PR_HEAD_SHA`, stop folding and return to E1 before
+any push, as the E15 loop does. Otherwise read the PR reviews with `gh api
+--paginate repos/{owner}/{repo}/pulls/{pr-number}/reviews`, and wait until each
+secondary bot has a review whose `commit_id` equals `PR_HEAD_SHA`, or until the
+duration elapses, whichever comes first. A review with no inline comments (none
+in `gh api --paginate repos/{owner}/{repo}/pulls/{pr-number}/comments` whose
+`pull_request_review_id` equals that review's `id`) ends that bot's wait and
+adds nothing. Fold in only the inline findings that pass the bounded cross-round
+rules below. A finding that fails them stays for E1 after the push, as usual,
+and body-only findings are not folded here. A fold-in during the hold starts the
+10-minute bound from its first accumulated commit. When that bound runs out, or
+when the 3-commit cap is reached, folding stops, the hold ends at once, and the
+push goes out with what has accumulated. Before each fold-in commit, and again
+before the push, run the claim revalidation gate with its cwd-versus-claim
+check, because each commit is a local mutation; the polls change nothing locally
+and need no gate. When the setting is absent, this paragraph does not apply and
+E12 is unchanged.
+
 Then push the feature branch. With helper runtime, inspect and commit
 any validation or formatter output first, then push through
 `claimed-push` as D2 does. Under `instructions-only`, follow the E12
@@ -496,8 +526,9 @@ A false finding is Rejected on its merits.
    `advisoryWait.primaryBotLogin` (default Copilot); every other advisory
    bot, such as `chatgpt-codex-connector[bot]`, is secondary. Only F2's
    `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
-   waits, as a rescue for late arrivals and never as a wait for a review;
-   it folds across every configured secondary login.
+   waits, as a rescue for late arrivals and never as a wait for a review,
+   except the E12 hold above when its setting is present; it folds across
+   every configured secondary login.
 
 Unanswered advisory items block merge until each one is dispositioned,
 unless the gate settles it without a disposition, as it does for a

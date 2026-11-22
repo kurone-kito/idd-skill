@@ -39,6 +39,7 @@ type PolicyFixture = JsonRecord & {
     convergenceScope?: unknown;
     recoveryCycleCap?: unknown;
     terminalWindow?: unknown;
+    firstFixPushSecondaryWait?: unknown;
   };
 };
 
@@ -1909,6 +1910,33 @@ test('policy schema rejects a malformed advisoryWait.terminalWindow duration', (
   assert.ok(
     validate(instance, schema).length > 0,
     'expected a malformed terminalWindow to be rejected',
+  );
+});
+
+test('policy schema accepts advisoryWait.firstFixPushSecondaryWait as a whole-minute duration (#5303)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait = {
+    ...instance.advisoryWait,
+    firstFixPushSecondaryWait: 'PT5M',
+  };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test('policy schema rejects a malformed advisoryWait.firstFixPushSecondaryWait duration (#5303)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait = {
+    ...instance.advisoryWait,
+    firstFixPushSecondaryWait: 'not-a-duration',
+  };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a malformed firstFixPushSecondaryWait to be rejected',
   );
 });
 

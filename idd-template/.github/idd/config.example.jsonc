@@ -403,6 +403,11 @@
   //   // without the primary bot. Default: omitted, which turns the window
   //   // off.
   //   "secondaryQuietWindow": "PT15M",
+  //   // E12 hold on a head's first fix push, standard profile only: wait up to
+  //   // this long for each configured secondary advisory bot to review the head
+  //   // before the claim gate and the push, then fold in its findings that pass the
+  //   // E12 cross-round rules. Default: omitted, which means no hold.
+  //   "firstFixPushSecondaryWait": "PT5M",
   //   // Timing used only during a declared provider outage.
   //   "providerOutage": {
   //     // A shorter terminalWindow, used only while a valid outage
