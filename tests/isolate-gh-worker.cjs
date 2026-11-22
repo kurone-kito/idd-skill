@@ -989,11 +989,12 @@ function stripShellCommentsAndQuotedHereDocuments(source) {
   return { source: output.join(''), unquotedHereDocuments };
 }
 
+// Blank a closed here-string span to spaces, newlines included. A newline left
+// inside the span would act as a command separator for the text after the
+// closing marker, as in `Write-Host @'…'@ gh`, where `gh` is an argument.
 function blankPowerShellRange(characters, start, end) {
   for (let index = start; index < end; index += 1) {
-    if (characters[index] !== '\n' && characters[index] !== '\r') {
-      characters[index] = ' ';
-    }
+    characters[index] = ' ';
   }
 }
 
@@ -1097,11 +1098,18 @@ function blankPowerShellHereStrings(source) {
         closer = cursor;
         break;
       }
-      while (cursor < characters.length && characters[cursor] !== '\n') {
+      // PowerShell ends a line at CR, LF, or CRLF, so a lone CR also starts a
+      // new line in which a closing marker can appear.
+      while (
+        cursor < characters.length &&
+        characters[cursor] !== '\n' &&
+        characters[cursor] !== '\r'
+      ) {
         cursor += 1;
       }
       if (cursor >= characters.length) break;
-      cursor += 1;
+      cursor +=
+        characters[cursor] === '\r' && characters[cursor + 1] === '\n' ? 2 : 1;
     }
     // An opener with no closer makes the script's here-string structure
     // unknown. Blank nothing, so every command-position scan sees all text.
@@ -1191,16 +1199,18 @@ function readPowerShellSubexpression(source, start) {
   let quote = null;
   for (let index = start + 2; index < source.length; index += 1) {
     const character = source[index];
-    if (character === '`') {
-      index += 1;
-      continue;
-    }
     if (quote === "'") {
       if (character === "'" && source[index + 1] === "'") {
         index += 1;
         continue;
       }
       if (character === "'") quote = null;
+      continue;
+    }
+    // A backtick escapes the next character outside single quotes; inside
+    // them PowerShell reads it as a literal.
+    if (character === '`') {
+      index += 1;
       continue;
     }
     if (quote === '"') {
@@ -1231,16 +1241,16 @@ function powerShellSubstitutions(source) {
   let quote = null;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
-    if (character === '`') {
-      index += 1;
-      continue;
-    }
     if (quote === "'") {
       if (character === "'" && source[index + 1] === "'") {
         index += 1;
         continue;
       }
       if (character === "'") quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
       continue;
     }
     if (quote === '"') {

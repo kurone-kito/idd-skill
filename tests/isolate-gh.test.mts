@@ -1982,6 +1982,35 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       ].join('\n'),
       expectBlocked: false,
     },
+    {
+      name: 'gh after a closer on the same line is an argument',
+      body: ["Write-Host @'", 'body line', "'@ gh --version", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'lone CR before a closer ends a literal here-string',
+      body: ["$x = @'", "gh --version\rfoo\r'@", 'Write-Output ok', ''].join(
+        '\n',
+      ),
+      expectBlocked: false,
+    },
+    {
+      name: 'indented closer does not end a literal here-string',
+      body: ["$x = @'", "  '@", 'gh --version', "'@", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'mid-line closer does not end a literal here-string',
+      body: ["$x = @'", "text '@", 'gh --version', "'@", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'backtick is literal inside single quotes in a subexpression',
+      body: ['$x = @"', "$(Write-Output 'a`'; gh --version)", '"@', ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
   ];
   const scriptPaths: Record<string, string> = {};
   for (const fixture of fixtures) {
@@ -2039,29 +2068,38 @@ try {
 const workerSource = ${JSON.stringify(`
 const { parentPort, workerData } = require('node:worker_threads');
 const childProcess = require('node:child_process');
-try {
-  childProcess.spawnSync(workerData.shell, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-File',
-    workerData.scriptPath,
-  ]);
-  parentPort.postMessage({ blocked: false });
-} catch (error) {
-  parentPort.postMessage({
-    blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
-  });
+const out = [];
+for (const script of workerData.scripts) {
+  let blocked = false;
+  try {
+    childProcess.spawnSync(workerData.shell, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-File',
+      script.scriptPath,
+    ]);
+  } catch (error) {
+    blocked = error.code === 'IDD_UNEXPECTED_REAL_GH';
+  }
+  out.push({ name: script.name, blocked });
 }
+parentPort.postMessage(out);
 `)};
 const worker = new Worker(workerSource, {
   eval: true,
   workerData: {
     shell,
-    scriptPath: ${JSON.stringify(literalScript)},
+    scripts: ${JSON.stringify([
+      ...fixtures.map((fixture) => ({
+        name: `worker: ${fixture.name}`,
+        scriptPath: scriptPaths[fixture.name],
+      })),
+      { name: 'worker literal here-string', scriptPath: literalScript },
+    ])},
   },
 });
 worker.once('message', (message) => {
-  results.push({ name: 'worker literal here-string', blocked: message.blocked });
+  results.push(...message);
   process.stdout.write(JSON.stringify(results));
 });
 worker.once('error', (error) => {
@@ -2090,6 +2128,10 @@ worker.once('error', (error) => {
     const expected = new Map<string, boolean>([
       ...fixtures.map(
         (fixture) => [fixture.name, fixture.expectBlocked] as const,
+      ),
+      ...fixtures.map(
+        (fixture) =>
+          [`worker: ${fixture.name}`, fixture.expectBlocked] as const,
       ),
       ['powershell -Command', true],
       ['worker literal here-string', false],
