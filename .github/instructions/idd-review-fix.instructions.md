@@ -266,6 +266,18 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
+**First-push secondary hold (optional, standard profile).** Apply this only
+when `advisoryWait.firstFixPushSecondaryWait` is set, and only to the first E12
+push of a head. Hold before the claim revalidation gate and the push below.
+The hold ends for each secondary advisory bot (the top-level `advisoryBotLogins`
+minus `advisoryWait.primaryBotLogin`) when that bot submits a review whose
+`commit_id` equals the pre-push HEAD and whose submission time is after the hold
+started, or when the duration elapses, whichever comes first. A review with no
+inline comments ends that bot's wait and adds nothing. Fold in only findings that
+pass the bounded cross-round rules below. The 10-minute bound counts from the
+first accumulated commit, so the hold does not use it. When the setting is
+absent, this paragraph does not apply and E12 is unchanged.
+
 Then push the feature branch. With helper runtime, inspect and commit
 any validation or formatter output first, then push through
 `claimed-push` as D2 does. Under `instructions-only`, follow the E12
@@ -497,12 +509,14 @@ A false finding is Rejected on its merits.
    Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll or wait for a secondary bot's review
-   here, at E1, or at E2. Your primary bot is
+   here, at E1, or at E2 (the E12 hold above is the one exception, and only
+   when its setting is present). Your primary bot is
    `advisoryWait.primaryBotLogin` (default Copilot); every other advisory
    bot, such as `chatgpt-codex-connector[bot]`, is secondary. Only F2's
    `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
-   waits, as a rescue for late arrivals and never as a wait for a review;
-   it folds across every configured secondary login.
+   waits, as a rescue for late arrivals and never as a wait for a review,
+   except the E12 hold above when its setting is present; it folds across
+   every configured secondary login.
 
 Unanswered advisory items block merge until each one is dispositioned,
 unless the gate settles it without a disposition, as it does for a
