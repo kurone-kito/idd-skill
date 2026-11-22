@@ -5604,7 +5604,7 @@ function runRecoveryCore(
     // The Windows helper buffers each file whole, so a file it cannot hold
     // would fail partway through apply, after the stash and ref steps. Check
     // every regular file of the checkout before the first mutation.
-    let oversize: string | null;
+    let oversize: { path: string; reason: OversizeCopyReason } | null;
     try {
       oversize = findOversizeCopySource(
         [targetPath],
@@ -5617,7 +5617,9 @@ function runRecoveryCore(
     }
     if (oversize !== null) {
       return recordRemovalFailure(
-        `refusing --apply: ${oversize} is larger than the Windows no-follow helper can copy in one read; no mutation`,
+        oversize.reason === 'size'
+          ? `refusing --apply: ${oversize.path} is larger than the Windows no-follow helper can copy in one read; no mutation`
+          : `refusing --apply: ${oversize.path} has more than one hard link, which the Windows no-follow helper refuses; no mutation`,
       );
     }
   }
@@ -8701,17 +8703,41 @@ function resolveWindowsCopyDeps(
 }
 
 /**
- * The first regular file under `roots` larger than `maxBytes`, or `null`. The
- * walk uses lstat and does not follow links, except that a symbolic link is
- * measured by its target, because recovery materializes in-tree links. A
- * missing root holds nothing to copy. The top-level `.git` entry of a root is
- * not walked: recovery copies the git-admin directory separately, and it is
- * not checkout content. A read error throws, so the caller fails closed.
+ * Why the Windows helper copy would refuse a file in the walk: it is over the
+ * helper's single-read limit, or it has more than one hard link.
+ */
+export type OversizeCopyReason = 'size' | 'hard-link';
+
+/**
+ * The first regular file under `roots` that the Windows helper copy would
+ * refuse, with the reason, or `null`. The walk uses lstat and measures a link
+ * only when its target lies inside a declared root, because recovery
+ * materializes such a link and keeps any other link as link text. A missing
+ * root holds nothing to copy, and a dangling link materializes nothing. Any
+ * other read error throws, so the caller fails closed. The top-level `.git`
+ * entry of a root is not walked, because recovery copies the git-admin
+ * directory separately.
  */
 export function findOversizeCopySource(
   roots: readonly string[],
   maxBytes: number = WINDOWS_HELPER_MAX_FILE_BYTES,
-): string | null {
+): { path: string; reason: OversizeCopyReason } | null {
+  const rootReals = roots.flatMap((root) => {
+    try {
+      return [realpathSync(root)];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+  });
+  const check = (
+    path: string,
+    stat: Stats,
+  ): { path: string; reason: OversizeCopyReason } | null => {
+    if (stat.size > maxBytes) return { path, reason: 'size' };
+    if (stat.nlink > 1) return { path, reason: 'hard-link' };
+    return null;
+  };
   const visited = new Set<string>();
   const pending: { path: string; root: boolean }[] = roots.map((path) => ({
     path,
@@ -8731,18 +8757,25 @@ export function findOversizeCopySource(
       let target: Stats;
       try {
         target = statSync(next.path);
-      } catch {
-        continue; // a dangling link materializes nothing
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const linkReal = realpathSync(next.path);
+      if (!rootReals.some((root) => isPathContainedIn(linkReal, root))) {
+        continue;
       }
       if (target.isFile()) {
-        if (target.size > maxBytes) return next.path;
+        const found = check(next.path, target);
+        if (found !== null) return found;
         continue;
       }
       if (!target.isDirectory()) continue;
       stat = target;
     }
     if (stat.isFile()) {
-      if (stat.size > maxBytes) return next.path;
+      const found = check(next.path, stat);
+      if (found !== null) return found;
       continue;
     }
     if (!stat.isDirectory()) continue;

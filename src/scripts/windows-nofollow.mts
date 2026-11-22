@@ -616,11 +616,12 @@ function freshBytesPath(deps: NoFollowDeps): string {
 
 /**
  * The largest regular file the Windows helper reads or copies. The helper
- * buffers a whole file in memory and refuses anything larger than
- * `uint32.MaxValue` bytes (`windows-nofollow.ps1`). Callers that copy a tree
- * check sizes against this before the first mutation.
+ * allocates the whole file as a managed byte array sized by a signed 32-bit
+ * `[int]` (`Read-BytesFromHandle` in `windows-nofollow.ps1`), so the real limit
+ * is `int32` max, below the `uint32` bound its own size check uses. Callers
+ * that copy a tree check sizes against this before the first mutation.
  */
-export const WINDOWS_HELPER_MAX_FILE_BYTES = 0xffff_ffff;
+export const WINDOWS_HELPER_MAX_FILE_BYTES = 0x7fff_ffff;
 
 /**
  * Read a regular file without following a symbolic link, junction, or other
