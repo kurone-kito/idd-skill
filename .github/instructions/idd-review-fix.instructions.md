@@ -266,30 +266,31 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-**First-push secondary hold (optional, standard profile).** Apply this only
-when `advisoryWait.firstFixPushSecondaryWait` is set in `.github/idd/config.json`,
-and only to the first E12 push of a head. Without the setting, do not wait for any
-secondary bot before this push. With it, the duration starts when this push is
-otherwise ready (after fix-validate, before the claim revalidation gate), and the
-hold runs before that gate and the push below. The secondary bots are the set that
-`secondaryQuietWindow` covers: `advisoryBotLogins` and
+**First-push secondary hold (optional, standard profile).** Apply this only when
+`advisoryWait.firstFixPushSecondaryWait` is set in `.github/idd/config.json`,
+and only to the first E12 push of a head. Without the setting, do not wait for
+any secondary bot before this push. With it, the duration starts when this push
+is otherwise ready (after post-fix-validate, before the claim revalidation
+gate), and the hold runs before that gate and the push below. The secondary bots
+are the set that `secondaryQuietWindow` covers: `advisoryBotLogins` and
 `advisoryWait.secondaryBotLogin`, minus both identities of the primary bot, or,
-when no `advisoryBotLogins` resolves, the distributed bots `coderabbitai[bot]` and
-`chatgpt-codex-connector[bot]`. An empty set holds for the full duration. Every
-`advisoryWait.pollInterval`, under the E15 wake-up rule, read the PR reviews with
-`gh api --paginate repos/{owner}/{repo}/pulls/{pr-number}/reviews`, and wait until
-each secondary bot has a review whose `commit_id` equals the PR head before this
-push (`PR_HEAD_SHA`, E14 step 1), or until the duration elapses, whichever comes
-first. A review with no inline comments (none in
-`gh api --paginate repos/{owner}/{repo}/pulls/{pr-number}/comments` whose
-`pull_request_review_id` equals that review's `id`) ends that bot's wait and adds
-nothing. Fold in only the inline findings that pass the bounded cross-round rules
-below. A finding that fails them stays for E1 after the push, as usual, and
-body-only findings are not folded here. A fold-in during the hold starts the
-10-minute bound from its first accumulated commit. When that bound runs out,
-folding stops, the hold ends at once, and the push goes out with what has
-accumulated. The order is hold, then the claim revalidation gate, then the push.
-When the setting is absent, this paragraph does not apply and E12 is unchanged.
+when no `advisoryBotLogins` resolves, the distributed bots `coderabbitai[bot]`
+and `chatgpt-codex-connector[bot]`. An empty set holds for the full duration.
+Every `advisoryWait.pollInterval`, under the E15 wake-up rule, read the PR
+reviews with `gh api --paginate repos/{owner}/{repo}/pulls/{pr-number}/reviews`,
+and wait until each secondary bot has a review whose `commit_id` equals the PR
+head before this push (`PR_HEAD_SHA`, E14 step 1), or until the duration
+elapses, whichever comes first. A review with no inline comments (none in `gh
+api --paginate repos/{owner}/{repo}/pulls/{pr-number}/comments` whose
+`pull_request_review_id` equals that review's `id`) ends that bot's wait and
+adds nothing. Fold in only the inline findings that pass the bounded cross-round
+rules below. A finding that fails them stays for E1 after the push, as usual,
+and body-only findings are not folded here. A fold-in during the hold starts the
+10-minute bound from its first accumulated commit. When that bound runs out, or
+when the 3-commit cap is reached, folding stops, the hold ends at once, and the
+push goes out with what has accumulated. The order is hold, then the claim
+revalidation gate, then the push. When the setting is absent, this paragraph
+does not apply and E12 is unchanged.
 
 Then push the feature branch. With helper runtime, inspect and commit
 any validation or formatter output first, then push through
