@@ -1839,3 +1839,541 @@ test('path shim: windows powershell resolves gh through the guard bin', {
   );
   assertCaughtByShim(run);
 });
+
+test('PowerShell -File here-string regions stay out of command-position scans', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-gh-ps-herestring-'));
+  const ledgerPath = join(root, 'attempts.jsonl');
+  const shell = 'powershell.exe';
+  const fixtures: Array<{
+    name: string;
+    body: string;
+    expectBlocked: boolean;
+  }> = [
+    {
+      name: 'literal here-string prose',
+      body: [
+        "$x = @'",
+        '// (PowerShell 5.1 note) mentions gh only in prose',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string prose',
+      body: [
+        '$x = @"',
+        'bare powershell and gh prose only',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string substitution',
+      body: [
+        '$x = @"',
+        '$(gh api repos/o/r)',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'command outside here-string',
+      body: ["$x = @'", 'safe prose', "'@", 'gh api repos/o/r', ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'unterminated here-string opener',
+      body: ["$x = @'", 'unterminated body', 'gh api repos/o/r', ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'mid-line at-quote is not an opener',
+      body: [
+        "Write-Output ok; $x = @' still-more-on-same-line",
+        'gh api repos/o/r',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'bareword at-quote before a string is not an opener',
+      body: [
+        "Write-Output a@'",
+        "'",
+        'gh api repos/o/r',
+        "$x = @'",
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'expandable here-string apostrophe prose only',
+      body: [
+        '$x = @"',
+        "Don't mention gh here",
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'expandable here-string apostrophe before substitution',
+      body: [
+        '$x = @"',
+        "Don't run $(gh api repos/o/r)",
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'unterminated opener before a closed expandable span',
+      body: [
+        "$a = @'",
+        "Write-Output ok'",
+        '$b = @"',
+        'gh api repos/o/r',
+        '"@',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'colon-bound parameter literal here-string prose',
+      body: [
+        "Write-Output -InputObject:@'",
+        '// (PowerShell 5.1 note) mentions gh only in prose',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'colon-bound parameter here-string does not hide a later command',
+      body: [
+        "Write-Output -InputObject:@'",
+        'hello',
+        "'@",
+        'gh api repos/o/r',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'colon-bound parameter expandable here-string prose',
+      body: [
+        'Write-Output -InputObject:@"',
+        'bare gh prose only',
+        '"@',
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'gh after a closer on the same line is an argument',
+      body: ["Write-Host @'", 'body line', "'@ gh --version", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'lone CR before a closer ends a literal here-string',
+      body: ["$x = @'", "gh --version\rfoo\r'@", 'Write-Output ok', ''].join(
+        '\n',
+      ),
+      expectBlocked: false,
+    },
+    {
+      name: 'indented closer does not end a literal here-string',
+      body: ["$x = @'", "  '@", 'gh --version', "'@", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'mid-line closer does not end a literal here-string',
+      body: ["$x = @'", "text '@", 'gh --version', "'@", ''].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'call operator runs a here-string value',
+      body: ["& @'", 'C:\\tools\\gh.exe', "'@ api repos/o/r", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'command payload here-string is scanned',
+      body: [
+        "powershell -NoProfile -Command @'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'piped here-string into iex is scanned',
+      body: ["@'", 'gh --version', "'@ | iex", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'colon-bound -Command payload here-string is scanned',
+      body: [
+        "powershell -NoProfile -Command:@'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'parenthesized here-string piped into iex is scanned',
+      body: ["(@'", 'C:/tools/gh.exe api repos/o/r', "'@) | iex", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'scriptblock Create on a here-string is scanned',
+      body: [
+        "[scriptblock]::Create(@'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@).Invoke()",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'literal body that mentions iex of its own variable stays prose',
+      body: [
+        "$code = @'",
+        'gh api repos/o/r',
+        'iex $code',
+        "'@; Write-Output $code",
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'subexpression of an expandable here-string runs a payload',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        'Write-Output @"',
+        '$(iex $code)',
+        '"@',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'Start-Process runs a here-string used as its FilePath',
+      body: [
+        "Start-Process -FilePath @'",
+        'C:/tools/gh.exe',
+        "'@ -ArgumentList '--version'",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'payload run from a payload held in a variable is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        "$run = @'",
+        'iex $code',
+        "'@",
+        'iex $run',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'scoped variable holding a here-string is run by iex',
+      body: [
+        "$script:code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        'iex $script:code',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'braced variable holding a here-string is run by iex',
+      body: [
+        `\${code} = @'`,
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        `iex \${code}`,
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'variable piped into iex is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '$code | iex',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'continued iex before a variable payload is scanned',
+      body: [
+        "$payload = @'",
+        'gh --version',
+        "'@",
+        'iex `',
+        '  $payload',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'backtick-continued iex before a here-string is scanned',
+      body: ['iex `', "@'", 'C:/tools/gh.exe api repos/o/r', "'@", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'here-string held in a variable and run by iex is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        'iex $code',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'here-string held in a variable and only printed stays literal',
+      body: [
+        "$note = @'",
+        'prose mentioning gh only',
+        "'@",
+        'Write-Output $note',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'common parameters before a here-string in Invoke-Expression',
+      body: [
+        "Invoke-Expression -ErrorAction Stop @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'pipeline continued on the next line into iex is scanned',
+      body: ["@'", 'C:/tools/gh.exe api repos/o/r', "'@ |", 'iex', ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'block comment before a here-string after iex is scanned',
+      body: [
+        "iex <# explain #> @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'CurrentOperation here-string is display text',
+      body: [
+        "Write-Progress -Activity 'Checking' -CurrentOperation @'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'piped here-string keeps a line comment boundary',
+      body: ["@'", '# heading', 'gh api repos/o/r', "'@ | iex", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'piped here-string keeps statement boundaries',
+      body: ["@'", 'Write-Output ok', 'gh api repos/o/r', "'@ | iex", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'argument here-string prose stays literal',
+      body: [
+        "Write-Host @'",
+        'prose mentioning gh only',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'backtick is literal inside single quotes in a subexpression',
+      body: ['$x = @"', "$(Write-Output 'a`'; gh --version)", '"@', ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+  ];
+  const scriptPaths: Record<string, string> = {};
+  for (const fixture of fixtures) {
+    const scriptPath = join(root, `${fixture.name.replaceAll(' ', '-')}.ps1`);
+    writeFileSync(scriptPath, fixture.body, 'utf8');
+    scriptPaths[fixture.name] = scriptPath;
+  }
+  const literalScript = join(root, 'worker-literal.ps1');
+  writeFileSync(
+    literalScript,
+    ["$x = @'", '// (PowerShell 5.1 note)', "'@", 'Write-Output ok', ''].join(
+      '\n',
+    ),
+    'utf8',
+  );
+
+  const childSource = `
+const { Worker } = require('node:worker_threads');
+const childProcess = require('node:child_process');
+const fixtures = ${JSON.stringify(
+    fixtures.map((fixture) => ({
+      name: fixture.name,
+      scriptPath: scriptPaths[fixture.name],
+      expectBlocked: fixture.expectBlocked,
+    })),
+  )};
+const shell = ${JSON.stringify(shell)};
+const results = [];
+for (const fixture of fixtures) {
+  try {
+    childProcess.spawnSync(
+      shell,
+      ['-NoProfile', '-NonInteractive', '-File', fixture.scriptPath],
+    );
+    results.push({ name: fixture.name, blocked: false });
+  } catch (error) {
+    results.push({
+      name: fixture.name,
+      blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+    });
+  }
+}
+try {
+  childProcess.spawnSync(
+    shell,
+    ['-NoProfile', '-NonInteractive', '-Command', 'gh api repos/o/r'],
+  );
+  results.push({ name: 'powershell -Command', blocked: false });
+} catch (error) {
+  results.push({
+    name: 'powershell -Command',
+    blocked: error.code === 'IDD_UNEXPECTED_REAL_GH',
+  });
+}
+const workerSource = ${JSON.stringify(`
+const { parentPort, workerData } = require('node:worker_threads');
+const childProcess = require('node:child_process');
+const out = [];
+for (const script of workerData.scripts) {
+  let blocked = false;
+  try {
+    childProcess.spawnSync(workerData.shell, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-File',
+      script.scriptPath,
+    ]);
+  } catch (error) {
+    blocked = error.code === 'IDD_UNEXPECTED_REAL_GH';
+  }
+  out.push({ name: script.name, blocked });
+}
+parentPort.postMessage(out);
+`)};
+const worker = new Worker(workerSource, {
+  eval: true,
+  workerData: {
+    shell,
+    scripts: ${JSON.stringify([
+      ...fixtures.map((fixture) => ({
+        name: `worker: ${fixture.name}`,
+        scriptPath: scriptPaths[fixture.name],
+      })),
+      { name: 'worker literal here-string', scriptPath: literalScript },
+    ])},
+  },
+});
+worker.once('message', (message) => {
+  results.push(...message);
+  process.stdout.write(JSON.stringify(results));
+});
+worker.once('error', (error) => {
+  console.error(error);
+  process.exitCode = 2;
+});
+`;
+
+  try {
+    const child = spawnSync(process.execPath, ['-e', childSource], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
+        IDD_TEST_GH_GUARD_ALLOWED_STUBS: '[]',
+        IDD_TEST_GH_GUARD_SELF_CHECK: '1',
+      },
+    });
+    assert.equal(child.status, 1, child.stderr);
+    assert.match(child.stderr, /owning test process must fail/u);
+    const results = JSON.parse(child.stdout) as Array<{
+      name: string;
+      blocked: boolean;
+    }>;
+    const expected = new Map<string, boolean>([
+      ...fixtures.map(
+        (fixture) => [fixture.name, fixture.expectBlocked] as const,
+      ),
+      ...fixtures.map(
+        (fixture) =>
+          [`worker: ${fixture.name}`, fixture.expectBlocked] as const,
+      ),
+      ['powershell -Command', true],
+      ['worker literal here-string', false],
+    ]);
+    assert.equal(results.length, expected.size);
+    for (const result of results) {
+      assert.equal(
+        result.blocked,
+        expected.get(result.name),
+        `${result.name}: expected blocked=${String(expected.get(result.name))}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

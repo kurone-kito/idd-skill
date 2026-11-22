@@ -989,6 +989,212 @@ function stripShellCommentsAndQuotedHereDocuments(source) {
   return { source: output.join(''), unquotedHereDocuments };
 }
 
+// Blank a closed here-string span to spaces, newlines included. A newline left
+// inside the span would act as a command separator for the text after the
+// closing marker, as in `Write-Host @'…'@ gh`, where `gh` is an argument.
+function blankPowerShellRange(characters, start, end) {
+  for (let index = start; index < end; index += 1) {
+    characters[index] = ' ';
+  }
+}
+
+// Characters that continue a PowerShell bareword, so an `@` after one of them
+// does not start a here-string. Keep this set identical to isolate-gh.mts.
+const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
+
+// Text before a here-string opener, and after its closer, that makes PowerShell
+// run the here-string value. Keep these identical to isolate-gh.mts.
+const POWERSHELL_INVOKED_BEFORE =
+  /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|start-process(?:\s+-[a-z]+(?:\s+[^\s@-][^\s@]*)?)*\s+-file(?:path)?:?|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
+const POWERSHELL_INVOKED_AFTER =
+  /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
+
+// Block comments are whitespace to PowerShell, so they are dropped first.
+function withoutBlockComments(text) {
+  return text.replace(/<#[\s\S]*?#>/gu, ' ');
+}
+
+// A backtick at the end of a line continues the statement onto the next.
+function withoutLineContinuations(text) {
+  return text.replace(/`\r?\n/gu, ' ');
+}
+
+// Variable names whose value PowerShell runs: `iex $name`, `& $name`, or a
+// `-Command $name` argument. A here-string assigned to one of them is a payload.
+function powerShellPayloadVariables(source) {
+  const names = new Set();
+  const consumer =
+    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|start-process(?:\s+-[a-z]+(?:\s+[^\s@-][^\s@]*)?)*\s+-file(?:path)?:?|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))/giu;
+  const text = withoutLineContinuations(source);
+  for (const match of text.matchAll(consumer)) {
+    names.add(variableName(match));
+  }
+  // A variable piped into `iex` is the payload too.
+  const piped =
+    /\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))\s*\|\s*(?:iex|invoke-expression)(?![\w-])/giu;
+  for (const match of text.matchAll(piped)) {
+    names.add(variableName(match));
+  }
+  return names;
+}
+
+// The lowercased name of a variable matched by a pattern that captures it as
+// either `${name}` (group 1) or `$name` / `$scope:name` (group 2).
+function variableName(match) {
+  return (match[1] ?? match[2] ?? '').toLowerCase();
+}
+
+function isInvokedHereString(characters, opener, closer, payloadVariables) {
+  // The text before the opener counts from the start, since a continued line,
+  // a comment, or a parenthesis can sit between the keyword and the opener.
+  // The text after the closer counts to the end, since a pipeline may continue.
+  const before = withoutLineContinuations(
+    withoutBlockComments(characters.slice(0, opener).join('')),
+  );
+  const after = withoutLineContinuations(
+    withoutBlockComments(characters.slice(closer + 2).join('')),
+  );
+  const assigned =
+    /\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))\s*=\s*\(*\s*$/iu.exec(
+      before,
+    );
+  return (
+    POWERSHELL_INVOKED_BEFORE.test(before) ||
+    POWERSHELL_INVOKED_AFTER.test(after) ||
+    (assigned !== null && payloadVariables.has(variableName(assigned)))
+  );
+}
+
+function blankPowerShellHereStrings(source, payloadVariables) {
+  const characters = [...source];
+  const expandableHereStrings = [];
+  let quote = null;
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    if (quote === "'") {
+      if (character === "'" && characters[index + 1] === "'") index += 1;
+      else if (character === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '`') index += 1;
+      else if (character === '"') quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
+      continue;
+    }
+    if (character === "'") {
+      quote = "'";
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === '<' && characters[index + 1] === '#') {
+      let depth = 1;
+      index += 2;
+      while (index < characters.length && depth > 0) {
+        if (characters[index] === '<' && characters[index + 1] === '#') {
+          depth += 1;
+          index += 2;
+        } else if (characters[index] === '#' && characters[index + 1] === '>') {
+          depth -= 1;
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      index -= 1;
+      continue;
+    }
+    if (character === '#') {
+      while (index < characters.length && characters[index] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (character !== '@') continue;
+    const hereQuote = characters[index + 1];
+    if (hereQuote !== "'" && hereQuote !== '"') continue;
+    // `@` directly after a bareword character continues that bareword, so
+    // `a@'` is `a@` followed by an ordinary string, not a here-string. Every
+    // other preceding character (`:` in `-Param:@'`, `(`, `=`, quotes, space)
+    // starts one, as the PowerShell parser does.
+    if (
+      index > 0 &&
+      POWERSHELL_BAREWORD_CONTINUATION.test(characters[index - 1] ?? '')
+    ) {
+      continue;
+    }
+    let lookahead = index + 2;
+    let validOpener = true;
+    while (
+      lookahead < characters.length &&
+      characters[lookahead] !== '\n' &&
+      characters[lookahead] !== '\r'
+    ) {
+      if (characters[lookahead] !== ' ' && characters[lookahead] !== '\t') {
+        validOpener = false;
+        break;
+      }
+      lookahead += 1;
+    }
+    if (!validOpener) continue;
+    let lineStart = lookahead;
+    if (characters[lineStart] === '\r' && characters[lineStart + 1] === '\n') {
+      lineStart += 2;
+    } else if (
+      characters[lineStart] === '\n' ||
+      characters[lineStart] === '\r'
+    ) {
+      lineStart += 1;
+    } else {
+      continue;
+    }
+    let closer = -1;
+    let cursor = lineStart;
+    while (cursor < characters.length) {
+      if (characters[cursor] === hereQuote && characters[cursor + 1] === '@') {
+        closer = cursor;
+        break;
+      }
+      // PowerShell ends a line at CR, LF, or CRLF, so a lone CR also starts a
+      // new line in which a closing marker can appear.
+      while (
+        cursor < characters.length &&
+        characters[cursor] !== '\n' &&
+        characters[cursor] !== '\r'
+      ) {
+        cursor += 1;
+      }
+      if (cursor >= characters.length) break;
+      cursor +=
+        characters[cursor] === '\r' && characters[cursor + 1] === '\n' ? 2 : 1;
+    }
+    // PowerShell refuses to parse a script with an unterminated here-string,
+    // so nothing runs. Blank nothing more, but keep the bodies already
+    // collected so their $() are still scanned.
+    if (closer < 0) return { source, expandableHereStrings };
+    if (hereQuote === '"') {
+      expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
+    }
+    if (isInvokedHereString(characters, index, closer, payloadVariables)) {
+      // The value is run as code, so keep its text and line breaks. Blank only
+      // the markers: the line breaks are the payload's statement and comment
+      // boundaries, and a command on the line after `-Command:` is a command.
+      blankPowerShellRange(characters, index, index + 2);
+      blankPowerShellRange(characters, closer, closer + 2);
+    } else {
+      blankPowerShellRange(characters, index, closer + 2);
+    }
+    index = closer + 1;
+  }
+  return { source: characters.join(''), expandableHereStrings };
+}
+
 function stripPowerShellComments(source) {
   const characters = [...source];
   let quote = null;
@@ -1052,21 +1258,48 @@ function stripPowerShellComments(source) {
   return characters.join('');
 }
 
+function stripPowerShellCommentsAndHereStrings(source) {
+  // Payload variables come from executable text only: literal here-strings and
+  // comments are removed before the consumers are read. A payload can run
+  // another payload, so the search repeats until no new name appears.
+  let payloadVariables = new Set();
+  let blanked = blankPowerShellHereStrings(source, payloadVariables);
+  for (;;) {
+    // Expandable bodies are blanked for tokenization, but their `$()` run during
+    // expansion, so the subexpressions are part of the executable text.
+    const subexpressions = blanked.expandableHereStrings
+      .flatMap(expandableHereStringSubstitutions)
+      .join('\n');
+    const discovered = powerShellPayloadVariables(
+      `${stripPowerShellComments(blanked.source)}\n${subexpressions}`,
+    );
+    if ([...discovered].every((name) => payloadVariables.has(name))) break;
+    payloadVariables = new Set([...payloadVariables, ...discovered]);
+    blanked = blankPowerShellHereStrings(source, payloadVariables);
+  }
+  return {
+    source: stripPowerShellComments(blanked.source),
+    expandableHereStrings: blanked.expandableHereStrings,
+  };
+}
+
 function readPowerShellSubexpression(source, start) {
   let depth = 1;
   let quote = null;
   for (let index = start + 2; index < source.length; index += 1) {
     const character = source[index];
-    if (character === '`') {
-      index += 1;
-      continue;
-    }
     if (quote === "'") {
       if (character === "'" && source[index + 1] === "'") {
         index += 1;
         continue;
       }
       if (character === "'") quote = null;
+      continue;
+    }
+    // A backtick escapes the next character outside single quotes; inside
+    // them PowerShell reads it as a literal.
+    if (character === '`') {
+      index += 1;
       continue;
     }
     if (quote === '"') {
@@ -1097,16 +1330,16 @@ function powerShellSubstitutions(source) {
   let quote = null;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
-    if (character === '`') {
-      index += 1;
-      continue;
-    }
     if (quote === "'") {
       if (character === "'" && source[index + 1] === "'") {
         index += 1;
         continue;
       }
       if (character === "'") quote = null;
+      continue;
+    }
+    if (character === '`') {
+      index += 1;
       continue;
     }
     if (quote === '"') {
@@ -1132,6 +1365,29 @@ function powerShellSubstitutions(source) {
   return substitutions;
 }
 
+/**
+ * `$()` subexpressions inside an expandable `@"…"@` body. The body starts
+ * outside any quote state: PowerShell expands `$()` there, and quote
+ * characters in the body are literal text, not string delimiters.
+ */
+function expandableHereStringSubstitutions(body) {
+  const substitutions = [];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === '`') {
+      index += 1;
+      continue;
+    }
+    if (body.startsWith('$(', index)) {
+      const nested = readPowerShellSubexpression(body, index);
+      if (nested) {
+        substitutions.push(nested.body);
+        index = nested.end;
+      }
+    }
+  }
+  return substitutions;
+}
+
 function shellGhCommand(
   command,
   env,
@@ -1144,11 +1400,14 @@ function shellGhCommand(
           stripShellLineContinuations(String(command)),
         )
       : null;
+  const powershellSource =
+    flavor === 'powershell'
+      ? stripPowerShellCommentsAndHereStrings(String(command))
+      : null;
   const parsedSource =
     posixSource?.source ??
-    (flavor === 'powershell'
-      ? stripPowerShellComments(String(command))
-      : String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ '));
+    powershellSource?.source ??
+    String(command).replace(/\$\([^)]*\)/gu, ' __literal_substitution__ ');
   const substitutions =
     flavor === 'posix'
       ? [
@@ -1158,7 +1417,12 @@ function shellGhCommand(
           ) ?? []),
         ]
       : flavor === 'powershell'
-        ? powerShellSubstitutions(parsedSource)
+        ? [
+            ...powerShellSubstitutions(parsedSource),
+            ...(powershellSource?.expandableHereStrings.flatMap(
+              expandableHereStringSubstitutions,
+            ) ?? []),
+          ]
         : [];
   for (const substitution of substitutions) {
     const nested = shellGhCommand(substitution, env, flavor, cwd);
