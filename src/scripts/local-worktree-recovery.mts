@@ -119,6 +119,8 @@ import {
   type PreserveGuardDeps,
 } from './preserve-destination.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
+import { isWindowsNoFollowOpenAvailable } from './user-global-paths.mts';
+import { copyNoFollow, type NoFollowDeps } from './windows-nofollow.mts';
 import {
   type ConfirmationReference,
   canonicalSubject,
@@ -1088,6 +1090,14 @@ export interface LocalWorktreeRecoveryDeps {
   acquireCloneLock: (repoPath: string, agentId: string) => CloneLockHandle;
   releaseCloneLock: (handle: CloneLockHandle) => void;
   resolveDevelopmentBranch: () => string;
+  /** The no-follow flags the regular-file copy and the apply gate check.
+   * Production uses the node:fs constants. Tests inject flags that are absent,
+   * which is how native Windows looks to Node. */
+  noFollowFlags?: { O_NOFOLLOW?: number; O_NONBLOCK?: number };
+  /** The Windows no-follow helper (issue #5287) used when the flags above are
+   * absent. `false` forces the refusal; an object supplies helper deps;
+   * `true` or omitted uses the default discovery. Applies only on `win32`. */
+  windowsNoFollow?: boolean | NoFollowDeps;
   copyPath: (
     from: string,
     to: string,
@@ -5570,9 +5580,11 @@ function runRecoveryCore(
   // Node does not expose that primitive on every platform (notably
   // Windows), so reject apply before any stash, ref, or copy mutation rather
   // than discovering the limitation after partial preservation.
+  const noFollowFlags = deps.noFollowFlags ?? constants;
   if (
-    constants.O_NOFOLLOW === undefined ||
-    constants.O_NONBLOCK === undefined
+    (noFollowFlags.O_NOFOLLOW === undefined ||
+      noFollowFlags.O_NONBLOCK === undefined) &&
+    resolveWindowsCopyDeps(deps.windowsNoFollow) === null
   ) {
     return recordRemovalFailure(
       'refusing --apply: this platform does not support the no-follow and nonblocking file opens required for recovery copies; no mutation',
@@ -8640,11 +8652,30 @@ function loadRecoveryIddConfig(repositoryRoot: string): unknown | null {
  * that lexically points into the source root fails closed rather than being
  * recorded as preserved merely because its directory entry exists.
  */
+/**
+ * The Windows no-follow helper for the recovery copy, when it applies. It is
+ * used only on `win32` and only when the POSIX flags are absent. `false`
+ * forces the refusal, an object supplies the helper deps, and `true` or an
+ * omitted override uses the default discovery.
+ */
+function resolveWindowsCopyDeps(
+  override: boolean | NoFollowDeps | undefined,
+): NoFollowDeps | null {
+  if (override === false) return null;
+  const deps: NoFollowDeps =
+    typeof override === 'object' && override !== null ? override : {};
+  const platform = deps.platform ?? process.platform;
+  if (platform !== 'win32') return null;
+  return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
+}
+
 export function copyPathWithSafeSymlinks(
   from: string,
   to: string,
   sourceRoot: string = from,
   additionalSourceRoots: string[] = [],
+  noFollowFlags: { O_NOFOLLOW?: number; O_NONBLOCK?: number } = constants,
+  windowsNoFollow: boolean | NoFollowDeps | undefined = undefined,
 ): void {
   const sourceRootsAbsolute = [sourceRoot, ...additionalSourceRoots].map(
     (root) => resolve(root),
@@ -8882,53 +8913,76 @@ export function copyPathWithSafeSymlinks(
       let sourceFd: number | null = null;
       let temporaryFd: number | null = null;
       let copiedSourceStat: Stats | null = null;
-      try {
-        const noFollow = constants.O_NOFOLLOW;
-        const nonBlocking = constants.O_NONBLOCK;
-        if (noFollow === undefined || nonBlocking === undefined) {
-          throw new Error(
-            'recovery source copy requires platform-supported no-follow and nonblocking opens',
-          );
-        }
-        sourceFd = openSync(
-          source,
-          constants.O_RDONLY | noFollow | nonBlocking,
-        );
-        const openedSourceStat = fstatSync(sourceFd);
-        if (!openedSourceStat.isFile()) {
-          throw new Error(
-            `recovery source changed to a special file during copy: ${source}`,
-          );
-        }
-        const temporaryMode = 0o600 | (sourceStat.mode & 0o111);
-        temporaryFd = openSync(
-          temporaryPath,
-          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
-          temporaryMode,
-        );
-        // openSync applies the process umask to a creation mode, so a
-        // restrictive umask (for example 077) would drop the group and other
-        // execute bits the source had. fchmod ignores the umask and acts on
-        // the open descriptor, so set the exact mode before any byte is copied.
-        fchmodSync(temporaryFd, temporaryMode);
-        const buffer = Buffer.allocUnsafe(64 * 1024);
-        for (;;) {
-          const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
-          if (bytesRead === 0) break;
-          let offset = 0;
-          while (offset < bytesRead) {
-            offset += writeSync(
-              temporaryFd,
-              buffer,
-              offset,
-              bytesRead - offset,
+      const windowsCopy =
+        noFollowFlags.O_NOFOLLOW === undefined ||
+        noFollowFlags.O_NONBLOCK === undefined
+          ? resolveWindowsCopyDeps(windowsNoFollow)
+          : null;
+      if (windowsCopy !== null) {
+        // Native Windows has no POSIX no-follow flags. The Windows helper
+        // refuses a link component and copies into a new exclusive
+        // destination, so the descriptor path below does not run. Identity is
+        // still checked against the source's lstat before and after the copy.
+        copyNoFollow(source, temporaryPath, windowsCopy);
+        copiedSourceStat = lstatSync(source);
+      } else {
+        try {
+          const noFollow = noFollowFlags.O_NOFOLLOW;
+          const nonBlocking = noFollowFlags.O_NONBLOCK;
+          if (noFollow === undefined || nonBlocking === undefined) {
+            throw new Error(
+              'recovery source copy requires platform-supported no-follow and nonblocking opens',
             );
           }
+          sourceFd = openSync(
+            source,
+            constants.O_RDONLY | noFollow | nonBlocking,
+          );
+          const openedSourceStat = fstatSync(sourceFd);
+          if (!openedSourceStat.isFile()) {
+            throw new Error(
+              `recovery source changed to a special file during copy: ${source}`,
+            );
+          }
+          const temporaryMode = 0o600 | (sourceStat.mode & 0o111);
+          temporaryFd = openSync(
+            temporaryPath,
+            constants.O_WRONLY |
+              constants.O_CREAT |
+              constants.O_EXCL |
+              noFollow,
+            temporaryMode,
+          );
+          // openSync applies the process umask to a creation mode, so a
+          // restrictive umask (for example 077) would drop the group and other
+          // execute bits the source had. fchmod ignores the umask and acts on
+          // the open descriptor, so set the exact mode before any byte is copied.
+          fchmodSync(temporaryFd, temporaryMode);
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          for (;;) {
+            const bytesRead = readSync(
+              sourceFd,
+              buffer,
+              0,
+              buffer.length,
+              null,
+            );
+            if (bytesRead === 0) break;
+            let offset = 0;
+            while (offset < bytesRead) {
+              offset += writeSync(
+                temporaryFd,
+                buffer,
+                offset,
+                bytesRead - offset,
+              );
+            }
+          }
+          copiedSourceStat = fstatSync(sourceFd);
+        } finally {
+          if (temporaryFd !== null) closeSync(temporaryFd);
+          if (sourceFd !== null) closeSync(sourceFd);
         }
-        copiedSourceStat = fstatSync(sourceFd);
-      } finally {
-        if (temporaryFd !== null) closeSync(temporaryFd);
-        if (sourceFd !== null) closeSync(sourceFd);
       }
       if (
         copiedSourceStat === null ||
