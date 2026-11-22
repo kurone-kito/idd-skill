@@ -1025,7 +1025,13 @@ function powerShellPayloadVariables(source) {
   const names = new Set();
   const consumer =
     /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$([a-z_]\w*)/giu;
-  for (const match of withoutLineContinuations(source).matchAll(consumer)) {
+  const text = withoutLineContinuations(source);
+  for (const match of text.matchAll(consumer)) {
+    names.add((match[1] ?? '').toLowerCase());
+  }
+  // A variable piped into `iex` is the payload too.
+  const piped = /\$([a-z_]\w*)\s*\|\s*(?:iex|invoke-expression)(?![\w-])/giu;
+  for (const match of text.matchAll(piped)) {
     names.add((match[1] ?? '').toLowerCase());
   }
   return names;

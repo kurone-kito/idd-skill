@@ -2063,6 +2063,17 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: false,
     },
     {
+      name: 'variable piped into iex is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '$code | iex',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'continued iex before a variable payload is scanned',
       body: [
         "$payload = @'",
