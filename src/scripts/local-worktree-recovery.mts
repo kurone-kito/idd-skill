@@ -120,11 +120,7 @@ import {
 } from './preserve-destination.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
 import { isWindowsNoFollowOpenAvailable } from './user-global-paths.mts';
-import {
-  copyNoFollow,
-  type NoFollowDeps,
-  WINDOWS_HELPER_MAX_FILE_BYTES,
-} from './windows-nofollow.mts';
+import { copyNoFollow, type NoFollowDeps } from './windows-nofollow.mts';
 import {
   type ConfirmationReference,
   canonicalSubject,
@@ -1102,9 +1098,6 @@ export interface LocalWorktreeRecoveryDeps {
    * absent. `false` forces the refusal; an object supplies helper deps;
    * `true` or omitted uses the default discovery. Applies only on `win32`. */
   windowsNoFollow?: boolean | NoFollowDeps;
-  /** The per-file size limit the Windows helper path is checked against
-   * before any mutation. Production uses the helper's own limit; tests lower it. */
-  windowsCopyMaxBytes?: number;
   copyPath: (
     from: string,
     to: string,
@@ -5597,33 +5590,6 @@ function runRecoveryCore(
       'refusing --apply: this platform does not support the no-follow and nonblocking file opens required for recovery copies; no mutation',
     );
   }
-  if (
-    noFollowFlags.O_NOFOLLOW === undefined ||
-    noFollowFlags.O_NONBLOCK === undefined
-  ) {
-    // The Windows helper buffers each file whole, so a file it cannot hold
-    // would fail partway through apply, after the stash and ref steps. Check
-    // every regular file of the checkout before the first mutation.
-    let oversize: { path: string; reason: OversizeCopyReason } | null;
-    try {
-      oversize = findOversizeCopySource(
-        [targetPath],
-        deps.windowsCopyMaxBytes ?? WINDOWS_HELPER_MAX_FILE_BYTES,
-      );
-    } catch (error) {
-      return recordRemovalFailure(
-        `refusing --apply: cannot size the checkout for the Windows copy (${error instanceof Error ? error.message : String(error)}); no mutation`,
-      );
-    }
-    if (oversize !== null) {
-      return recordRemovalFailure(
-        oversize.reason === 'size'
-          ? `refusing --apply: ${oversize.path} is larger than the Windows no-follow helper can copy in one read; no mutation`
-          : `refusing --apply: ${oversize.path} has more than one hard link, which the Windows no-follow helper refuses; no mutation`,
-      );
-    }
-  }
-
   if (primaryRecoveryResume) {
     if (!restorePrimaryRecoveryPlan()) {
       return recordRemovalFailure(
@@ -8702,94 +8668,6 @@ function resolveWindowsCopyDeps(
   return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
 }
 
-/**
- * Why the Windows helper copy would refuse a file in the walk: it is over the
- * helper's single-read limit, or it has more than one hard link.
- */
-export type OversizeCopyReason = 'size' | 'hard-link';
-
-/**
- * The first regular file under `roots` that the Windows helper copy would
- * refuse, with the reason, or `null`. The walk uses lstat and measures a link
- * only when its target lies inside a declared root, because recovery
- * materializes such a link and keeps any other link as link text. A missing
- * root holds nothing to copy, and a dangling link materializes nothing. Any
- * other read error throws, so the caller fails closed. The top-level `.git`
- * entry of a root is not walked, because recovery copies the git-admin
- * directory separately.
- */
-export function findOversizeCopySource(
-  roots: readonly string[],
-  maxBytes: number = WINDOWS_HELPER_MAX_FILE_BYTES,
-): { path: string; reason: OversizeCopyReason } | null {
-  const rootReals = roots.flatMap((root) => {
-    try {
-      return [realpathSync(root)];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw error;
-    }
-  });
-  const check = (
-    path: string,
-    stat: Stats,
-  ): { path: string; reason: OversizeCopyReason } | null => {
-    if (stat.size > maxBytes) return { path, reason: 'size' };
-    if (stat.nlink > 1) return { path, reason: 'hard-link' };
-    return null;
-  };
-  const visited = new Set<string>();
-  const pending: { path: string; root: boolean }[] = roots.map((path) => ({
-    path,
-    root: true,
-  }));
-  while (pending.length > 0) {
-    const next = pending.pop();
-    if (next === undefined) break;
-    let stat: Stats;
-    try {
-      stat = lstatSync(next.path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
-    }
-    if (stat.isSymbolicLink()) {
-      let target: Stats;
-      try {
-        target = statSync(next.path);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw error;
-      }
-      const linkReal = realpathSync(next.path);
-      if (!rootReals.some((root) => isPathContainedIn(linkReal, root))) {
-        continue;
-      }
-      if (target.isFile()) {
-        const found = check(next.path, target);
-        if (found !== null) return found;
-        continue;
-      }
-      if (!target.isDirectory()) continue;
-      stat = target;
-    }
-    if (stat.isFile()) {
-      const found = check(next.path, stat);
-      if (found !== null) return found;
-      continue;
-    }
-    if (!stat.isDirectory()) continue;
-    const real = realpathSync(next.path);
-    if (visited.has(real)) continue;
-    visited.add(real);
-    for (const entry of readdirSync(next.path)) {
-      if (next.root && entry === '.git') continue;
-      pending.push({ path: join(next.path, entry), root: false });
-    }
-  }
-  return null;
-}
-
 export function copyPathWithSafeSymlinks(
   from: string,
   to: string,
@@ -9040,11 +8918,19 @@ export function copyPathWithSafeSymlinks(
           ? resolveWindowsCopyDeps(windowsNoFollow)
           : null;
       if (windowsCopy !== null) {
-        // Native Windows has no POSIX no-follow flags. The Windows helper
-        // refuses a link component and copies into a new exclusive
-        // destination, so the descriptor path below does not run. Identity is
-        // still checked against the source's lstat before and after the copy.
-        copyNoFollow(source, temporaryPath, windowsCopy);
+        // Native Windows has no POSIX no-follow flags. The helper streams the
+        // copy into a new exclusive destination and reports the identity of the
+        // handle it read. Bind that to the file measured just before the copy,
+        // so a swapped path cannot supply other bytes.
+        const measured = lstatSync(source, { bigint: true });
+        const read = copyNoFollow(source, temporaryPath, windowsCopy);
+        if (
+          read === null ||
+          read.volume !== measured.dev ||
+          read.index !== measured.ino
+        ) {
+          throw new Error(`source changed before the copy read it: ${source}`);
+        }
         copiedSourceStat = lstatSync(source);
       } else {
         try {

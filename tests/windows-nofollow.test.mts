@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
   writeSync,
@@ -425,6 +426,26 @@ test('Windows probe-relative opens the final via the held parent (#5292)', () =>
       result.sha256,
       createHash('sha256').update(payload).digest('hex'),
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('copyNoFollow streams a multi-chunk file on Windows and reports the identity it read (issue #5326)', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-nofollow-stream-'));
+  try {
+    const source = join(dir, 'source.bin');
+    const destination = join(dir, 'destination.bin');
+    const payload = Buffer.alloc(3 * 65536 + 17, 0x5a);
+    writeFileSync(source, payload);
+    const identity = copyNoFollow(source, destination);
+    assert.ok(identity !== null);
+    assert.deepEqual(readFileSync(destination), payload);
+    const measured = statSync(source, { bigint: true });
+    assert.equal(identity.volume, measured.dev);
+    assert.equal(identity.index, measured.ino);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

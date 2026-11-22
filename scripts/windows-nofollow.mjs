@@ -478,14 +478,6 @@ function freshBytesPath(deps) {
   return join(dir, `idd-nofollow-${randomBytes(16).toString('hex')}.bin`);
 }
 /**
- * The largest regular file the Windows helper reads or copies. The helper
- * allocates the whole file as a managed byte array sized by a signed 32-bit
- * `[int]` (`Read-BytesFromHandle` in `windows-nofollow.ps1`), so the real limit
- * is `int32` max, below the `uint32` bound its own size check uses. Callers
- * that copy a tree check sizes against this before the first mutation.
- */
-export const WINDOWS_HELPER_MAX_FILE_BYTES = 0x7fff_ffff;
-/**
  * Read a regular file without following a symbolic link, junction, or other
  * reparse point on any component. Refuses a multi-hard-link file.
  */
@@ -577,9 +569,26 @@ export function copyNoFollow(source, destination, deps = {}) {
   if (platform === 'win32') {
     const result = runWindowsHelper('copy', [source, destination], deps);
     refuseUnlessOk(result);
-    return;
+    return copyIdentityFrom(result);
   }
   copyPosix(source, destination, deps);
+  return null;
+}
+function copyIdentityFrom(result) {
+  if (
+    typeof result.sourceVolume !== 'number' ||
+    !Number.isSafeInteger(result.sourceVolume) ||
+    typeof result.sourceIndex !== 'string' ||
+    !/^[0-9]+$/u.test(result.sourceIndex)
+  ) {
+    throw new Error(
+      'windows no-follow copy did not report the source identity; refusing an unverifiable copy',
+    );
+  }
+  return {
+    volume: BigInt(result.sourceVolume),
+    index: BigInt(result.sourceIndex),
+  };
 }
 /**
  * True when this process can use the POSIX no-follow open flags without

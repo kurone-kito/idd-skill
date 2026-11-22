@@ -54,7 +54,6 @@ import {
   extractDirtyPaths,
   extractIgnoredPaths,
   extractRecoveredClaim,
-  findOversizeCopySource,
   hasWorkingTreeChanges,
   type IgnoredFileEntry,
   isAcceptedBlockReason,
@@ -179,8 +178,14 @@ test('copyPathWithSafeSymlinks copies a regular file through the Windows helper 
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-win-copy-'));
   const shim = windowsRecoveryCopyShim((mode, paths) => {
     assert.equal(mode, 'copy');
+    const measured = lstatSync(paths[0] ?? '', { bigint: true });
     copyFileSync(paths[0] ?? '', paths[1] ?? '');
-    return { ok: true, created: true };
+    return {
+      ok: true,
+      created: true,
+      sourceVolume: Number(measured.dev),
+      sourceIndex: String(measured.ino),
+    };
   });
   try {
     const source = join(root, 'source.txt');
@@ -190,6 +195,63 @@ test('copyPathWithSafeSymlinks copies a regular file through the Windows helper 
     copyPathWithSafeSymlinks(source, destination, source, [], {}, shim.deps);
     assert.equal(readFileSync(destination, 'utf8'), 'recovered bytes');
     assert.equal(shim.calls.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses a Windows copy that read another file than the one measured (issue #5326)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-identity-'));
+  const shim = windowsRecoveryCopyShim(() => ({
+    ok: true,
+    created: true,
+    sourceVolume: 1,
+    sourceIndex: '1',
+  }));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(
+          source,
+          destination,
+          source,
+          [],
+          {},
+          shim.deps,
+        ),
+      /source changed before the copy read it/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses a Windows copy that reports no source identity (issue #5326)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-no-identity-'));
+  const shim = windowsRecoveryCopyShim(() => ({ ok: true, created: true }));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(
+          source,
+          destination,
+          source,
+          [],
+          {},
+          shim.deps,
+        ),
+      /did not report the source identity/,
+    );
+    assert.equal(existsSync(destination), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
     shim.cleanup();
@@ -238,124 +300,6 @@ test('copyPathWithSafeSymlinks surfaces the Windows helper refusal for a link an
     assert.equal(existsSync(destination), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
-    shim.cleanup();
-  }
-});
-
-test('findOversizeCopySource names the first regular file over the limit (issue #5316)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-'));
-  try {
-    mkdirSync(join(root, 'nested'));
-    writeFileSync(join(root, 'small.txt'), 'abc');
-    writeFileSync(join(root, 'nested', 'large.bin'), '0123456789');
-    assert.deepEqual(findOversizeCopySource([root], 3), {
-      path: join(root, 'nested', 'large.bin'),
-      reason: 'size',
-    });
-    assert.equal(findOversizeCopySource([root], 100), null);
-    assert.equal(findOversizeCopySource([join(root, 'missing')], 3), null);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('findOversizeCopySource measures an in-tree link and skips an external one (issue #5316)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-link-'));
-  const outside = mkdtempSync(join(tmpdir(), 'idd-lwr-size-out-'));
-  try {
-    writeFileSync(join(root, 'big.bin'), '0123456789');
-    symlinkSync(join(root, 'big.bin'), join(root, 'alias.bin'));
-    const found = findOversizeCopySource([root], 3);
-    assert.equal(found?.reason, 'size');
-    writeFileSync(join(outside, 'big.bin'), '0123456789');
-    const external = mkdtempSync(join(tmpdir(), 'idd-lwr-size-ext-'));
-    try {
-      symlinkSync(join(outside, 'big.bin'), join(external, 'out.bin'));
-      assert.equal(findOversizeCopySource([external], 3), null);
-    } finally {
-      rmSync(external, { recursive: true, force: true });
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
-  }
-});
-
-test('findOversizeCopySource refuses a file with more than one hard link (issue #5316)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-hard-'));
-  try {
-    writeFileSync(join(root, 'a.bin'), 'abc');
-    linkSync(join(root, 'a.bin'), join(root, 'b.bin'));
-    const found = findOversizeCopySource([root], 100);
-    assert.equal(found?.reason, 'hard-link');
-    assert.ok(
-      [join(root, 'a.bin'), join(root, 'b.bin')].includes(found?.path ?? ''),
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('findOversizeCopySource does not walk the top-level .git entry (issue #5316)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-git-'));
-  try {
-    mkdirSync(join(root, '.git'));
-    writeFileSync(join(root, '.git', 'large.bin'), '0123456789');
-    assert.equal(findOversizeCopySource([root], 3), null);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('--apply refuses before any mutation when a checkout file exceeds the Windows helper limit (issue #5316)', () => {
-  const checkout = mkdtempSync(join(tmpdir(), 'idd-lwr-oversize-'));
-  const shim = windowsRecoveryCopyShim(() => ({ ok: true }));
-  try {
-    writeFileSync(join(checkout, 'large.bin'), '0123456789');
-    let mutatingCalls = 0;
-    const deps = fakeDeps({
-      noFollowFlags: {},
-      windowsNoFollow: shim.deps,
-      windowsCopyMaxBytes: 4,
-      confirmBlock: () => ({
-        ok: true,
-        routing: {
-          state: 'local_worktree_occupied',
-          reason: 'stale-claim-local-worktree-occupied',
-          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
-          evidence: {
-            local_worktree: {
-              status: 'occupied',
-              paths: [checkout],
-              reason: null,
-            },
-          },
-        },
-        error: null,
-      }),
-      runGit: (argv) => {
-        if (argv[0] === 'worktree' && argv[1] === 'remove') mutatingCalls += 1;
-        if (argv[0] === 'stash' && argv[1] === 'push') mutatingCalls += 1;
-        if (argv[0] === 'update-ref') mutatingCalls += 1;
-        return cleanRepoRunGit(argv);
-      },
-    });
-    const verdict = runLocalWorktreeRecovery(
-      baseArgs({
-        apply: true,
-        operatorConfirmedNoLiveSession: true,
-        worktree: checkout,
-      }),
-      deps,
-    );
-    assert.equal(verdict.mutated, false);
-    assert.equal(mutatingCalls, 0);
-    assert.match(
-      verdict.result,
-      /larger than the Windows no-follow helper can copy in one read/,
-    );
-  } finally {
-    rmSync(checkout, { recursive: true, force: true });
     shim.cleanup();
   }
 });

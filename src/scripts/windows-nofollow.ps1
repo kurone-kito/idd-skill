@@ -745,7 +745,19 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
       Fail "cannot open source for copy: $($sourceChain.final) (win32=$($srcOpen.error))"
     }
     try {
-      $payload = Read-BytesFromHandle $srcOpen.handle $sourceChain.final
+      # Stream the copy in bounded chunks, so no file is held whole and no size
+      # limit applies. Hard links are allowed here: the source is only read, and
+      # recovery preserves its content, not its link count. The identity of the
+      # handle that was read is returned, so the caller can bind its check to
+      # the bytes it copied.
+      $srcInfo = Get-HandleInfo $srcOpen.handle
+      if ($null -eq $srcInfo) {
+        Fail "cannot inspect opened source for copy: $($sourceChain.final)"
+      }
+      $srcKind = Classify-Attributes $srcInfo.FileAttributes
+      if ($srcKind -ne 'file') {
+        Fail "opened source is not a regular file: $($sourceChain.final) ($srcKind)"
+      }
       $destAccess = [IdNoFollow]::GENERIC_WRITE -bor [IdNoFollow]::DELETE
       $destOpen = Open-NoFollowRelative ([IntPtr]$destChain.parentHandle) ([string]$destChain.finalName) $destAccess ([IdNoFollow]::CREATE_NEW) -NeedWriteAttributes
       if (-not $destOpen.ok) {
@@ -761,9 +773,20 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
         if ($kind -ne 'file') {
           Fail "created handle is not a regular file: $($destChain.final) ($kind)"
         }
-        Write-BytesToHandle $destOpen.handle $payload.buffer $destChain.final
+        $chunk = New-Object byte[] 65536
+        while ($true) {
+          $read = [uint32]0
+          if (-not [IdNoFollow]::ReadFile($srcOpen.handle, $chunk, [uint32]$chunk.Length, [ref]$read, [IntPtr]::Zero)) {
+            Fail "read failed during copy of $($sourceChain.final) (win32=$(Get-Win32Error))"
+          }
+          if ($read -eq 0) { break }
+          $piece = New-Object byte[] ([int]$read)
+          [Array]::Copy($chunk, 0, $piece, 0, [int]$read)
+          Write-BytesToHandle $destOpen.handle $piece $destChain.final
+        }
         $keepCreated = $true
-        Write-Result @{ ok = $true; path = $destChain.final; created = $true } 0
+        $sourceIndex = ([uint64]$srcInfo.FileIndexHigh -shl 32) -bor [uint64]$srcInfo.FileIndexLow
+        Write-Result @{ ok = $true; path = $destChain.final; created = $true; sourceVolume = [uint32]$srcInfo.VolumeSerialNumber; sourceIndex = [string]$sourceIndex } 0
       } finally {
         if (-not $keepCreated) {
           Mark-HandleForDelete $destOpen.handle
