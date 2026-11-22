@@ -62,11 +62,8 @@ profile.
     wherever one exists for the current step;
   - drafting output for human review rather than running the
     autonomous merge phases, unless the F2.5 merge handoff resolves the
-    merge policy to the enum `fully_autonomous_merge`, or to
-    `separate_merge_agent` when repository documentation explicitly names
-    the current session as the designated merge-capable actor and the
-    documented resume condition is satisfied (handoff step 5 of the
-    standard handoff). A raw `mergePolicy` value does not count.
+    merge policy to the enum `fully_autonomous_merge` (a raw
+    `mergePolicy` value does not count).
 
   This design's job is to give that already-confined role a condensed
   **instruction shape** to execute against. [Phase scoping](#phase-scoping)
