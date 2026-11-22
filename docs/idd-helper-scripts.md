@@ -7821,7 +7821,8 @@ that runs it is
   before. A hard-linked source is copied as bytes. Without the helper,
   `--apply` refuses before step 3 starts. This prevents stash or recovery-ref
   mutations from preceding a copy failure; use dry-run for inspection, or an
-  environment with the required no-follow support, when the helper is absent.
+  environment with both the no-follow and nonblocking open flags, when the helper
+  is absent.
   This guard follows the Copilot review finding in PR `#3550`, comment
   `#4116259512`.
 - Must be invoked from the primary worktree (or from the primary worktree

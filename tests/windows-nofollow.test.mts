@@ -450,3 +450,25 @@ test('copyNoFollow streams a multi-chunk file on Windows and reports the identit
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('copyNoFollow copies through a hard link on Windows and reports the linked file identity (issue #5326)', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-nofollow-hardlink-'));
+  try {
+    const source = join(dir, 'source.bin');
+    const link = join(dir, 'link.bin');
+    const destination = join(dir, 'destination.bin');
+    const payload = Buffer.alloc(65536 + 9, 0x2b);
+    writeFileSync(source, payload);
+    linkSync(source, link);
+    const identity = copyNoFollow(link, destination);
+    assert.ok(identity !== null);
+    assert.deepEqual(readFileSync(destination), payload);
+    const measured = statSync(link, { bigint: true });
+    assert.equal(identity.volume, measured.dev);
+    assert.equal(identity.index, measured.ino);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

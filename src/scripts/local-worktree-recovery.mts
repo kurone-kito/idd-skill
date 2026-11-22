@@ -8790,6 +8790,9 @@ export function copyPathWithSafeSymlinks(
 
   const copyEntry = (source: string, destination: string): void => {
     const sourceStat = lstatSync(source);
+    // The identity baseline is taken with the same lstat as sourceStat, before
+    // any copy, so a replaced ancestor cannot move the baseline to another file.
+    const sourceIdentity = lstatSync(source, { bigint: true });
     const parentReal = ensureDestinationParent(destination);
 
     if (sourceStat.isSymbolicLink()) {
@@ -8920,16 +8923,23 @@ export function copyPathWithSafeSymlinks(
       if (windowsCopy !== null) {
         // Native Windows has no POSIX no-follow flags. The helper streams the
         // copy into a new exclusive destination and reports the identity of the
-        // handle it read. Bind that to the file measured just before the copy,
-        // so a swapped path cannot supply other bytes.
-        const measured = lstatSync(source, { bigint: true });
+        // handle it read. Bind that to the baseline taken before the copy, and
+        // check the path again after it, so neither a swapped path nor a
+        // replaced ancestor can supply other bytes.
         const read = copyNoFollow(source, temporaryPath, windowsCopy);
         if (
           read === null ||
-          read.volume !== measured.dev ||
-          read.index !== measured.ino
+          read.volume !== sourceIdentity.dev ||
+          read.index !== sourceIdentity.ino
         ) {
           throw new Error(`source changed before the copy read it: ${source}`);
+        }
+        const after = lstatSync(source, { bigint: true });
+        if (
+          after.dev !== sourceIdentity.dev ||
+          after.ino !== sourceIdentity.ino
+        ) {
+          throw new Error(`source changed during the copy: ${source}`);
         }
         copiedSourceStat = lstatSync(source);
       } else {
@@ -9055,6 +9065,10 @@ export function copyPathWithSafeSymlinks(
   copyEntry(from, to);
 }
 
+// Production copies resolve the same no-follow flags and Windows helper as
+// the apply gate, because both default to the node:fs constants and to helper
+// discovery. Tests that inject `noFollowFlags` or `windowsNoFollow` stub this
+// function, and they check the copy itself through copyPathWithSafeSymlinks.
 function copyPathProduction(
   from: string,
   to: string,
