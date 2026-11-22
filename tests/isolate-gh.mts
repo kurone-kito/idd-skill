@@ -738,6 +738,47 @@ function blankPowerShellRange(
 const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
 
 /**
+ * Text before a here-string opener, and after its closer, that makes PowerShell
+ * run the here-string value: the call operator, `.`, `iex`, a `-Command`
+ * argument, or a pipe into `iex` or a shell.
+ */
+const POWERSHELL_INVOKED_BEFORE =
+  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*)\s*$/iu;
+const POWERSHELL_INVOKED_AFTER =
+  /^\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
+
+function isInvokedHereString(
+  characters: string[],
+  opener: number,
+  closer: number,
+): boolean {
+  let lineStart = opener;
+  while (
+    lineStart > 0 &&
+    characters[lineStart - 1] !== '\n' &&
+    characters[lineStart - 1] !== '\r'
+  ) {
+    lineStart -= 1;
+  }
+  let lineEnd = closer + 2;
+  while (
+    lineEnd < characters.length &&
+    characters[lineEnd] !== '\n' &&
+    characters[lineEnd] !== '\r'
+  ) {
+    lineEnd += 1;
+  }
+  return (
+    POWERSHELL_INVOKED_BEFORE.test(
+      characters.slice(lineStart, opener).join(''),
+    ) ||
+    POWERSHELL_INVOKED_AFTER.test(
+      characters.slice(closer + 2, lineEnd).join(''),
+    )
+  );
+}
+
+/**
  * Blank closed PowerShell here-string spans before command-position scans.
  * Literal `@'…'@` bodies are non-command; expandable `@"…"@` bodies stay out
  * of ordinary tokenization but are returned for `$()` / subexpression scans.
@@ -856,13 +897,26 @@ function blankPowerShellHereStrings(source: string): {
       cursor +=
         characters[cursor] === '\r' && characters[cursor + 1] === '\n' ? 2 : 1;
     }
-    // An opener with no closer makes the script's here-string structure
-    // unknown. Blank nothing, so every command-position scan sees all text.
-    if (closer < 0) return { source, expandableHereStrings: [] };
+    // PowerShell refuses to parse a script with an unterminated here-string,
+    // so nothing runs. Blank nothing more, but keep the bodies already
+    // collected so their $() are still scanned.
+    if (closer < 0) return { source, expandableHereStrings };
     if (hereQuote === '"') {
       expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
     }
-    blankPowerShellRange(characters, index, closer + 2);
+    if (isInvokedHereString(characters, index, closer)) {
+      // The value is run as code, so keep its text as bare tokens. Blank only
+      // the markers and line breaks.
+      blankPowerShellRange(characters, index, lineStart);
+      for (let at = lineStart; at < closer; at += 1) {
+        if (characters[at] === '\n' || characters[at] === '\r') {
+          characters[at] = ' ';
+        }
+      }
+      blankPowerShellRange(characters, closer, closer + 2);
+    } else {
+      blankPowerShellRange(characters, index, closer + 2);
+    }
     index = closer + 1;
   }
   return { source: characters.join(''), expandableHereStrings };

@@ -2005,6 +2005,37 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: false,
     },
     {
+      name: 'call operator runs a here-string value',
+      body: ["& @'", 'C:\\tools\\gh.exe', "'@ api repos/o/r", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'command payload here-string is scanned',
+      body: [
+        "powershell -NoProfile -Command @'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'piped here-string into iex is scanned',
+      body: ["@'", 'gh --version', "'@ | iex", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'argument here-string prose stays literal',
+      body: [
+        "Write-Host @'",
+        'prose mentioning gh only',
+        "'@",
+        'Write-Output ok',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
       name: 'backtick is literal inside single quotes in a subexpression',
       body: ['$x = @"', "$(Write-Output 'a`'; gh --version)", '"@', ''].join(
         '\n',
