@@ -76,8 +76,10 @@ export function inspectDirectoryPrivacy(path, platform, windowsAclReader) {
  * current user owns ends with an ACL limited to the current user, SYSTEM, and
  * the built-in Administrators, and the ACL is read again. Every refusal comes
  * before any write: a symlink (its target is never changed), a non-directory,
- * a directory with any entry, an ACL that does not read as permissive, no
- * current-user SID, or another owner. The entry check is what keeps this away
+ * a directory with any entry, an identity with inode `0` (which does not name a
+ * directory), an ACL that does not read as permissive, no current-user SID, an
+ * owner that cannot be read, or another owner. A failed owner read is reported
+ * as unverified, not as another owner. The entry check is what keeps this away
  * from a shared or populated directory. Cutting inheritance changes every
  * descendant, and the Windows state root is `%LOCALAPPDATA%`, so only an empty
  * directory, which is what a directory this run just created is, is rewritten.
@@ -88,17 +90,23 @@ export function inspectDirectoryPrivacy(path, platform, windowsAclReader) {
  * the re-read, so a path swapped for a link or another directory in between
  * is reported. `icacls` still resolves
  * the path itself, so a window of one call remains; handle-based writes are not
- * used here. The tools default to the real System32 ones; the four-argument
- * call is for tests and keeps the existing callers unchanged.
+ * used here. The tools default to the real System32 ones, and the identity
+ * seam to a no-follow lstat; the four-argument call is for tests and keeps
+ * the existing callers unchanged.
  */
 function restrictWindowsStateDirectory(path, windowsAclReader, tools) {
+  const readIdentity =
+    tools.readIdentity ?? ((target) => lstatSync(target, { bigint: true }));
   const unverified = () =>
     new Error('directory ownership or privacy could not be verified');
   // The identity of a real directory read without following links, or null.
+  // Inode 0 does not identify a directory, so it is no identity at all.
   const identityOf = (target) => {
     try {
-      const stat = lstatSync(target, { bigint: true });
-      return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+      const stat = readIdentity(target);
+      return stat.isDirectory() && stat.ino !== 0n
+        ? `${stat.dev}:${stat.ino}`
+        : null;
     } catch {
       return null;
     }
@@ -117,9 +125,9 @@ function restrictWindowsStateDirectory(path, windowsAclReader, tools) {
   let linked = false;
   let identity;
   try {
-    const stat = lstatSync(path, { bigint: true });
+    const stat = readIdentity(path);
     linked = stat.isSymbolicLink();
-    if (linked || !stat.isDirectory()) throw unverified();
+    if (linked || !stat.isDirectory() || stat.ino === 0n) throw unverified();
     identity = `${stat.dev}:${stat.ino}`;
   } catch {
     if (linked) throw new Error('a state-root symlink target is not private');
@@ -151,13 +159,17 @@ function restrictWindowsStateDirectory(path, windowsAclReader, tools) {
   }
   const currentSid = before.currentSid?.trim().toUpperCase();
   if (currentSid === undefined) throw unverified();
+  // A failed or empty owner read says nothing about who owns the directory, so
+  // it is unverified. Only a readable SID that differs is another owner.
   let owner;
   try {
     owner = tools.readOwner(real);
   } catch {
-    owner = null;
+    throw unverified();
   }
-  if (owner === null || owner.trim().toUpperCase() !== currentSid) {
+  const ownerSid = owner?.trim().toUpperCase() ?? '';
+  if (ownerSid === '') throw unverified();
+  if (ownerSid !== currentSid) {
     throw new Error('directory belongs to another user');
   }
   // The last read before the first write. The writer repeats the identity

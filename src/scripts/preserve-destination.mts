@@ -12,6 +12,7 @@
  * expired here.
  */
 import {
+  type BigIntStats,
   chmodSync,
   lstatSync,
   readdirSync,
@@ -129,14 +130,32 @@ export function inspectDirectoryPrivacy(
   }
 }
 
+/** The fields of a no-follow lstat that the Windows rewrite reads. */
+export type WindowsIdentityStats = Pick<
+  BigIntStats,
+  'dev' | 'ino' | 'isDirectory' | 'isSymbolicLink'
+>;
+
+/**
+ * The Windows-only inputs for `ensurePrivateStateDirectory`: the owner and ACL
+ * tools from `windows-acl.mts`, plus an optional `readIdentity` seam. The seam
+ * defaults to a no-follow bigint lstat, and exists so a test can present an
+ * inode `0`, which a real directory on the test host does not report.
+ */
+export type PreserveWindowsTools = WindowsDirectoryTools & {
+  readonly readIdentity?: (path: string) => WindowsIdentityStats;
+};
+
 /**
  * Windows has no mode bits to tighten, so a permissive directory is handled by
  * rewriting its DACL (kurone-kito/idd-skill#5318): a real directory the
  * current user owns ends with an ACL limited to the current user, SYSTEM, and
  * the built-in Administrators, and the ACL is read again. Every refusal comes
  * before any write: a symlink (its target is never changed), a non-directory,
- * a directory with any entry, an ACL that does not read as permissive, no
- * current-user SID, or another owner. The entry check is what keeps this away
+ * a directory with any entry, an identity with inode `0` (which does not name a
+ * directory), an ACL that does not read as permissive, no current-user SID, an
+ * owner that cannot be read, or another owner. A failed owner read is reported
+ * as unverified, not as another owner. The entry check is what keeps this away
  * from a shared or populated directory. Cutting inheritance changes every
  * descendant, and the Windows state root is `%LOCALAPPDATA%`, so only an empty
  * directory, which is what a directory this run just created is, is rewritten.
@@ -147,21 +166,28 @@ export function inspectDirectoryPrivacy(
  * the re-read, so a path swapped for a link or another directory in between
  * is reported. `icacls` still resolves
  * the path itself, so a window of one call remains; handle-based writes are not
- * used here. The tools default to the real System32 ones; the four-argument
- * call is for tests and keeps the existing callers unchanged.
+ * used here. The tools default to the real System32 ones, and the identity
+ * seam to a no-follow lstat; the four-argument call is for tests and keeps
+ * the existing callers unchanged.
  */
 function restrictWindowsStateDirectory(
   path: string,
   windowsAclReader: WindowsAclReader,
-  tools: WindowsDirectoryTools,
+  tools: PreserveWindowsTools,
 ): void {
+  const readIdentity =
+    tools.readIdentity ??
+    ((target: string) => lstatSync(target, { bigint: true }));
   const unverified = (): Error =>
     new Error('directory ownership or privacy could not be verified');
   // The identity of a real directory read without following links, or null.
+  // Inode 0 does not identify a directory, so it is no identity at all.
   const identityOf = (target: string): string | null => {
     try {
-      const stat = lstatSync(target, { bigint: true });
-      return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+      const stat = readIdentity(target);
+      return stat.isDirectory() && stat.ino !== 0n
+        ? `${stat.dev}:${stat.ino}`
+        : null;
     } catch {
       return null;
     }
@@ -180,9 +206,9 @@ function restrictWindowsStateDirectory(
   let linked = false;
   let identity: string;
   try {
-    const stat = lstatSync(path, { bigint: true });
+    const stat = readIdentity(path);
     linked = stat.isSymbolicLink();
-    if (linked || !stat.isDirectory()) throw unverified();
+    if (linked || !stat.isDirectory() || stat.ino === 0n) throw unverified();
     identity = `${stat.dev}:${stat.ino}`;
   } catch {
     if (linked) throw new Error('a state-root symlink target is not private');
@@ -214,13 +240,17 @@ function restrictWindowsStateDirectory(
   }
   const currentSid = before.currentSid?.trim().toUpperCase();
   if (currentSid === undefined) throw unverified();
+  // A failed or empty owner read says nothing about who owns the directory, so
+  // it is unverified. Only a readable SID that differs is another owner.
   let owner: string | null;
   try {
     owner = tools.readOwner(real);
   } catch {
-    owner = null;
+    throw unverified();
   }
-  if (owner === null || owner.trim().toUpperCase() !== currentSid) {
+  const ownerSid = owner?.trim().toUpperCase() ?? '';
+  if (ownerSid === '') throw unverified();
+  if (ownerSid !== currentSid) {
     throw new Error('directory belongs to another user');
   }
   // The last read before the first write. The writer repeats the identity
@@ -261,7 +291,7 @@ export function ensurePrivateStateDirectory(
   path: string,
   platform: NodeJS.Platform,
   windowsAclReader: WindowsAclReader,
-  windowsTools: WindowsDirectoryTools = defaultWindowsDirectoryTools,
+  windowsTools: PreserveWindowsTools = defaultWindowsDirectoryTools,
 ): void {
   const privacy = inspectDirectoryPrivacy(path, platform, windowsAclReader);
   if (privacy === 'private') return;
