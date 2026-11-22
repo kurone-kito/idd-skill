@@ -499,9 +499,19 @@ export function createPreserveDestination(
   // rechecked just before the destination is created.
   const recorded: PreservationParent[] = [];
   for (const parent of parents) {
+    // The identity of a parent this run makes, read right after its mkdir and
+    // before it is restricted, so a directory swapped in afterwards is reported.
+    let made: string | null = null;
     try {
       if (parent.identity === null) {
         deps.mkdir(parent.path, 0o700);
+        made =
+          deps.lstat(parent.path) === 'directory'
+            ? deps.directoryIdentity(parent.path)
+            : null;
+        if (made === null) {
+          throw new Error('the created directory has no verified identity');
+        }
       }
       deps.ensurePrivateDirectory(parent.path);
     } catch (error) {
@@ -520,6 +530,9 @@ export function createPreserveDestination(
       return refuse(
         `destination parent ${parent.path} changed after inspection`,
       );
+    }
+    if (made !== null && identity !== made) {
+      return refuse(`destination parent ${parent.path} changed after creation`);
     }
     recorded.push({ path: parent.path, identity });
   }
@@ -552,7 +565,12 @@ export function createPreserveDestination(
     // A new Windows directory can carry a permissive inherited ACL. Restrict
     // the directory this run just created once, as its parents were, and judge
     // the result below. On POSIX an unsafe leaf fails this too, as before.
+    // The captured identity is checked first, so a leaf replaced since it was
+    // created is refused before anything is written to it.
     try {
+      if (deps.directoryIdentity(destination) !== identity) {
+        return refuse(`${destination} changed after creation`);
+      }
       deps.ensurePrivateDirectory(destination);
       privacy = deps.inspectDirectoryPrivacy(destination);
     } catch (error) {

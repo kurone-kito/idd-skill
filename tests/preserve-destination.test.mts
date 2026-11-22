@@ -1122,6 +1122,84 @@ test('windows: a created leaf that still is not private stays in place and is re
   assert.equal(realLstat(otherInspected.destination), 'directory');
 });
 
+test('windows: a leaf replaced after it was created is refused before any write', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const destination = destinationFor('b1-preserved', fx.stateRoot);
+  let swapped = false;
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) => {
+      if (path === destination && !swapped) {
+        // Another process replaces the just-created leaf with a different
+        // empty directory, after its identity was captured.
+        swapped = true;
+        renameSync(destination, `${destination}.old`);
+        mkdirSync(destination);
+      }
+      return inspectDirectoryPrivacy(path, 'win32', acl.reader);
+    },
+    ensurePrivateDirectory: (path) => windowsEnsure(path, acl),
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  const created = createPreserveDestination(
+    deps,
+    destination,
+    inspected.parents,
+  );
+  assert.match(created.hold ?? '', /changed after creation/);
+  assert.equal(swapped, true);
+  // The replacement was never written to: only the parents were restricted.
+  assert.equal(
+    acl.restricted.includes(realResolve(destination) as string),
+    false,
+  );
+});
+
+test('windows: a parent made by this run and replaced before it is restricted is reported', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const iddDirectory = join(fx.stateRoot, 'idd-skill');
+  let swapped = false;
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    ensurePrivateDirectory: (path) => {
+      if (path === iddDirectory && !swapped) {
+        // Another process replaces the directory this run just made.
+        swapped = true;
+        renameSync(iddDirectory, `${iddDirectory}.old`);
+        mkdirSync(iddDirectory);
+      }
+      windowsEnsure(path, acl);
+    },
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  const created = createPreserveDestination(
+    deps,
+    inspected.destination,
+    inspected.parents,
+  );
+  assert.equal(swapped, true);
+  assert.match(created.hold ?? '', /idd-skill changed after creation/);
+  assert.equal(realLstat(inspected.destination), 'absent');
+});
+
 test('windows: an existing permissive state root is refused at inspection with no tool call', () => {
   const fx = fresh();
   const acl = windowsAcl();
