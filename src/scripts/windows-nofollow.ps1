@@ -773,16 +773,25 @@ function Copy-NoFollowFile([string]$Source, [string]$Destination) {
         if ($kind -ne 'file') {
           Fail "created handle is not a regular file: $($destChain.final) ($kind)"
         }
+        # Copy exactly the length the handle reports at open. A source that
+        # grows during the copy cannot extend it, so the copy stays bounded; a
+        # source that ends early fails here, and the caller's size and metadata
+        # checks reject any other change.
+        $remaining = ([uint64]$srcInfo.FileSizeHigh -shl 32) -bor [uint64]$srcInfo.FileSizeLow
         $chunk = New-Object byte[] 65536
-        while ($true) {
+        while ($remaining -gt 0) {
+          $want = [uint32][Math]::Min([uint64]$chunk.Length, $remaining)
           $read = [uint32]0
-          if (-not [IdNoFollow]::ReadFile($srcOpen.handle, $chunk, [uint32]$chunk.Length, [ref]$read, [IntPtr]::Zero)) {
+          if (-not [IdNoFollow]::ReadFile($srcOpen.handle, $chunk, $want, [ref]$read, [IntPtr]::Zero)) {
             Fail "read failed during copy of $($sourceChain.final) (win32=$(Get-Win32Error))"
           }
-          if ($read -eq 0) { break }
+          if ($read -eq 0) {
+            Fail "source ended before its snapshot length during copy of $($sourceChain.final)"
+          }
           $piece = New-Object byte[] ([int]$read)
           [Array]::Copy($chunk, 0, $piece, 0, [int]$read)
           Write-BytesToHandle $destOpen.handle $piece $destChain.final
+          $remaining -= [uint64]$read
         }
         $keepCreated = $true
         $sourceIndex = ([uint64]$srcInfo.FileIndexHigh -shl 32) -bor [uint64]$srcInfo.FileIndexLow
