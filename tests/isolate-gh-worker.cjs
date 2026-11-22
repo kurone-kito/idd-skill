@@ -1153,16 +1153,11 @@ function blankPowerShellHereStrings(source) {
       expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
     }
     if (isInvokedHereString(characters, index, closer)) {
-      // The value is run as code, so keep its text as bare tokens. Blank only
-      // the markers. Each line break, including the one after the opener, becomes
-      // `;`, so statement boundaries survive and a colon-bound `-Command:`
-      // keeps its payload attached.
+      // The value is run as code, so keep its text and line breaks. Blank only
+      // the markers: the line breaks are the payload's statement and comment
+      // boundaries, and a command on the line after `-Command:` is a command.
       blankPowerShellRange(characters, index, index + 2);
       blankPowerShellRange(characters, closer, closer + 2);
-      for (let at = index + 2; at < closer; at += 1) {
-        if (characters[at] === '\n') characters[at] = ';';
-        else if (characters[at] === '\r') characters[at] = ' ';
-      }
     } else {
       blankPowerShellRange(characters, index, closer + 2);
     }

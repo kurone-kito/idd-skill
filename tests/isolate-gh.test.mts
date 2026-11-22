@@ -2035,6 +2035,11 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'piped here-string keeps a line comment boundary',
+      body: ["@'", '# heading', 'gh api repos/o/r', "'@ | iex", ''].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'piped here-string keeps statement boundaries',
       body: ["@'", 'Write-Output ok', 'gh api repos/o/r', "'@ | iex", ''].join(
         '\n',
