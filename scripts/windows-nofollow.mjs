@@ -478,6 +478,13 @@ function freshBytesPath(deps) {
   return join(dir, `idd-nofollow-${randomBytes(16).toString('hex')}.bin`);
 }
 /**
+ * The largest regular file the Windows helper reads or copies. The helper
+ * buffers a whole file in memory and refuses anything larger than
+ * `uint32.MaxValue` bytes (`windows-nofollow.ps1`). Callers that copy a tree
+ * check sizes against this before the first mutation.
+ */
+export const WINDOWS_HELPER_MAX_FILE_BYTES = 0xffff_ffff;
+/**
  * Read a regular file without following a symbolic link, junction, or other
  * reparse point on any component. Refuses a multi-hard-link file.
  */

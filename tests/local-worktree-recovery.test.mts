@@ -54,6 +54,7 @@ import {
   extractDirtyPaths,
   extractIgnoredPaths,
   extractRecoveredClaim,
+  findOversizeCopySource,
   hasWorkingTreeChanges,
   type IgnoredFileEntry,
   isAcceptedBlockReason,
@@ -237,6 +238,94 @@ test('copyPathWithSafeSymlinks surfaces the Windows helper refusal for a link an
     assert.equal(existsSync(destination), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('findOversizeCopySource names the first regular file over the limit (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-'));
+  const linkRoot = mkdtempSync(join(tmpdir(), 'idd-lwr-size-link-'));
+  try {
+    mkdirSync(join(root, 'nested'));
+    writeFileSync(join(root, 'small.txt'), 'abc');
+    writeFileSync(join(root, 'nested', 'large.bin'), '0123456789');
+    assert.equal(
+      findOversizeCopySource([root], 3),
+      join(root, 'nested', 'large.bin'),
+    );
+    assert.equal(findOversizeCopySource([root], 100), null);
+    assert.equal(findOversizeCopySource([join(root, 'missing')], 3), null);
+    symlinkSync(join(root, 'nested', 'large.bin'), join(linkRoot, 'link.bin'));
+    assert.equal(
+      findOversizeCopySource([linkRoot], 3),
+      join(linkRoot, 'link.bin'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(linkRoot, { recursive: true, force: true });
+  }
+});
+
+test('findOversizeCopySource does not walk the top-level .git entry (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-git-'));
+  try {
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, '.git', 'large.bin'), '0123456789');
+    assert.equal(findOversizeCopySource([root], 3), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--apply refuses before any mutation when a checkout file exceeds the Windows helper limit (issue #5316)', () => {
+  const checkout = mkdtempSync(join(tmpdir(), 'idd-lwr-oversize-'));
+  const shim = windowsRecoveryCopyShim(() => ({ ok: true }));
+  try {
+    writeFileSync(join(checkout, 'large.bin'), '0123456789');
+    let mutatingCalls = 0;
+    const deps = fakeDeps({
+      noFollowFlags: {},
+      windowsNoFollow: shim.deps,
+      windowsCopyMaxBytes: 4,
+      confirmBlock: () => ({
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+          evidence: {
+            local_worktree: {
+              status: 'occupied',
+              paths: [checkout],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      }),
+      runGit: (argv) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') mutatingCalls += 1;
+        if (argv[0] === 'stash' && argv[1] === 'push') mutatingCalls += 1;
+        if (argv[0] === 'update-ref') mutatingCalls += 1;
+        return cleanRepoRunGit(argv);
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({
+        apply: true,
+        operatorConfirmedNoLiveSession: true,
+        worktree: checkout,
+      }),
+      deps,
+    );
+    assert.equal(verdict.mutated, false);
+    assert.equal(mutatingCalls, 0);
+    assert.match(
+      verdict.result,
+      /larger than the Windows no-follow helper can copy in one read/,
+    );
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
     shim.cleanup();
   }
 });
