@@ -68,8 +68,9 @@
   //
   // The value can also be an object with the keys frontier, middle-tier, and
   // lightweight, each set to one of the values above, for one policy per
-  // model tier. Until the merge handoff resolves that object, the handoff
-  // treats the value as an unknown merge policy and stops.
+  // model tier. The merge handoff resolves the object to one of those values
+  // for the session's model tier and follows it. An object it cannot resolve
+  // stops the handoff without a merge.
   "mergePolicy": "human_merge",
 
   // Diagnostics only: confirms that you reconsidered mergePolicy, and never
