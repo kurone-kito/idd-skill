@@ -923,6 +923,22 @@ test('windows: a directory replaced before the write, or during it, is reported'
   assert.equal(late.privatePaths.has(during), false);
 });
 
+test('windows: an entry added before a writer step stops that step', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx, 'populated-late');
+  const acl = windowsAcl();
+  acl.onRestrict((directory) => {
+    // Another process adds an entry after the pre-write checks passed.
+    writeFileSync(join(directory, 'late-entry'), 'x');
+  });
+  assert.throws(
+    () => windowsEnsure(path, acl),
+    /directory changed while it was being restricted/,
+  );
+  // The fake writer reached its second step only through the recheck.
+  assert.equal(acl.privatePaths.has(path), false);
+});
+
 test('windows: a path swapped for a junction after the checks is reported and its target is not written', () => {
   const fx = fresh();
   const acl = windowsAcl();

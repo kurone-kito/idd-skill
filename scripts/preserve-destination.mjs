@@ -84,8 +84,9 @@ export function inspectDirectoryPrivacy(path, platform, windowsAclReader) {
  * An existing permissive directory is refused earlier, at inspection. The
  * identity read by one no-follow lstat of the original path is compared, at
  * both that path and its resolved name, just before the first write, before
- * every step the writer takes, and after the re-read, so a path swapped for a
- * link or another directory in between is reported. `icacls` still resolves
+ * every step the writer takes (together with the emptiness check), and after
+ * the re-read, so a path swapped for a link or another directory in between
+ * is reported. `icacls` still resolves
  * the path itself, so a window of one call remains; handle-based writes are not
  * used here. The tools default to the real System32 ones; the four-argument
  * call is for tests and keeps the existing callers unchanged.
@@ -165,8 +166,10 @@ function restrictWindowsStateDirectory(path, windowsAclReader, tools) {
     throw new Error('directory changed after inspection');
   }
   try {
+    // Before each step the directory must still be the verified one and still
+    // empty, so an entry added in between stops the next step.
     tools.restrict(real, currentSid, windowsAclReader, () => {
-      if (!unchanged()) {
+      if (!unchanged() || !isEmpty(real)) {
         throw new Error('directory changed while it was being restricted');
       }
     });
