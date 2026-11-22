@@ -1022,14 +1022,19 @@ function stripPowerShellCommentsAndHereStrings(source: string): {
   source: string;
   expandableHereStrings: string[];
 } {
-  // Find payload variables from executable text only. Literal here-strings and
-  // comments are removed first, so prose that mentions `iex $name` is not a
-  // consumer.
-  const literalsOnly = blankPowerShellHereStrings(source, new Set<string>());
-  const payloadVariables = powerShellPayloadVariables(
-    stripPowerShellComments(literalsOnly.source),
-  );
-  const blanked = blankPowerShellHereStrings(source, payloadVariables);
+  // Payload variables come from executable text only: literal here-strings and
+  // comments are removed before the consumers are read. A payload can run
+  // another payload, so the search repeats until no new name appears.
+  let payloadVariables = new Set<string>();
+  let blanked = blankPowerShellHereStrings(source, payloadVariables);
+  for (;;) {
+    const discovered = powerShellPayloadVariables(
+      stripPowerShellComments(blanked.source),
+    );
+    if ([...discovered].every((name) => payloadVariables.has(name))) break;
+    payloadVariables = new Set([...payloadVariables, ...discovered]);
+    blanked = blankPowerShellHereStrings(source, payloadVariables);
+  }
   return {
     source: stripPowerShellComments(blanked.source),
     expandableHereStrings: blanked.expandableHereStrings,

@@ -2063,6 +2063,20 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: false,
     },
     {
+      name: 'payload run from a payload held in a variable is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        "$run = @'",
+        'iex $code',
+        "'@",
+        'iex $run',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'scoped variable holding a here-string is run by iex',
       body: [
         "$script:code = @'",
