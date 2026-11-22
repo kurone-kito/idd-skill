@@ -758,21 +758,30 @@ function withoutLineContinuations(text: string): string {
 }
 
 /**
+ * The lowercased name of a variable matched by a pattern that captures it as
+ * either `${name}` (group 1) or `$name` / `$scope:name` (group 2).
+ */
+function variableName(match: RegExpMatchArray): string {
+  return (match[1] ?? match[2] ?? '').toLowerCase();
+}
+
+/**
  * Variable names whose value PowerShell runs: `iex $name`, `& $name`, or a
  * `-Command $name` argument. A here-string assigned to one of them is a payload.
  */
 function powerShellPayloadVariables(source: string): Set<string> {
   const names = new Set<string>();
   const consumer =
-    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$([a-z_]\w*)/giu;
+    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))/giu;
   const text = withoutLineContinuations(source);
   for (const match of text.matchAll(consumer)) {
-    names.add((match[1] ?? '').toLowerCase());
+    names.add(variableName(match));
   }
   // A variable piped into `iex` is the payload too.
-  const piped = /\$([a-z_]\w*)\s*\|\s*(?:iex|invoke-expression)(?![\w-])/giu;
+  const piped =
+    /\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))\s*\|\s*(?:iex|invoke-expression)(?![\w-])/giu;
   for (const match of text.matchAll(piped)) {
-    names.add((match[1] ?? '').toLowerCase());
+    names.add(variableName(match));
   }
   return names;
 }
@@ -792,12 +801,14 @@ function isInvokedHereString(
   const after = withoutLineContinuations(
     withoutBlockComments(characters.slice(closer + 2).join('')),
   );
-  const assigned = /\$([a-z_]\w*)\s*=\s*\(*\s*$/iu.exec(before);
+  const assigned =
+    /\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))\s*=\s*\(*\s*$/iu.exec(
+      before,
+    );
   return (
     POWERSHELL_INVOKED_BEFORE.test(before) ||
     POWERSHELL_INVOKED_AFTER.test(after) ||
-    (assigned !== null &&
-      payloadVariables.has((assigned[1] ?? '').toLowerCase()))
+    (assigned !== null && payloadVariables.has(variableName(assigned)))
   );
 }
 
