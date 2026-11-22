@@ -25,7 +25,7 @@ live-fetch fallback, F3's merge call, stall recovery, and same-HEAD
 reroll are out of scope; E14's settled-elapsed case (`#2327`) has its
 own table.
 
-A lite session excludes A0-A4.5/E4-E8, and F3-F5 unless F2.5 resolves
+A lite session excludes A0-A4.5/E4-E8. It excludes F3-F5 unless F2.5 resolves
 `fully_autonomous_merge`. A resolved `fully_autonomous_merge` continues at the
 standard handoff. Otherwise, it uses only E1 Step 2, E14, lite F1-F2 read-only
 helpers, and F2.5 handoff-stop. Excluded call sites: stop and ask a stronger
