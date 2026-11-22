@@ -104,7 +104,10 @@ import {
 } from './preserve-destination.mjs';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
 import { isWindowsNoFollowOpenAvailable } from './user-global-paths.mjs';
-import { copyNoFollow } from './windows-nofollow.mjs';
+import {
+  copyNoFollow,
+  WINDOWS_HELPER_MAX_FILE_BYTES,
+} from './windows-nofollow.mjs';
 import {
   canonicalSubject,
   claimBasisProblem,
@@ -4726,6 +4729,30 @@ function runRecoveryCore(args, deps, evidenceRun) {
       'refusing --apply: this platform does not support the no-follow and nonblocking file opens required for recovery copies; no mutation',
     );
   }
+  if (
+    noFollowFlags.O_NOFOLLOW === undefined ||
+    noFollowFlags.O_NONBLOCK === undefined
+  ) {
+    // The Windows helper buffers each file whole, so a file it cannot hold
+    // would fail partway through apply, after the stash and ref steps. Check
+    // every regular file of the checkout before the first mutation.
+    let oversize;
+    try {
+      oversize = findOversizeCopySource(
+        [targetPath],
+        deps.windowsCopyMaxBytes ?? WINDOWS_HELPER_MAX_FILE_BYTES,
+      );
+    } catch (error) {
+      return recordRemovalFailure(
+        `refusing --apply: cannot size the checkout for the Windows copy (${error instanceof Error ? error.message : String(error)}); no mutation`,
+      );
+    }
+    if (oversize !== null) {
+      return recordRemovalFailure(
+        `refusing --apply: ${oversize} is larger than the Windows no-follow helper can copy in one read; no mutation`,
+      );
+    }
+  }
   if (primaryRecoveryResume) {
     if (!restorePrimaryRecoveryPlan()) {
       return recordRemovalFailure(
@@ -7772,6 +7799,62 @@ function resolveWindowsCopyDeps(override) {
   const platform = deps.platform ?? process.platform;
   if (platform !== 'win32') return null;
   return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
+}
+/**
+ * The first regular file under `roots` larger than `maxBytes`, or `null`. The
+ * walk uses lstat and does not follow links, except that a symbolic link is
+ * measured by its target, because recovery materializes in-tree links. A
+ * missing root holds nothing to copy. The top-level `.git` entry of a root is
+ * not walked: recovery copies the git-admin directory separately, and it is
+ * not checkout content. A read error throws, so the caller fails closed.
+ */
+export function findOversizeCopySource(
+  roots,
+  maxBytes = WINDOWS_HELPER_MAX_FILE_BYTES,
+) {
+  const visited = new Set();
+  const pending = roots.map((path) => ({
+    path,
+    root: true,
+  }));
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (next === undefined) break;
+    let stat;
+    try {
+      stat = lstatSync(next.path);
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      let target;
+      try {
+        target = statSync(next.path);
+      } catch {
+        continue; // a dangling link materializes nothing
+      }
+      if (target.isFile()) {
+        if (target.size > maxBytes) return next.path;
+        continue;
+      }
+      if (!target.isDirectory()) continue;
+      stat = target;
+    }
+    if (stat.isFile()) {
+      if (stat.size > maxBytes) return next.path;
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+    const real = realpathSync(next.path);
+    if (visited.has(real)) continue;
+    visited.add(real);
+    for (const entry of readdirSync(next.path)) {
+      if (next.root && entry === '.git') continue;
+      pending.push({ path: join(next.path, entry), root: false });
+    }
+  }
+  return null;
 }
 export function copyPathWithSafeSymlinks(
   from,
