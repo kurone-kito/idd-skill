@@ -2025,6 +2025,23 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'colon-bound -Command payload here-string is scanned',
+      body: [
+        "powershell -NoProfile -Command:@'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'piped here-string keeps statement boundaries',
+      body: ["@'", 'Write-Output ok', 'gh api repos/o/r', "'@ | iex", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
       name: 'argument here-string prose stays literal',
       body: [
         "Write-Host @'",

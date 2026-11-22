@@ -743,7 +743,7 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
  * argument, or a pipe into `iex` or a shell.
  */
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*)\s*$/iu;
+  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
   /^\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 
@@ -906,14 +906,15 @@ function blankPowerShellHereStrings(source: string): {
     }
     if (isInvokedHereString(characters, index, closer)) {
       // The value is run as code, so keep its text as bare tokens. Blank only
-      // the markers and line breaks.
-      blankPowerShellRange(characters, index, lineStart);
-      for (let at = lineStart; at < closer; at += 1) {
-        if (characters[at] === '\n' || characters[at] === '\r') {
-          characters[at] = ' ';
-        }
-      }
+      // the markers. Each line break, including the one after the opener, becomes
+      // `;`, so statement boundaries survive and a colon-bound `-Command:`
+      // keeps its payload attached.
+      blankPowerShellRange(characters, index, index + 2);
       blankPowerShellRange(characters, closer, closer + 2);
+      for (let at = index + 2; at < closer; at += 1) {
+        if (characters[at] === '\n') characters[at] = ';';
+        else if (characters[at] === '\r') characters[at] = ' ';
+      }
     } else {
       blankPowerShellRange(characters, index, closer + 2);
     }
