@@ -20,8 +20,6 @@ off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
   posting is not restricted (see Markers).
 - `instructions-only`: do not use this lite file; use the full-size
   advisory-wait instructions instead.
-- Any mismatch between this file and
-  `idd-advisory-wait.instructions.md` is a bug in this file.
 
 ## Scope boundary (E1 Step 2 and E14; F2/F3 excluded)
 
@@ -32,9 +30,11 @@ live-fetch fallback, F3's merge call, stall recovery, and same-HEAD
 reroll are out of scope; E14's settled-elapsed case (`#2327`) has its
 own table.
 
-A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
-2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. Excluded
-call sites: stop and ask a stronger session/human.
+A lite session excludes A0-A4.5/E4-E8. It excludes F3-F5 unless F2.5 resolves
+`fully_autonomous_merge`. A resolved `fully_autonomous_merge` continues at the
+standard handoff. Otherwise, it uses only E1 Step 2, E14, lite F1-F2 read-only
+helpers, and F2.5 handoff-stop. Excluded call sites: stop and ask a stronger
+session/human.
 
 **Do not build a substitute wait for a non-primary bot** (full-size Scope
 section): rely on the standard E1 safety net, never a custom poll on any bot
@@ -54,8 +54,6 @@ but `advisoryWait.primaryBotLogin`.
   disappeared).
 - A pending Copilot request can't be refreshed, or an advisory-wait
   marker can't be posted or read.
-- This file is reached from an F2 prose-fallback or F3 call site (see
-  Scope boundary above).
 
 ## Fast path — common case
 
