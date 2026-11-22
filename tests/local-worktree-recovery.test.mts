@@ -67,6 +67,7 @@ import {
   pathFingerprintOnDisk,
   resolveDevelopmentBranchProduction,
   resolveEffectiveRealpath,
+  runLocalGitCommand,
   runLocalWorktreeRecovery,
   splitPreservedCleanPaths,
   statSnapshotsAgree,
@@ -13366,5 +13367,38 @@ test('statSnapshotsAgree keeps the ctime strict within one read in either mode',
       false,
     );
     assert.equal(statSnapshotsAgree(stat(), stat({ size: 11 }), stable), false);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Production git runner output bound (issue #5240)
+// ---------------------------------------------------------------------------
+
+test('runLocalGitCommand returns a read above the default 1 MiB output limit in full (issue #5240)', () => {
+  // Node's default stdout limit for `execFileSync` is 1 MiB; the status read of
+  // a scope with many ignored files prints more. The stub ends on its own: a
+  // `process.exit()` right after a large write can drop part of the output.
+  const outputBytes = 2 * 1024 * 1024;
+  const restore = stubExecutable(
+    'git',
+    `process.stdout.write('x'.repeat(${outputBytes}));`,
+  );
+  try {
+    const result = runLocalGitCommand(
+      [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--ignored',
+        '--untracked-files=all',
+        '--ignore-submodules=none',
+      ],
+      tmpdir(),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.length, outputBytes);
+  } finally {
+    restore();
   }
 });
