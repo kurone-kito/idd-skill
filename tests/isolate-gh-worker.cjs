@@ -1005,9 +1005,9 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
 // Text before a here-string opener, and after its closer, that makes PowerShell
 // run the here-string value. Keep these identical to isolate-gh.mts.
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*$/iu;
+  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
-  /^\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
+  /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 
 function isInvokedHereString(characters, opener, closer) {
   let lineStart = opener;

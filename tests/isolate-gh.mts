@@ -743,9 +743,9 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
  * argument, or a pipe into `iex` or a shell.
  */
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*$/iu;
+  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
-  /^\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
+  /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 
 function isInvokedHereString(
   characters: string[],

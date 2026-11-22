@@ -2035,6 +2035,13 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'parenthesized here-string piped into iex is scanned',
+      body: ["(@'", 'C:/tools/gh.exe api repos/o/r', "'@) | iex", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
       name: 'piped here-string keeps a line comment boundary',
       body: ["@'", '# heading', 'gh api repos/o/r', "'@ | iex", ''].join('\n'),
       expectBlocked: true,
