@@ -263,15 +263,22 @@ file), stop and ask once. Never raise a per-file cap.
 
 **First-push secondary hold (optional, standard profile).** Apply this only
 when `advisoryWait.firstFixPushSecondaryWait` is set, and only to the first E12
-push of a head. Hold before the claim revalidation gate and the push below.
-The hold ends for each secondary advisory bot (the top-level `advisoryBotLogins`
-minus `advisoryWait.primaryBotLogin`) when that bot submits a review whose
-`commit_id` equals the pre-push HEAD and whose submission time is after the hold
-started, or when the duration elapses, whichever comes first. A review with no
-inline comments ends that bot's wait and adds nothing. Fold in only findings that
-pass the bounded cross-round rules below. The 10-minute bound counts from the
-first accumulated commit, so the hold does not use it. When the setting is
-absent, this paragraph does not apply and E12 is unchanged.
+push of a head. Without the setting, do not wait for any secondary bot before
+this push. With it, hold before the claim revalidation gate and the push below.
+The secondary bots are the set that `secondaryQuietWindow` covers:
+`advisoryBotLogins` and `advisoryWait.secondaryBotLogin`, minus both identities
+of the primary bot. An empty set holds for the full duration. Read the PR
+reviews with `gh api repos/{owner}/{repo}/pulls/{pr-number}/reviews` every
+`advisoryWait.pollInterval`, under the E15 wake-up rule, until each secondary
+bot has a review whose `commit_id` equals the PR head before this push
+(`PR_HEAD_SHA`, E14 step 1) and whose `submitted_at` is after the hold started,
+or until the duration elapses, whichever comes first. A review with no inline
+comments ends that bot's wait and adds nothing. Fold in only the inline findings
+that pass the bounded cross-round rules below. A finding that fails them stays
+for E1 after the push, as usual, and body-only findings are not folded here.
+The 10-minute bound counts from the first accumulated commit, so the hold does
+not use it. The order is hold, then the claim revalidation gate, then the push.
+When the setting is absent, this paragraph does not apply and E12 is unchanged.
 
 Then push the feature branch. With helper runtime, inspect and commit
 any validation or formatter output first, then push through
@@ -504,8 +511,7 @@ A false finding is Rejected on its merits.
    Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
    when unconfigured. Never poll or wait for a secondary bot's review
-   here, at E1, or at E2 (the E12 hold above is the one exception, and only
-   when its setting is present). Your primary bot is
+   here, at E1, or at E2. Your primary bot is
    `advisoryWait.primaryBotLogin` (default Copilot); every other advisory
    bot, such as `chatgpt-codex-connector[bot]`, is secondary. Only F2's
    `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
