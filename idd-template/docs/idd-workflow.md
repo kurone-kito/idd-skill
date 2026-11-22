@@ -257,34 +257,32 @@ When a lightweight-tier model runs any part of this loop:
   change the upstream repository's Copilot advisory-review convergence
   scope decision or the lite-profile exclusion of
   `idd-review-triage.instructions.md`.
-- Follow the resolved merge policy, including on this tier. A recorded
-  value is either one string, which applies to every tier and does not
-  read a tier name, or an object with `frontier`, `middle-tier`, and
-  `lightweight`, each one of `human_merge`, `fully_autonomous_merge`,
-  or `separate_merge_agent`. On the standard profile, a resolved
-  `fully_autonomous_merge` runs F3 after the existing gates.
-  `separate_merge_agent` keeps handoff step 5: the first branch runs only when
-  repository documentation explicitly records that this session is the
-  designated merge-capable actor and the documented resume condition is
+- Follow the resolved merge policy, including on this tier. A recorded value is
+  either one string, which applies to every tier and does not read a tier name,
+  or an object with `frontier`, `middle-tier`, and `lightweight`, each one of
+  `human_merge`, `fully_autonomous_merge`, or `separate_merge_agent`. On the
+  standard profile, a resolved `fully_autonomous_merge` runs F3 after the
+  existing gates. `separate_merge_agent` keeps handoff step 5: the first branch
+  runs only when repository documentation explicitly records that this session
+  is the designated merge-capable actor and the documented resume condition is
   satisfied, and the Otherwise branch keeps both bullets, including no release
-  post when the claim was already lost. An
-  unresolved tier on an object is the standard unknown-policy hold.
-  On the lite profile, a schema-valid tier object is resolved only when `git
-  fetch origin {development-branch}` succeeds (a failed fetch never falls back
-  to a local ref), `config.json` matches `origin/{development-branch}`, the
-  operator named one of those three tiers, and the resolver exits 0 with stdout
-  exactly one of the three enums. Any other result stays unrecognized.
-  A string does not read a tier name. A resolved
+  post when the claim was already lost. An unresolved tier on an object is the
+  standard unknown-policy hold. On the lite profile, a schema-valid tier object
+  is resolved only when `git fetch origin {development-branch}` succeeds (a
+  failed fetch never falls back to a local ref), `config.json` matches
+  `origin/{development-branch}`, the operator named one of those three tiers,
+  and the resolver exits 0 with stdout exactly one of the three enums. Any other
+  result stays unrecognized. A string does not read a tier name. A resolved
   `fully_autonomous_merge` continues at the standard handoff, which runs F3
-  after the existing gates. The lite
-  profile has no F3 file and does not run `gh pr merge`. A resolved
-  `human_merge` keeps the claim. A resolved `separate_merge_agent`
-  releases the claim only when `ready` is true and the guard passes.
-  The lite file does not evaluate standard step 5. `mergePolicyAck`
-  stays diagnostic. The older sentence, "do not run the autonomous merge phases
-  (F3 onward) on this tier," described the hold that ends only when the F2.5
-  handoff resolves this route. See
-  [Onboarding Reference — Policy Decisions](onboarding/policy-decisions.md#merge-policy).
+  after the existing gates. The lite profile has no F3 file. The lite file does
+  not run `gh pr merge`; a resolved `fully_autonomous_merge` continues at the
+  standard handoff, which runs F3. A resolved `human_merge` keeps the claim. A
+  resolved `separate_merge_agent` releases the claim only when `ready` is true
+  and the guard passes. The lite file does not evaluate standard step 5.
+  `mergePolicyAck` stays diagnostic. The older sentence, "do not run the
+  autonomous merge phases (F3 onward) on this tier," described the hold that
+  ends only when the F2.5 handoff resolves this route. See [Onboarding Reference
+  — Policy Decisions](onboarding/policy-decisions.md#merge-policy).
 - This is additional to, not a replacement for, the uniform C-phase
   objective diff validation floor in
   [Critique pass invocation](#critique-pass-invocation): that floor
@@ -422,28 +420,26 @@ and whether your repository has authored any of its own:
 | Resume                   | `idd-resume.instructions.md`          | `lite/idd-resume-lite.instructions.md`          |
 | Resume-stall             | `idd-resume-stall.instructions.md`    | `lite/idd-resume-stall-lite.instructions.md`    |
 
-The F1-F2 and F2.5 rows cover a **partial** slice of their standard
-files only: the lite F1-F2 file covers just F1's read-only branch
-check and reading the `pre-merge-readiness` helper verdict, never the
-standard file's written prose fallback. The lite F2.5 file reads the
-recorded policy. A string is one enum for every tier and does not
-read a tier name. An object has `frontier`, `middle-tier`, and
-`lightweight`, each a known enum. A schema-valid object is resolved only when
-`git fetch origin {development-branch}` succeeds (a failed fetch never falls
-back to a local ref), `config.json` matches `origin/{development-branch}`, the
-operator named one of those three tiers, and the resolver exits 0 with stdout
-exactly one of the three enums. Any other result
-stays unrecognized. A resolved
-`fully_autonomous_merge` continues at the standard handoff, which
-then runs F3 after the existing gates.
-The lite profile has no F3 file and does not run `gh pr merge`.
-A resolved `human_merge` posts the handoff comment and keeps the
-claim. A resolved `separate_merge_agent` posts that comment and
-releases the claim only when `ready` is true and the guard passes;
-otherwise it posts no release. The lite file does not evaluate
-standard step 5. Any other value stays unrecognized.
-`mergePolicyAck` stays diagnostic. A broken or missing F1-F2 helper
-stays a stop-and-ask condition.
+The F1-F2 and F2.5 rows cover a **partial** slice of their standard files only:
+the lite F1-F2 file covers just F1's read-only branch check and reading the
+`pre-merge-readiness` helper verdict, never the standard file's written prose
+fallback. The lite F2.5 file reads the recorded policy. A string is one enum for
+every tier and does not read a tier name. An object has `frontier`,
+`middle-tier`, and `lightweight`, each a known enum. A schema-valid object is
+resolved only when `git fetch origin {development-branch}` succeeds (a failed
+fetch never falls back to a local ref), `config.json` matches
+`origin/{development-branch}`, the operator named one of those three tiers, and
+the resolver exits 0 with stdout exactly one of the three enums. Any other
+result stays unrecognized. A resolved `fully_autonomous_merge` continues at the
+standard handoff, which then runs F3 after the existing gates. The lite profile
+has no F3 file. The lite file does not run `gh pr merge`; a resolved
+`fully_autonomous_merge` continues at the standard handoff, which runs F3. A
+resolved `human_merge` posts the handoff comment and keeps the claim. A resolved
+`separate_merge_agent` posts that comment and releases the claim only when
+`ready` is true and the guard passes; otherwise it posts no release. The lite
+file does not evaluate standard step 5. Any other value stays unrecognized.
+`mergePolicyAck` stays diagnostic. A broken or missing F1-F2 helper stays a
+stop-and-ask condition.
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own, so they never appear as

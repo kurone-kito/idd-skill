@@ -11043,37 +11043,34 @@ by hand. Rationale and observed cases:
   (the weekly summary workflow above also runs it), not a phase step — its
   absence from the executable phase instruction files is by design, not an
   oversight.
-  - **Intent**: it exists as a spot-check for runs where a lightweight
-    model (for example a GPT-5.4-mini or Haiku-class model) has been
-    driving the IDD loop and may have left feedback with **no E-phase
-    disposition at all, or a thread left unresolved**, letting a merge
-    complete — by whichever actor was authorized to run it — with that
-    feedback unaddressed. A recorded merge policy is one string for
-    every tier, which does not read a tier name, or an object with
-    `frontier`, `middle-tier`, and `lightweight`. On the standard
-    profile a resolved `fully_autonomous_merge` runs F3 after the
-    existing gates, including when the session is lightweight-tier.
-    `separate_merge_agent` keeps handoff step 5, including no release
-    post when the claim was already lost. An unresolved object tier is
-    the unknown-policy hold. On the lite profile a schema-valid object is
-    resolved only when `git fetch origin {development-branch}` succeeds (a
-    failed fetch never falls back to a local ref), `config.json` matches
-    `origin/{development-branch}`, the operator named one of those three tiers,
-    and the resolver exits 0 with stdout exactly one of the three enums. Any
-    other result stays unrecognized. A resolved
-    `fully_autonomous_merge` continues at the standard handoff, which runs F3
-    after the existing gates. The
-    lite profile has no F3 file and does not run `gh pr merge`. A
-    resolved `human_merge` keeps the claim. A resolved
-    `separate_merge_agent` releases the claim only when `ready` is
-    true and the guard passes. The lite file does not evaluate
-    standard step 5. `mergePolicyAck` stays diagnostic. The older
-    sentence said a lightweight-tier session must not itself run the
-    autonomous merge phases; that hold is lifted when the resolved
-    policy allows the merge. The sweep detects exactly those two gaps —
-    it has **no backstop** for a _false-but-present_ disposition or an
-    already-resolved thread; see the boundary recorded in
-    `idd-design-rationale.md`.
+  - **Intent**: it exists as a spot-check for runs where a lightweight model
+    (for example a GPT-5.4-mini or Haiku-class model) has been driving the IDD
+    loop and may have left feedback with **no E-phase disposition at all, or a
+    thread left unresolved**, letting a merge complete — by whichever actor was
+    authorized to run it — with that feedback unaddressed. A recorded merge
+    policy is one string for every tier, which does not read a tier name, or an
+    object with `frontier`, `middle-tier`, and `lightweight`. On the standard
+    profile a resolved `fully_autonomous_merge` runs F3 after the existing
+    gates, including when the session is lightweight-tier.
+    `separate_merge_agent` keeps handoff step 5, including no release post when
+    the claim was already lost. An unresolved object tier is the unknown-policy
+    hold. On the lite profile a schema-valid object is resolved only when `git
+    fetch origin {development-branch}` succeeds (a failed fetch never falls back
+    to a local ref), `config.json` matches `origin/{development-branch}`, the
+    operator named one of those three tiers, and the resolver exits 0 with
+    stdout exactly one of the three enums. Any other result stays unrecognized.
+    A resolved `fully_autonomous_merge` continues at the standard handoff, which
+    runs F3 after the existing gates. The lite profile has no F3 file. The lite
+    file does not run `gh pr merge`; a resolved `fully_autonomous_merge`
+    continues at the standard handoff, which runs F3. A resolved `human_merge`
+    keeps the claim. A resolved `separate_merge_agent` releases the claim only
+    when `ready` is true and the guard passes. The lite file does not evaluate
+    standard step 5. `mergePolicyAck` stays diagnostic. The older sentence said
+    a lightweight-tier session must not itself run the autonomous merge phases;
+    that hold is lifted when the resolved policy allows the merge. The sweep
+    detects exactly those two gaps — it has **no backstop** for a
+    _false-but-present_ disposition or an already-resolved thread; see the
+    boundary recorded in `idd-design-rationale.md`.
   - **When to run it** (non-binding trigger guidance, not a policy gate):
     after a weak-model-driven backlog drain, on a periodic spot-audit
     cadence, or when a fail-open is suspected on a specific PR (via
