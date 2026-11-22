@@ -487,15 +487,19 @@ export function readWindowsOwner(directory, deps = {}) {
  * under the user temp directory), then removes each explicit entry left for
  * another principal. `/L` makes every call act on a link itself, so a
  * directory swapped for a junction after the caller's check changes the link,
- * not its target. Each step only narrows access, so a failure part-way leaves
- * the directory no more open than it was. `icacls /restore` is not used: it
- * needs a privilege a standard user lacks.
+ * not its target. `recheck` runs before every `icacls` call, so the caller
+ * stops the next step when the directory is no longer the one it verified;
+ * `icacls` still resolves the path itself, so a window of one call remains.
+ * Each step only narrows access, so a failure part-way leaves the directory no
+ * more open than it was. `icacls /restore` is not used: it needs a privilege a
+ * standard user lacks.
  */
 export function restrictWindowsDirectory(
   directory,
   currentSid,
   readAcl,
   deps = {},
+  recheck = () => {},
 ) {
   if (!QUALIFIED_PATH.test(directory)) {
     throw new Error(`${directory} is not an absolute Windows path`);
@@ -508,6 +512,7 @@ export function restrictWindowsDirectory(
   const exec = deps.execFile ?? execFileSync;
   const icacls = join(system32(env), 'icacls.exe');
   const run = (args) => {
+    recheck();
     exec(icacls, [directory, ...args, '/L', '/q'], {
       encoding: 'utf8',
       timeout: PROCESS_TIMEOUT_MS,
@@ -537,6 +542,6 @@ export function restrictWindowsDirectory(
 /** The real tools, used when a caller passes none. */
 export const defaultWindowsDirectoryTools = {
   readOwner: (directory) => readWindowsOwner(directory),
-  restrict: (directory, currentSid, readAcl) =>
-    restrictWindowsDirectory(directory, currentSid, readAcl),
+  restrict: (directory, currentSid, readAcl, recheck) =>
+    restrictWindowsDirectory(directory, currentSid, readAcl, {}, recheck),
 };

@@ -797,3 +797,54 @@ test('windows acl restrict: a failing icacls step surfaces, and an unreadable re
   });
   assert.equal(calls.length, 2);
 });
+
+test('windows acl restrict: the recheck runs before every icacls call and a throw stops the next one', () => {
+  const fx = restrictFixture([
+    { sid: USER_SID, allow: true },
+    { sid: OTHER_SID, allow: true },
+  ]);
+  const order: string[] = [];
+  const deps = {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: ((_file: string, args: string[]) => {
+      order.push(`exec ${args[1]}`);
+      return '';
+    }) as never,
+  };
+  restrictWindowsDirectory('C:\\d', USER_SID, fx.reader, deps, () => {
+    order.push('recheck');
+  });
+  assert.deepEqual(order, [
+    'recheck',
+    'exec /grant:r',
+    'recheck',
+    'exec /inheritance:r',
+    'recheck',
+    'exec /remove',
+  ]);
+
+  let calls = 0;
+  const stopped: string[] = [];
+  assert.throws(
+    () =>
+      restrictWindowsDirectory(
+        'C:\\d',
+        USER_SID,
+        fx.reader,
+        {
+          env: { SystemRoot: 'C:\\Windows' },
+          execFile: ((_file: string, args: string[]) => {
+            stopped.push(args[1] as string);
+            return '';
+          }) as never,
+        },
+        () => {
+          calls += 1;
+          if (calls === 2) throw new Error('directory changed');
+        },
+      ),
+    /directory changed/,
+  );
+  // The first step ran; the swap was caught before the second.
+  assert.deepEqual(stopped, ['/grant:r']);
+});

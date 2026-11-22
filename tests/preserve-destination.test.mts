@@ -10,6 +10,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -678,10 +679,13 @@ function windowsAcl(withCurrentSid = true): WindowsAclFixture {
       if (owner === 'throw') throw new Error('owner read failed');
       return owner;
     },
-    restrict: (directory, currentSid) => {
+    // Like the real writer, it runs the caller's recheck before each step.
+    restrict: (directory, currentSid, _readAcl, recheck) => {
       restricted.push(directory);
       assert.equal(currentSid, USER_SID);
+      recheck?.();
       hook(directory);
+      recheck?.();
       if (effective) privatePaths.add(directory);
     },
   };
@@ -915,6 +919,59 @@ test('windows: a directory replaced before the write, or during it, is reported'
     () => windowsEnsure(during, late),
     /directory changed while it was being restricted/,
   );
+  // The swap was caught by the recheck, so the writer never marked it private.
+  assert.equal(late.privatePaths.has(during), false);
+});
+
+test('windows: a path swapped for a junction after the checks is reported and its target is not written', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const path = permissiveDirectory(fx, 'victim-path');
+  const target = permissiveDirectory(fx, 'junction-target');
+  const swapped: WindowsDirectoryTools = {
+    ...acl.tools,
+    readOwner: (directory) => {
+      // Here the path and its resolved name are the same string, so both now
+      // lead to the junction.
+      renameSync(path, `${path}.old`);
+      symlinkSync(target, path, 'junction');
+      assert.equal(directory, path);
+      return USER_SID;
+    },
+  };
+  assert.throws(
+    () => ensurePrivateStateDirectory(path, 'win32', acl.reader, swapped),
+    /directory changed after inspection/,
+  );
+  assert.deepEqual(acl.restricted, []);
+  assert.equal(acl.privatePaths.has(target), false);
+});
+
+test('windows: a parent link retargeted after the checks is reported through the original path', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const first = join(fx.root, 'first');
+  const second = join(fx.root, 'second');
+  mkdirSync(join(first, 'victim'), { recursive: true });
+  mkdirSync(join(second, 'victim'), { recursive: true });
+  const via = join(fx.root, 'via');
+  symlinkSync(first, via, 'junction');
+  // The path goes through a link, so it differs from its resolved name; the
+  // resolved name stays put while the link now leads to another directory.
+  const path = join(via, 'victim');
+  const retargeted: WindowsDirectoryTools = {
+    ...acl.tools,
+    readOwner: () => {
+      unlinkSync(via);
+      symlinkSync(second, via, 'junction');
+      return USER_SID;
+    },
+  };
+  assert.throws(
+    () => ensurePrivateStateDirectory(path, 'win32', acl.reader, retargeted),
+    /directory changed after inspection/,
+  );
+  assert.deepEqual(acl.restricted, []);
 });
 
 test('windows: inspection and a dry run never write an ACL', () => {

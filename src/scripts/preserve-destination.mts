@@ -141,10 +141,13 @@ export function inspectDirectoryPrivacy(
  * descendant, and the Windows state root is `%LOCALAPPDATA%`, so only an empty
  * directory, which is what a directory this run just created is, is rewritten.
  * An existing permissive directory is refused earlier, at inspection. The
- * identity is compared again just before the write and after the re-read, so a
- * directory swapped in between is reported. The tools default to the real
- * System32 ones; the four-argument call is for tests and keeps the existing
- * callers unchanged.
+ * identity read by one no-follow lstat of the original path is compared, at
+ * both that path and its resolved name, just before the first write, before
+ * every step the writer takes, and after the re-read, so a path swapped for a
+ * link or another directory in between is reported. `icacls` still resolves
+ * the path itself, so a window of one call remains; handle-based writes are not
+ * used here. The tools default to the real System32 ones; the four-argument
+ * call is for tests and keeps the existing callers unchanged.
  */
 function restrictWindowsStateDirectory(
   path: string,
@@ -169,23 +172,31 @@ function restrictWindowsStateDirectory(
       return false;
     }
   };
-  let linked: boolean;
+  // One lstat names the object the path points at without following a link. A
+  // symlink or junction is refused here, and every later check compares against
+  // this identity at the original path as well as at the resolved one, so a
+  // path swapped for a link after this point is reported, not followed.
+  let linked = false;
+  let identity: string;
   try {
-    linked = lstatSync(path).isSymbolicLink();
+    const stat = lstatSync(path, { bigint: true });
+    linked = stat.isSymbolicLink();
+    if (linked || !stat.isDirectory()) throw unverified();
+    identity = `${stat.dev}:${stat.ino}`;
   } catch {
+    if (linked) throw new Error('a state-root symlink target is not private');
     throw unverified();
   }
-  if (linked) throw new Error('a state-root symlink target is not private');
   let real: string;
-  let identity: string | null;
   try {
-    if (!statSync(path).isDirectory()) throw unverified();
     real = realpathSync.native(path);
-    identity = identityOf(real);
-    if (identity === null || !isEmpty(real)) throw unverified();
+    // The resolved directory must be the object the path named.
+    if (identityOf(real) !== identity || !isEmpty(real)) throw unverified();
   } catch {
     throw unverified();
   }
+  const unchanged = (): boolean =>
+    identityOf(path) === identity && identityOf(real) === identity;
   let before: WindowsAclResult;
   try {
     before = windowsAclReader(real);
@@ -211,11 +222,17 @@ function restrictWindowsStateDirectory(
   if (owner === null || owner.trim().toUpperCase() !== currentSid) {
     throw new Error('directory belongs to another user');
   }
-  if (identityOf(real) !== identity || !isEmpty(real)) {
+  // The last read before the first write. The writer repeats the identity
+  // check before each of its steps through the callback below.
+  if (!unchanged() || !isEmpty(real)) {
     throw new Error('directory changed after inspection');
   }
   try {
-    tools.restrict(real, currentSid, windowsAclReader);
+    tools.restrict(real, currentSid, windowsAclReader, () => {
+      if (!unchanged()) {
+        throw new Error('directory changed while it was being restricted');
+      }
+    });
   } catch (error) {
     throw new Error(
       `directory could not be restricted to its owner: ${error instanceof Error ? error.message : String(error)}`,
@@ -227,11 +244,13 @@ function restrictWindowsStateDirectory(
   } catch {
     throw unverified();
   }
+  // A swap is reported before the ACL verdict, which may belong to another
+  // directory.
+  if (!unchanged()) {
+    throw new Error('directory changed while it was being restricted');
+  }
   if (evaluateWindowsAcl(after) !== 'private') {
     throw new Error('directory could not be restricted to its owner');
-  }
-  if (identityOf(real) !== identity) {
-    throw new Error('directory changed while it was being restricted');
   }
 }
 
