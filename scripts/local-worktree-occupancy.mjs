@@ -496,6 +496,9 @@ function inspectLocalWorktreesMatching(matcher, cwd, environment, execute) {
       status: 'unreadable',
       paths: unreadablePaths,
       reason: 'cannot inspect matching local worktree metadata',
+      ...(matches.length > 0
+        ? { matchedPaths: matches.map((record) => record.path) }
+        : {}),
     };
   }
   if (matches.length === 0) {

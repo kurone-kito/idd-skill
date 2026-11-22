@@ -2154,6 +2154,35 @@ test('classifyPostRemovalClaimAssert holds when a later owner proof is not null'
   }
 });
 
+test('classifyPostRemovalClaimAssert holds when a live match sits beside the unreadable path', () => {
+  assert.deepEqual(
+    classifyPostRemovalClaimAssert(
+      postRemovalAssert({
+        evidence: {
+          owner_evidence: {
+            worktree_identity: false,
+            claim_lock_matches: null,
+            generated_tokens_match: null,
+            agent_and_branch_match: null,
+            occupancy_probe: 'unreadable',
+            occupancy_paths_match: null,
+          },
+          local_worktree: {
+            status: 'unreadable',
+            paths: [WORKTREE],
+            reason: null,
+            matchedPaths: ['/work/live-holder'],
+          },
+        },
+      }),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+    ),
+    { ok: false, code: 'owner-evidence-required' },
+  );
+});
+
 test('a zero-exit post-removal envelope still holds after removal', () => {
   const kept = postRemovalAssert();
   const h = harness({

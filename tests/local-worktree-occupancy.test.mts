@@ -642,6 +642,37 @@ test('fails closed for an active bisect in a detached worktree', () => {
   }
 });
 
+test('an unreadable scan also reports a live matching worktree beside the unreadable paths', () => {
+  const prunablePath = mkdtempSync(`${tmpdir()}/idd-local-worktree-prunable-`);
+  const live = mkdtempSync(`${tmpdir()}/idd-local-worktree-live-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    writeFileSync(join(gitDirectory, 'BISECT_START'), 'issue/42-task\n');
+    const result = inspectLocalWorktreeBranch(
+      'issue/42-task',
+      process.cwd(),
+      process.env,
+      ((file: string, args: string[]) => {
+        if (args[0] === 'worktree') {
+          return `worktree ${prunablePath}\0HEAD ghi\0branch refs/heads/issue/42-task\0prunable gitdir file\0\0worktree ${live}\0HEAD abc\0detached\0\0`;
+        }
+        return stubGitCommands(live, {
+          'rebase-merge': join(gitDirectory, 'rebase-merge'),
+          'rebase-apply': join(gitDirectory, 'rebase-apply'),
+          BISECT_START: join(gitDirectory, 'BISECT_START'),
+        })(file, args);
+      }) as typeof execFileSync,
+    );
+    assert.equal(result.status, 'unreadable');
+    assert.deepEqual(result.paths, [prunablePath]);
+    assert.deepEqual(result.matchedPaths, [live]);
+  } finally {
+    rmSync(prunablePath, { recursive: true, force: true });
+    rmSync(live, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
 test('resolves an all-hex bisect branch against refs/heads', () => {
   const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-bisect-ref-`);
   const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);

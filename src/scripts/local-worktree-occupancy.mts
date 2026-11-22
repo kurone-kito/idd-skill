@@ -15,6 +15,12 @@ export interface LocalWorktreeInspection {
   status: 'absent' | 'occupied' | 'unreadable';
   paths: string[];
   reason: string | null;
+  /**
+   * Present only on an `unreadable` result that also found live matching
+   * worktrees: their paths, reported beside the unreadable `paths` so a caller
+   * can see a holder that the unreadable record would otherwise hide.
+   */
+  matchedPaths?: string[];
 }
 
 /** The branch-bearing fields needed from one porcelain worktree record. */
@@ -585,6 +591,9 @@ function inspectLocalWorktreesMatching(
       status: 'unreadable',
       paths: unreadablePaths,
       reason: 'cannot inspect matching local worktree metadata',
+      ...(matches.length > 0
+        ? { matchedPaths: matches.map((record) => record.path) }
+        : {}),
     };
   }
   if (matches.length === 0) {
