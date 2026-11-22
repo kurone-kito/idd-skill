@@ -743,7 +743,7 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
  * argument, or a pipe into `iex` or a shell.
  */
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
+  /(?:^|[\s;(|{])(?:&|\.|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
   /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 

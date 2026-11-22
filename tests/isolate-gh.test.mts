@@ -2042,6 +2042,16 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'common parameters before a here-string in Invoke-Expression',
+      body: [
+        "Invoke-Expression -ErrorAction Stop @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'pipeline continued on the next line into iex is scanned',
       body: ["@'", 'C:/tools/gh.exe api repos/o/r', "'@ |", 'iex', ''].join(
         '\n',
