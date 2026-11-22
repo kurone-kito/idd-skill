@@ -14,8 +14,9 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   /** `trustedMarkerActors` is read by cleanup and trusted-marker consumers. */
   trustedMarkerActors:
     'post-merge-cleanup.yml, pre-merge-readiness.mts, external-check-waiver.mts, local-validation-evidence.mts, provider-outage-declaration.mts',
-  /** `mergePolicy` controls authority in the F3 merge implementation. */
-  mergePolicy: 'idd-merge-execute.mts and idd-merge.instructions.md',
+  /** `mergePolicy` controls which session may run the final merge. The F2.5 handoff files, the F3 merge file, and the `--resolve-merge-policy` mode read it. */
+  mergePolicy:
+    'idd-merge-handoff.instructions.md, idd-merge-handoff-lite.instructions.md, idd-merge.instructions.md, idd-effective-config.mts',
   /** `mergeGate` controls the trusted solo-CODEOWNER fallback in F3. */
   mergeGate: 'idd-merge-execute.mts',
   /** `dangerouslyAutoDecide` grants provisional-choice authority only from a trusted repository baseline. */
