@@ -752,27 +752,46 @@ function withoutBlockComments(text: string): string {
   return text.replace(/<#[\s\S]*?#>/gu, ' ');
 }
 
+/** A backtick at the end of a line continues the statement onto the next. */
+function withoutLineContinuations(text: string): string {
+  return text.replace(/`\r?\n/gu, ' ');
+}
+
+/**
+ * Variable names whose value PowerShell runs: `iex $name`, `& $name`, or a
+ * `-Command $name` argument. A here-string assigned to one of them is a payload.
+ */
+function powerShellPayloadVariables(source: string): Set<string> {
+  const names = new Set<string>();
+  const consumer =
+    /(?:^|[\s;(|{])(?:&|\.|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$([a-z_]\w*)/giu;
+  for (const match of source.matchAll(consumer)) {
+    names.add((match[1] ?? '').toLowerCase());
+  }
+  return names;
+}
+
 function isInvokedHereString(
   characters: string[],
   opener: number,
   closer: number,
+  payloadVariables: Set<string>,
 ): boolean {
-  let lineStart = opener;
-  while (
-    lineStart > 0 &&
-    characters[lineStart - 1] !== '\n' &&
-    characters[lineStart - 1] !== '\r'
-  ) {
-    lineStart -= 1;
-  }
-  // A pipeline may continue on a later line, so the rest of the text counts.
+  // The text before the opener counts from the start, since a continued line,
+  // a comment, or a parenthesis can sit between the keyword and the opener.
+  // The text after the closer counts to the end, since a pipeline may continue.
+  const before = withoutLineContinuations(
+    withoutBlockComments(characters.slice(0, opener).join('')),
+  );
+  const after = withoutLineContinuations(
+    withoutBlockComments(characters.slice(closer + 2).join('')),
+  );
+  const assigned = /\$([a-z_]\w*)\s*=\s*\(*\s*$/iu.exec(before);
   return (
-    POWERSHELL_INVOKED_BEFORE.test(
-      withoutBlockComments(characters.slice(lineStart, opener).join('')),
-    ) ||
-    POWERSHELL_INVOKED_AFTER.test(
-      withoutBlockComments(characters.slice(closer + 2).join('')),
-    )
+    POWERSHELL_INVOKED_BEFORE.test(before) ||
+    POWERSHELL_INVOKED_AFTER.test(after) ||
+    (assigned !== null &&
+      payloadVariables.has((assigned[1] ?? '').toLowerCase()))
   );
 }
 
@@ -789,6 +808,7 @@ function blankPowerShellHereStrings(source: string): {
 } {
   const characters = [...source];
   const expandableHereStrings: string[] = [];
+  const payloadVariables = powerShellPayloadVariables(source);
   let quote: "'" | '"' | null = null;
   for (let index = 0; index < characters.length; index += 1) {
     const character = characters[index];
@@ -902,7 +922,7 @@ function blankPowerShellHereStrings(source: string): {
     if (hereQuote === '"') {
       expandableHereStrings.push(characters.slice(lineStart, closer).join(''));
     }
-    if (isInvokedHereString(characters, index, closer)) {
+    if (isInvokedHereString(characters, index, closer, payloadVariables)) {
       // The value is run as code, so keep its text and line breaks. Blank only
       // the markers: the line breaks are the payload's statement and comment
       // boundaries, and a command on the line after `-Command:` is a command.

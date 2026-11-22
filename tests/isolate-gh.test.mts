@@ -2042,6 +2042,35 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'backtick-continued iex before a here-string is scanned',
+      body: ['iex `', "@'", 'C:/tools/gh.exe api repos/o/r', "'@", ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'here-string held in a variable and run by iex is scanned',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        'iex $code',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'here-string held in a variable and only printed stays literal',
+      body: [
+        "$note = @'",
+        'prose mentioning gh only',
+        "'@",
+        'Write-Output $note',
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
       name: 'common parameters before a here-string in Invoke-Expression',
       body: [
         "Invoke-Expression -ErrorAction Stop @'",
