@@ -41,7 +41,7 @@
       "description": "Git-hosting provider selection for the future provider adapter boundary (#2265; see docs/provider-boundary.md). Not to be confused with `providerOutage`, which names an unrelated CI/Actions-service outage-relief declaration policy. Optional; absent resolves to `github`, the same effective policy as today. Setting `gitlab` or `bitbucket` only validates and records the selection -- no adapter for either provider exists yet, so every current helper still only speaks to GitHub through `gh`."
     },
     "mergePolicy": {
-      "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile. Either one string applies to every model tier, or an object with `frontier`, `middle-tier`, and `lightweight` sets a policy per tier. The object form validates here; the merge handoff does not resolve it yet (see roadmap #5207).",
+      "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile. Either one string applies to every model tier, or an object with `frontier`, `middle-tier`, and `lightweight` sets a policy per tier. The object form validates here, and the merge handoff resolves it per tier: on the standard profile an unresolved tier holds as the unknown-policy hold, and on the lite profile a tier resolves only through the fetch and resolver checks in docs/idd-workflow.md.",
       "oneOf": [
         {
           "type": "string",
