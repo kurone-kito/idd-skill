@@ -12,6 +12,7 @@ import {
   type DistributionSelectionOptions,
   inspectDistributionRouting,
   inspectDistributionSelection,
+  readNoFollowBytes,
 } from '../src/scripts/distribution-selection.mts';
 import { parseRemoteRepoRef } from '../src/scripts/idd-onboard.mts';
 import type { FsOps } from '../src/scripts/user-global-paths.mts';
@@ -2562,6 +2563,88 @@ test('an invalid bound manifest is not reported as a migration requirement', () 
   assert.equal(report.selected, null);
   assert.equal(report.compatibility, 'incompatible');
   assert.equal(report.recovery, 'reselect');
+});
+
+/** A `win32` helper substitute: a fake System32 and script, and a stub exec. */
+function windowsReadShim(respond: (args: readonly string[]) => unknown): {
+  shim: FsOps;
+  calls: string[][];
+} {
+  const root = fs.mkdtempSync(join(tmpdir(), 'idd-distribution-win-'));
+  const system32 = join(root, 'System32', 'WindowsPowerShell', 'v1.0');
+  fs.mkdirSync(system32, { recursive: true });
+  fs.writeFileSync(join(system32, 'powershell.exe'), '');
+  const scriptPath = join(root, 'windows-nofollow.ps1');
+  fs.writeFileSync(scriptPath, '');
+  const calls: string[][] = [];
+  const windowsNoFollow = {
+    platform: 'win32',
+    env: { SystemRoot: root },
+    scriptPath,
+    execFile: (file: string, args: readonly string[]) => {
+      calls.push([file, ...args]);
+      return JSON.stringify(respond(args));
+    },
+  };
+  after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return {
+    shim: { constants: {}, windowsNoFollow } as unknown as FsOps,
+    calls,
+  };
+}
+
+test('readNoFollowBytes reads through the Windows helper when the POSIX flags are absent (issue #5315)', () => {
+  const { shim, calls } = windowsReadShim(() => ({
+    ok: true,
+    bytes: Buffer.from('{"ok":true}').toString('base64'),
+  }));
+  const bytes = readNoFollowBytes(
+    join(tmpdir(), 'idd-distribution-target.json'),
+    shim,
+  );
+  assert.equal(bytes.toString('utf8'), '{"ok":true}');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.includes('read'), true);
+});
+
+test('readNoFollowBytes keeps the refusal when no Windows helper applies (issue #5315)', () => {
+  const posixless = { constants: {} } as unknown as FsOps;
+  assert.throws(
+    () => readNoFollowBytes('/tmp/distribution-target.json', posixless),
+    /does not support the no-follow reads required for distribution selection/,
+  );
+  const disabled = {
+    constants: {},
+    windowsNoFollow: false,
+  } as unknown as FsOps;
+  assert.throws(
+    () => readNoFollowBytes('/tmp/distribution-target.json', disabled),
+    /does not support the no-follow reads required for distribution selection/,
+  );
+});
+
+test('the Windows read surfaces the helper refusal for a symlink or a multi-link file (issue #5315)', () => {
+  const { shim } = windowsReadShim(() => ({
+    ok: false,
+    reason: 'refusing: final component is a reparse point',
+  }));
+  assert.throws(
+    () => readNoFollowBytes(join(tmpdir(), 'idd-distribution-link'), shim),
+    /reparse point/,
+  );
+  const multi = windowsReadShim(() => ({
+    ok: false,
+    reason: 'file has 2 hard links; exactly one is required',
+  }));
+  assert.throws(
+    () =>
+      readNoFollowBytes(
+        join(tmpdir(), 'idd-distribution-multi'),
+        multi.shim,
+        true,
+      ),
+    /hard links/,
+  );
 });
 
 test('a version-only pin cannot preserve one matching prepared commit', () => {

@@ -34,6 +34,7 @@ import {
   createDirectory,
   type FinalKind,
   type FsOps,
+  isWindowsNoFollowOpenAvailable,
   removeSingleEntry,
   withCeilings,
   writeNewFile,
@@ -45,6 +46,7 @@ import {
   writeReceipt,
 } from './user-global-receipt.mts';
 import { validate as validateSchema } from './validate-schemas.mts';
+import { type NoFollowDeps, readNoFollowFile } from './windows-nofollow.mts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolveBundleRoot(HERE);
@@ -181,7 +183,28 @@ function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readNoFollowBytes(
+/**
+ * The Windows helper for the distribution readers, when it applies. It follows
+ * the same `windowsNoFollow` override as user-global writes, and it applies
+ * only on `win32` (by the override's platform, else the process platform).
+ */
+function resolveWindowsReadDeps(fs: FsOps): NoFollowDeps | null {
+  const override = fs.windowsNoFollow;
+  if (override === false) return null;
+  const deps: NoFollowDeps =
+    typeof override === 'object' && override !== null ? override : {};
+  const platform = deps.platform ?? process.platform;
+  if (platform !== 'win32') return null;
+  return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
+}
+
+/**
+ * Read a regular file without following a link. POSIX uses `O_NOFOLLOW` and
+ * `O_NONBLOCK`. Where Node leaves them undefined (native Windows), the read
+ * goes through the Windows no-follow helper (issue #5287) when it applies.
+ * Otherwise it refuses before any read.
+ */
+export function readNoFollowBytes(
   path: string,
   fs: FsOps,
   requireSingleLink = false,
@@ -189,6 +212,13 @@ function readNoFollowBytes(
   const noFollow = fs.constants.O_NOFOLLOW;
   const nonBlock = fs.constants.O_NONBLOCK;
   if (noFollow === undefined || nonBlock === undefined) {
+    const windows = resolveWindowsReadDeps(fs);
+    if (windows !== null) {
+      // The helper refuses a link component and a file with several hard
+      // links before any read. Without requireSingleLink it is therefore
+      // stricter than POSIX, which allows several links.
+      return readNoFollowFile(path, windows);
+    }
     throw new Error(
       'this platform does not support the no-follow reads required for distribution selection',
     );
