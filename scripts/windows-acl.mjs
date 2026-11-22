@@ -447,3 +447,101 @@ export function readWindowsAcl(directory, deps = {}) {
     }
   }
 }
+/**
+ * The owner is read through System32 PowerShell, because `icacls /save` writes
+ * the DACL only. The script text is a constant: the directory travels in an
+ * environment variable, never in the command line, so no path can change what
+ * runs. `GetOwner` with a SID target needs no account lookup.
+ */
+const OWNER_SCRIPT =
+  "[Console]::Out.Write((Get-Item -LiteralPath $env:IDD_ACL_TARGET -Force).GetAccessControl('Owner').GetOwner([Security.Principal.SecurityIdentifier]).Value)";
+/** A drive-letter or UNC path: never read as an option or a relative name. */
+const QUALIFIED_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+export function readWindowsOwner(directory, deps = {}) {
+  if (!QUALIFIED_PATH.test(directory)) return null;
+  const env = deps.env ?? process.env;
+  const exec = deps.execFile ?? execFileSync;
+  try {
+    const out = exec(
+      join(system32(env), 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-NoLogo', '-Command', OWNER_SCRIPT],
+      {
+        encoding: 'utf8',
+        timeout: PROCESS_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: PROCESS_MAX_BUFFER,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...env, IDD_ACL_TARGET: directory },
+      },
+    );
+    const sid = out.trim().toUpperCase();
+    return SID_PATTERN.test(sid) ? sid : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * The real restrictor: absolute System32 `icacls`, argv arrays, SIDs only.
+ * It grants the three permitted principals inheritable full control, cuts
+ * inheritance (which drops every inherited entry, such as the capability SIDs
+ * under the user temp directory), then removes each explicit entry left for
+ * another principal. `/L` makes every call act on a link itself, so a
+ * directory swapped for a junction after the caller's check changes the link,
+ * not its target. `recheck` runs before every `icacls` call, so the caller
+ * stops the next step when the directory is no longer the one it verified;
+ * `icacls` still resolves the path itself, so a window of one call remains.
+ * Each step only narrows access, so a failure part-way leaves the directory no
+ * more open than it was. `icacls /restore` is not used: it needs a privilege a
+ * standard user lacks.
+ */
+export function restrictWindowsDirectory(
+  directory,
+  currentSid,
+  readAcl,
+  deps = {},
+  recheck = () => {},
+) {
+  if (!QUALIFIED_PATH.test(directory)) {
+    throw new Error(`${directory} is not an absolute Windows path`);
+  }
+  const current = currentSid.trim().toUpperCase();
+  if (!SID_PATTERN.test(current)) {
+    throw new Error('the current user SID is not a SID');
+  }
+  const env = deps.env ?? process.env;
+  const exec = deps.execFile ?? execFileSync;
+  const icacls = join(system32(env), 'icacls.exe');
+  const run = (args) => {
+    recheck();
+    exec(icacls, [directory, ...args, '/L', '/q'], {
+      encoding: 'utf8',
+      timeout: PROCESS_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: PROCESS_MAX_BUFFER,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  };
+  const permitted = [current, SID_SYSTEM, SID_ADMINISTRATORS];
+  run(['/grant:r', ...permitted.map((sid) => `*${sid}:(OI)(CI)F`)]);
+  run(['/inheritance:r']);
+  const after = readAcl(directory);
+  if (after.kind !== 'entries') return;
+  const strangers = new Set();
+  for (const entry of after.entries) {
+    const sid = entry.sid.trim().toUpperCase();
+    if (permitted.includes(sid)) continue;
+    // A principal that is not a SID (an unknown SDDL alias) cannot be named to
+    // icacls, so nothing is passed for it and the directory is not restricted.
+    if (!SID_PATTERN.test(sid)) {
+      throw new Error(`cannot name principal ${sid} to icacls`);
+    }
+    strangers.add(sid);
+  }
+  for (const sid of strangers) run(['/remove', `*${sid}`]);
+}
+/** The real tools, used when a caller passes none. */
+export const defaultWindowsDirectoryTools = {
+  readOwner: (directory) => readWindowsOwner(directory),
+  restrict: (directory, currentSid, readAcl, recheck) =>
+    restrictWindowsDirectory(directory, currentSid, readAcl, {}, recheck),
+};

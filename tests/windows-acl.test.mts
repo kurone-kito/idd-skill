@@ -8,6 +8,9 @@ import {
   evaluateWindowsAcl,
   parseIcaclsSave,
   readWindowsAcl,
+  readWindowsOwner,
+  restrictWindowsDirectory,
+  type WindowsAclReader,
 } from '../src/scripts/windows-acl.mts';
 
 const USER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1001';
@@ -539,4 +542,309 @@ test('windows acl parser: only the terminal line ending is tolerated', () => {
   ]) {
     assert.deepEqual(parseIcaclsSave(text), expected, JSON.stringify(text));
   }
+});
+
+const WRITE_SWITCHES = [
+  '/grant',
+  '/deny',
+  '/inheritance',
+  '/remove',
+  '/setowner',
+  '/restore',
+  '/reset',
+  '/substitute',
+];
+
+test('windows acl reader: only ever saves, so a read never writes an ACL', () => {
+  // The GitHub API read cache, the hint cache, and gh-exec read through this
+  // function (kurone-kito/idd-skill#5318): it must stay read-only.
+  const calls: ExecCall[] = [];
+  readWindowsAcl('C:\\cache', {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: fakeExec('dir\r\nD:PAI(A;;FA;;;SY)\r\n', calls) as never,
+  });
+  const icacls = calls.filter((call) => call.file.endsWith('icacls.exe'));
+  assert.equal(icacls.length, 1);
+  for (const call of calls) {
+    for (const arg of call.args) {
+      const switchName = arg.toLowerCase().split(':')[0] as string;
+      assert.equal(WRITE_SWITCHES.includes(switchName), false, arg);
+    }
+  }
+});
+
+const OTHER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1002';
+const CAPABILITY_SID = 'S-1-15-3-1024-1-2-3-4-5-6-7';
+
+test('windows acl owner: reads the SID through System32 PowerShell with the path in the environment', () => {
+  const calls: ExecCall[] = [];
+  const owner = readWindowsOwner("C:\\state dir\\it's", {
+    env: { SystemRoot: 'C:\\Windows', PATH: 'x' },
+    execFile: ((
+      file: string,
+      args: string[],
+      options: Record<string, unknown>,
+    ) => {
+      calls.push({ file, args, options });
+      return `${USER_SID.toLowerCase()}\r\n`;
+    }) as never,
+  });
+  assert.equal(owner, USER_SID);
+  assert.equal(calls.length, 1);
+  const [call] = calls;
+  assert.ok(call);
+  assert.ok(
+    /[\\/]Windows[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/.test(
+      call.file,
+    ),
+  );
+  assert.deepEqual(call.args.slice(0, 4), [
+    '-NoProfile',
+    '-NonInteractive',
+    '-NoLogo',
+    '-Command',
+  ]);
+  // The script is a constant: the directory never appears in it.
+  assert.equal(call.args.length, 5);
+  assert.equal((call.args[4] as string).includes('state dir'), false);
+  assert.equal(
+    (call.options.env as Record<string, string>).IDD_ACL_TARGET,
+    "C:\\state dir\\it's",
+  );
+  assert.equal(call.options.windowsHide, true);
+  assert.deepEqual(call.options.stdio, ['ignore', 'pipe', 'pipe']);
+});
+
+test('windows acl owner: a failing tool, a non-SID answer, or a relative path is unreadable', () => {
+  const env = { SystemRoot: 'C:\\Windows' };
+  assert.equal(
+    readWindowsOwner('C:\\d', {
+      env,
+      execFile: (() => {
+        throw new Error('exit 1');
+      }) as never,
+    }),
+    null,
+  );
+  for (const answer of [
+    '',
+    'BUILTIN\\Administrators',
+    'S-1-5',
+    'S-1-5-18 extra',
+  ]) {
+    assert.equal(
+      readWindowsOwner('C:\\d', { env, execFile: (() => answer) as never }),
+      null,
+      answer,
+    );
+  }
+  let ran = false;
+  for (const relative of ['d', '..\\d', '/d', '-d']) {
+    assert.equal(
+      readWindowsOwner(relative, {
+        env,
+        execFile: (() => {
+          ran = true;
+          return USER_SID;
+        }) as never,
+      }),
+      null,
+      relative,
+    );
+  }
+  assert.equal(ran, false);
+});
+
+function restrictFixture(afterEntries: { sid: string; allow: boolean }[]) {
+  const calls: ExecCall[] = [];
+  const reads: string[] = [];
+  const reader: WindowsAclReader = (directory) => {
+    reads.push(directory);
+    return { kind: 'entries', entries: afterEntries, currentSid: USER_SID };
+  };
+  const execFile = ((
+    file: string,
+    args: string[],
+    options: Record<string, unknown>,
+  ) => {
+    calls.push({ file, args, options });
+    return '';
+  }) as never;
+  return { calls, reads, reader, execFile };
+}
+
+test('windows acl restrict: grants the three principals, cuts inheritance, then removes the strays by SID', () => {
+  const fx = restrictFixture([
+    { sid: USER_SID, allow: true },
+    { sid: 'S-1-5-18', allow: true },
+    { sid: 'S-1-5-32-544', allow: true },
+    { sid: OTHER_SID, allow: true },
+    { sid: 'S-1-1-0', allow: false },
+    { sid: OTHER_SID, allow: false },
+    { sid: CAPABILITY_SID, allow: true },
+  ]);
+  restrictWindowsDirectory('C:\\state\\new', USER_SID, fx.reader, {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: fx.execFile,
+  });
+  const argumentLists = fx.calls.map((call) => call.args);
+  assert.deepEqual(argumentLists, [
+    [
+      'C:\\state\\new',
+      '/grant:r',
+      `*${USER_SID}:(OI)(CI)F`,
+      '*S-1-5-18:(OI)(CI)F',
+      '*S-1-5-32-544:(OI)(CI)F',
+      '/L',
+      '/q',
+    ],
+    ['C:\\state\\new', '/inheritance:r', '/L', '/q'],
+    ['C:\\state\\new', '/remove', `*${OTHER_SID}`, '/L', '/q'],
+    ['C:\\state\\new', '/remove', '*S-1-1-0', '/L', '/q'],
+    ['C:\\state\\new', '/remove', `*${CAPABILITY_SID}`, '/L', '/q'],
+  ]);
+  for (const call of fx.calls) {
+    assert.ok(
+      /[\\/]Windows[\\/]System32[\\/]icacls\.exe$/.test(call.file),
+      call.file,
+    );
+    assert.equal(call.options.windowsHide, true);
+    assert.deepEqual(call.options.stdio, ['ignore', 'pipe', 'pipe']);
+  }
+  // The leftovers are read after inheritance is cut, not before.
+  assert.deepEqual(fx.reads, ['C:\\state\\new']);
+});
+
+test('windows acl restrict: an already-restricted result removes nothing', () => {
+  const fx = restrictFixture([
+    { sid: USER_SID, allow: true },
+    { sid: 'S-1-5-18', allow: true },
+    { sid: 'S-1-5-32-544', allow: true },
+  ]);
+  restrictWindowsDirectory('C:\\d', USER_SID, fx.reader, {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: fx.execFile,
+  });
+  assert.equal(fx.calls.length, 2);
+});
+
+test('windows acl restrict: refuses before any process when the path or the SID is not usable', () => {
+  const fx = restrictFixture([]);
+  const deps = { env: { SystemRoot: 'C:\\Windows' }, execFile: fx.execFile };
+  for (const directory of ['d', '/d', '-d', '..\\d']) {
+    assert.throws(
+      () => restrictWindowsDirectory(directory, USER_SID, fx.reader, deps),
+      /not an absolute Windows path/,
+      directory,
+    );
+  }
+  for (const sid of ['', 'alice', 'S-1-5', `${USER_SID}:(OI)(CI)F`]) {
+    assert.throws(
+      () => restrictWindowsDirectory('C:\\d', sid, fx.reader, deps),
+      /not a SID/,
+      sid,
+    );
+  }
+  assert.equal(fx.calls.length, 0);
+});
+
+test('windows acl restrict: a leftover principal that is not a SID is never passed to icacls', () => {
+  const fx = restrictFixture([
+    { sid: USER_SID, allow: true },
+    { sid: 'XX', allow: true },
+  ]);
+  assert.throws(
+    () =>
+      restrictWindowsDirectory('C:\\d', USER_SID, fx.reader, {
+        env: { SystemRoot: 'C:\\Windows' },
+        execFile: fx.execFile,
+      }),
+    /cannot name principal XX/,
+  );
+  assert.equal(
+    fx.calls.some((call) => call.args.includes('/remove')),
+    false,
+  );
+});
+
+test('windows acl restrict: a failing icacls step surfaces, and an unreadable re-read removes nothing', () => {
+  assert.throws(
+    () =>
+      restrictWindowsDirectory(
+        'C:\\d',
+        USER_SID,
+        () => ({ kind: 'unreadable' }),
+        {
+          env: { SystemRoot: 'C:\\Windows' },
+          execFile: (() => {
+            throw new Error('Access is denied');
+          }) as never,
+        },
+      ),
+    /Access is denied/,
+  );
+  const calls: ExecCall[] = [];
+  restrictWindowsDirectory('C:\\d', USER_SID, () => ({ kind: 'unreadable' }), {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: ((
+      file: string,
+      args: string[],
+      options: Record<string, unknown>,
+    ) => {
+      calls.push({ file, args, options });
+      return '';
+    }) as never,
+  });
+  assert.equal(calls.length, 2);
+});
+
+test('windows acl restrict: the recheck runs before every icacls call and a throw stops the next one', () => {
+  const fx = restrictFixture([
+    { sid: USER_SID, allow: true },
+    { sid: OTHER_SID, allow: true },
+  ]);
+  const order: string[] = [];
+  const deps = {
+    env: { SystemRoot: 'C:\\Windows' },
+    execFile: ((_file: string, args: string[]) => {
+      order.push(`exec ${args[1]}`);
+      return '';
+    }) as never,
+  };
+  restrictWindowsDirectory('C:\\d', USER_SID, fx.reader, deps, () => {
+    order.push('recheck');
+  });
+  assert.deepEqual(order, [
+    'recheck',
+    'exec /grant:r',
+    'recheck',
+    'exec /inheritance:r',
+    'recheck',
+    'exec /remove',
+  ]);
+
+  let calls = 0;
+  const stopped: string[] = [];
+  assert.throws(
+    () =>
+      restrictWindowsDirectory(
+        'C:\\d',
+        USER_SID,
+        fx.reader,
+        {
+          env: { SystemRoot: 'C:\\Windows' },
+          execFile: ((_file: string, args: string[]) => {
+            stopped.push(args[1] as string);
+            return '';
+          }) as never,
+        },
+        () => {
+          calls += 1;
+          if (calls === 2) throw new Error('directory changed');
+        },
+      ),
+    /directory changed/,
+  );
+  // The first step ran; the swap was caught before the second.
+  assert.deepEqual(stopped, ['/grant:r']);
 });

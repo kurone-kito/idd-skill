@@ -11,7 +11,13 @@
  * own directory names with the same guards. Preserved data is never deleted or
  * expired here.
  */
-import { chmodSync, lstatSync, realpathSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import {
   dirname,
   isAbsolute,
@@ -22,7 +28,13 @@ import {
   sep,
 } from 'node:path';
 import type { LocalWorktreeRecord } from './local-worktree-occupancy.mts';
-import { evaluateWindowsAcl, type WindowsAclReader } from './windows-acl.mts';
+import {
+  defaultWindowsDirectoryTools,
+  evaluateWindowsAcl,
+  type WindowsAclReader,
+  type WindowsAclResult,
+  type WindowsDirectoryTools,
+} from './windows-acl.mts';
 
 /** What the filesystem reports for one path, read without following links. */
 export type LstatKind = 'absent' | 'symlink' | 'directory' | 'file' | 'other';
@@ -117,13 +129,146 @@ export function inspectDirectoryPrivacy(
   }
 }
 
+/**
+ * Windows has no mode bits to tighten, so a permissive directory is handled by
+ * rewriting its DACL (kurone-kito/idd-skill#5318): a real directory the
+ * current user owns ends with an ACL limited to the current user, SYSTEM, and
+ * the built-in Administrators, and the ACL is read again. Every refusal comes
+ * before any write: a symlink (its target is never changed), a non-directory,
+ * a directory with any entry, an ACL that does not read as permissive, no
+ * current-user SID, or another owner. The entry check is what keeps this away
+ * from a shared or populated directory. Cutting inheritance changes every
+ * descendant, and the Windows state root is `%LOCALAPPDATA%`, so only an empty
+ * directory, which is what a directory this run just created is, is rewritten.
+ * An existing permissive directory is refused earlier, at inspection. The
+ * identity read by one no-follow lstat of the original path is compared, at
+ * both that path and its resolved name, just before the first write, before
+ * every step the writer takes (together with the emptiness check), and after
+ * the re-read, so a path swapped for a link or another directory in between
+ * is reported. `icacls` still resolves
+ * the path itself, so a window of one call remains; handle-based writes are not
+ * used here. The tools default to the real System32 ones; the four-argument
+ * call is for tests and keeps the existing callers unchanged.
+ */
+function restrictWindowsStateDirectory(
+  path: string,
+  windowsAclReader: WindowsAclReader,
+  tools: WindowsDirectoryTools,
+): void {
+  const unverified = (): Error =>
+    new Error('directory ownership or privacy could not be verified');
+  // The identity of a real directory read without following links, or null.
+  const identityOf = (target: string): string | null => {
+    try {
+      const stat = lstatSync(target, { bigint: true });
+      return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+    } catch {
+      return null;
+    }
+  };
+  const isEmpty = (target: string): boolean => {
+    try {
+      return readdirSync(target).length === 0;
+    } catch {
+      return false;
+    }
+  };
+  // One lstat names the object the path points at without following a link. A
+  // symlink or junction is refused here, and every later check compares against
+  // this identity at the original path as well as at the resolved one, so a
+  // path swapped for a link after this point is reported, not followed.
+  let linked = false;
+  let identity: string;
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    linked = stat.isSymbolicLink();
+    if (linked || !stat.isDirectory()) throw unverified();
+    identity = `${stat.dev}:${stat.ino}`;
+  } catch {
+    if (linked) throw new Error('a state-root symlink target is not private');
+    throw unverified();
+  }
+  let real: string;
+  try {
+    real = realpathSync.native(path);
+    // The resolved directory must be the object the path named.
+    if (identityOf(real) !== identity || !isEmpty(real)) throw unverified();
+  } catch {
+    throw unverified();
+  }
+  const unchanged = (): boolean =>
+    identityOf(path) === identity && identityOf(real) === identity;
+  let before: WindowsAclResult;
+  try {
+    before = windowsAclReader(real);
+  } catch {
+    throw unverified();
+  }
+  // An unreadable ACL, or one with no allow entry, says nothing about what to
+  // remove, so it is refused as it was before this rewrite existed.
+  if (
+    before.kind !== 'entries' ||
+    evaluateWindowsAcl(before) !== 'permissive'
+  ) {
+    throw unverified();
+  }
+  const currentSid = before.currentSid?.trim().toUpperCase();
+  if (currentSid === undefined) throw unverified();
+  let owner: string | null;
+  try {
+    owner = tools.readOwner(real);
+  } catch {
+    owner = null;
+  }
+  if (owner === null || owner.trim().toUpperCase() !== currentSid) {
+    throw new Error('directory belongs to another user');
+  }
+  // The last read before the first write. The writer repeats the identity
+  // check before each of its steps through the callback below.
+  if (!unchanged() || !isEmpty(real)) {
+    throw new Error('directory changed after inspection');
+  }
+  try {
+    // Before each step the directory must still be the verified one and still
+    // empty, so an entry added in between stops the next step.
+    tools.restrict(real, currentSid, windowsAclReader, () => {
+      if (!unchanged() || !isEmpty(real)) {
+        throw new Error('directory changed while it was being restricted');
+      }
+    });
+  } catch (error) {
+    throw new Error(
+      `directory could not be restricted to its owner: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let after: WindowsAclResult;
+  try {
+    after = windowsAclReader(real);
+  } catch {
+    throw unverified();
+  }
+  // A swap is reported before the ACL verdict, which may belong to another
+  // directory.
+  if (!unchanged()) {
+    throw new Error('directory changed while it was being restricted');
+  }
+  if (evaluateWindowsAcl(after) !== 'private') {
+    throw new Error('directory could not be restricted to its owner');
+  }
+}
+
 export function ensurePrivateStateDirectory(
   path: string,
   platform: NodeJS.Platform,
   windowsAclReader: WindowsAclReader,
+  windowsTools: WindowsDirectoryTools = defaultWindowsDirectoryTools,
 ): void {
   const privacy = inspectDirectoryPrivacy(path, platform, windowsAclReader);
   if (privacy === 'private') return;
+  if (platform === 'win32') {
+    restrictWindowsStateDirectory(path, windowsAclReader, windowsTools);
+    return;
+  }
   if (privacy !== 'tightenable') {
     throw new Error('directory ownership or privacy could not be verified');
   }
@@ -354,9 +499,19 @@ export function createPreserveDestination(
   // rechecked just before the destination is created.
   const recorded: PreservationParent[] = [];
   for (const parent of parents) {
+    // The identity of a parent this run makes, read right after its mkdir and
+    // before it is restricted, so a directory swapped in afterwards is reported.
+    let made: string | null = null;
     try {
       if (parent.identity === null) {
         deps.mkdir(parent.path, 0o700);
+        made =
+          deps.lstat(parent.path) === 'directory'
+            ? deps.directoryIdentity(parent.path)
+            : null;
+        if (made === null) {
+          throw new Error('the created directory has no verified identity');
+        }
       }
       deps.ensurePrivateDirectory(parent.path);
     } catch (error) {
@@ -375,6 +530,9 @@ export function createPreserveDestination(
       return refuse(
         `destination parent ${parent.path} changed after inspection`,
       );
+    }
+    if (made !== null && identity !== made) {
+      return refuse(`destination parent ${parent.path} changed after creation`);
     }
     recorded.push({ path: parent.path, identity });
   }
@@ -401,9 +559,27 @@ export function createPreserveDestination(
   if (deps.lstat(destination) !== 'directory') {
     return refuse(`${destination} is not a directory after creation`);
   }
-  if (deps.inspectDirectoryPrivacy(destination) !== 'private') {
+  let privacy = deps.inspectDirectoryPrivacy(destination);
+  let restrictFailure = '';
+  if (privacy === 'unsafe') {
+    // A new Windows directory can carry a permissive inherited ACL. Restrict
+    // the directory this run just created once, as its parents were, and judge
+    // the result below. On POSIX an unsafe leaf fails this too, as before.
+    // The captured identity is checked first, so a leaf replaced since it was
+    // created is refused before anything is written to it.
+    try {
+      if (deps.directoryIdentity(destination) !== identity) {
+        return refuse(`${destination} changed after creation`);
+      }
+      deps.ensurePrivateDirectory(destination);
+      privacy = deps.inspectDirectoryPrivacy(destination);
+    } catch (error) {
+      restrictFailure = ` (${error instanceof Error ? error.message : String(error)})`;
+    }
+  }
+  if (privacy !== 'private') {
     return refuse(
-      `${destination} was created but is not owned and private; it stays in place and nothing is written into it`,
+      `${destination} was created but is not owned and private${restrictFailure}; it stays in place and nothing is written into it`,
     );
   }
   if (deps.directoryIdentity(destination) !== identity) {

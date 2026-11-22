@@ -10457,8 +10457,13 @@ the moved directory root is restricted to mode `0700` on POSIX, and the step 5
 record names the destination. Apply requires an owned state root and private
 destination directories. An owned direct POSIX root and existing destination
 directories are restricted to `0700`; a state-root symlink must already target
-a private directory. Windows checks that the state root and destination
-directories have a private ACL. On POSIX, the existing `node_modules/`
+a private directory. Windows checks that the state root and existing destination
+directories have a private ACL; an empty directory that the helper creates there
+and that the current user owns, but whose ACL is permissive, is rewritten to
+grant only the current user, SYSTEM, and the built-in Administrators and is read
+again, and the helper refuses if that ACL is not private. A symlink is
+never rewritten, and a populated existing directory is refused, not rewritten.
+On POSIX, the existing `node_modules/`
 directory must also be owned by the current user. Windows requires its ACL to
 be private before the move. The helper creates only missing parents and
 renames directly to an absent destination leaf. Dry-run performs the same
