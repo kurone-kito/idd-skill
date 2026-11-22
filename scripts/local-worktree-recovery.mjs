@@ -7786,13 +7786,15 @@ export function copyPathWithSafeSymlinks(
   );
   const sourceRootsReal = sourceRootsAbsolute.map((root) => realpathSync(root));
   const activeDirectories = new Set();
+  // Bigint fields only: BigIntStats time fields in milliseconds drop the
+  // sub-millisecond part, so the nanosecond fields carry the change check.
   const sameSourceMetadata = (before, after) =>
     before.dev === after.dev &&
     before.ino === after.ino &&
     before.mode === after.mode &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs;
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs;
   const ensureDestinationParent = (destination) => {
     const parent = resolve(dirname(destination));
     const root = parse(parent).root;
@@ -7836,7 +7838,7 @@ export function copyPathWithSafeSymlinks(
   ) => {
     let currentStat;
     try {
-      currentStat = lstatSync(source);
+      currentStat = lstatSync(source, { bigint: true });
     } catch {
       throw new Error(`source symlink changed during copy: ${source}`);
     }
@@ -7886,18 +7888,10 @@ export function copyPathWithSafeSymlinks(
     return parentReal;
   };
   const copyEntry = (source, destination) => {
-    const sourceStat = lstatSync(source);
-    // The bigint identity is a second lstat taken right after sourceStat. A
-    // replaced ancestor between the two calls would split them across files,
-    // so refuse unless both name the same file. The number fields are the
-    // bigint values converted to numbers, so the comparison converts them too.
-    const sourceIdentity = lstatSync(source, { bigint: true });
-    if (
-      Number(sourceIdentity.dev) !== sourceStat.dev ||
-      Number(sourceIdentity.ino) !== sourceStat.ino
-    ) {
-      throw new Error(`source changed while it was measured: ${source}`);
-    }
+    // One bigint snapshot of the source supplies the type checks, the metadata
+    // comparisons, and the identity the helper's handle must match. The bigint
+    // fields are exact; the number fields round large Windows file indexes.
+    const sourceStat = lstatSync(source, { bigint: true });
     const parentReal = ensureDestinationParent(destination);
     if (sourceStat.isSymbolicLink()) {
       const linkText = readlinkSync(source, 'utf8');
@@ -7965,7 +7959,7 @@ export function copyPathWithSafeSymlinks(
           copyEntry(join(source, entry), join(destination, entry));
         }
         const entriesAfterCopy = readdirSync(source).sort();
-        const sourceAfterCopyStat = lstatSync(source);
+        const sourceAfterCopyStat = lstatSync(source, { bigint: true });
         if (
           !sourceAfterCopyStat.isDirectory() ||
           sourceAfterCopyStat.isSymbolicLink() ||
@@ -8024,22 +8018,21 @@ export function copyPathWithSafeSymlinks(
         // handle it read. Bind that to the baseline taken before the copy, and
         // check the path again after it, so neither a swapped path nor a
         // replaced ancestor can supply other bytes.
-        const read = copyNoFollow(source, temporaryPath, windowsCopy);
+        const read = copyNoFollow(
+          source,
+          temporaryPath,
+          windowsCopy,
+          Number(sourceStat.size),
+        );
         if (
           read === null ||
-          read.volume !== sourceIdentity.dev ||
-          read.index !== sourceIdentity.ino
+          read.volume !== sourceStat.dev ||
+          read.index !== sourceStat.ino
         ) {
           throw new Error(`source changed before the copy read it: ${source}`);
         }
-        const after = lstatSync(source, { bigint: true });
-        if (
-          after.dev !== sourceIdentity.dev ||
-          after.ino !== sourceIdentity.ino
-        ) {
-          throw new Error(`source changed during the copy: ${source}`);
-        }
-        copiedSourceStat = lstatSync(source);
+        // The post-copy comparison below covers dev, ino, size, and times.
+        copiedSourceStat = lstatSync(source, { bigint: true });
       } else {
         try {
           const noFollow = noFollowFlags.O_NOFOLLOW;
@@ -8059,7 +8052,7 @@ export function copyPathWithSafeSymlinks(
               `recovery source changed to a special file during copy: ${source}`,
             );
           }
-          const temporaryMode = 0o600 | (sourceStat.mode & 0o111);
+          const temporaryMode = 0o600 | (Number(sourceStat.mode) & 0o111);
           temporaryFd = openSync(
             temporaryPath,
             constants.O_WRONLY |
@@ -8093,7 +8086,7 @@ export function copyPathWithSafeSymlinks(
               );
             }
           }
-          copiedSourceStat = fstatSync(sourceFd);
+          copiedSourceStat = fstatSync(sourceFd, { bigint: true });
         } finally {
           if (temporaryFd !== null) closeSync(temporaryFd);
           if (sourceFd !== null) closeSync(sourceFd);
@@ -8105,7 +8098,7 @@ export function copyPathWithSafeSymlinks(
       ) {
         throw new Error(`source changed during copy: ${source}`);
       }
-      const finalSourceStat = lstatSync(source);
+      const finalSourceStat = lstatSync(source, { bigint: true });
       if (
         !finalSourceStat.isFile() ||
         !sameSourceMetadata(sourceStat, finalSourceStat)

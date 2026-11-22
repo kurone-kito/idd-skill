@@ -46,6 +46,9 @@ const HERE = pathDirname(fileURLToPath(import.meta.url));
 const SCRIPT_NAME = 'windows-nofollow.ps1';
 const PROCESS_TIMEOUT_MS = 30_000;
 const PROCESS_MAX_BUFFER = 16 * 1024 * 1024;
+// A copy streams the whole source, so its deadline grows with the size. The
+// rate is the slowest throughput the deadline allows for before it is killed.
+const COPY_BYTES_PER_SECOND_FLOOR = 4 * 1024 * 1024;
 
 export type NoFollowExecFile = (
   file: string,
@@ -466,6 +469,7 @@ function runWindowsHelper(
   paths: readonly string[],
   deps: NoFollowDeps,
   input?: Uint8Array,
+  timeoutMs: number = PROCESS_TIMEOUT_MS,
 ): WindowsHelperResult {
   const env = deps.env ?? process.env;
   const exec = (deps.execFile ?? execFileSync) as NoFollowExecFile;
@@ -490,7 +494,7 @@ function runWindowsHelper(
   try {
     stdout = exec(powershell, args, {
       encoding: 'utf8',
-      timeout: PROCESS_TIMEOUT_MS,
+      timeout: timeoutMs,
       windowsHide: true,
       maxBuffer: PROCESS_MAX_BUFFER,
       stdio:
@@ -705,6 +709,24 @@ export function writeExclusiveNoFollow(
 }
 
 /**
+ * The helper deadline for a copy of `sourceBytes`: the base deadline plus the
+ * time the rate floor allows for those bytes. Without a size, the base applies.
+ */
+function copyTimeoutMs(sourceBytes?: number): number {
+  if (
+    sourceBytes === undefined ||
+    !Number.isSafeInteger(sourceBytes) ||
+    sourceBytes < 0
+  ) {
+    return PROCESS_TIMEOUT_MS;
+  }
+  return (
+    PROCESS_TIMEOUT_MS +
+    Math.ceil((sourceBytes * 1000) / COPY_BYTES_PER_SECOND_FLOOR)
+  );
+}
+
+/**
  * Copy a regular file to a new exclusive destination without following links
  * on either path. Refuses when the destination would escape its verified
  * parent through a directory link.
@@ -714,12 +736,19 @@ export function copyNoFollow(
   source: string,
   destination: string,
   deps: NoFollowDeps = {},
+  sourceBytes?: number,
 ): NoFollowCopyIdentity | null {
   assertAbsoluteNormalized(source);
   assertAbsoluteNormalized(destination);
   const platform = deps.platform ?? process.platform;
   if (platform === 'win32') {
-    const result = runWindowsHelper('copy', [source, destination], deps);
+    const result = runWindowsHelper(
+      'copy',
+      [source, destination],
+      deps,
+      undefined,
+      copyTimeoutMs(sourceBytes),
+    );
     refuseUnlessOk(result);
     return copyIdentityFrom(result);
   }

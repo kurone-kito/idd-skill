@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import {
   copyNoFollow,
   hasPosixNoFollowFlags,
+  type NoFollowDeps,
   readNoFollowFile,
   writeExclusiveNoFollow,
 } from '../src/scripts/windows-nofollow.mts';
@@ -448,6 +449,48 @@ test('copyNoFollow streams a multi-chunk file on Windows and reports the identit
     assert.equal(identity.index, measured.ino);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('copyNoFollow bounds the helper deadline by the source size (issue #5326)', () => {
+  // The deadline is checked through an injected helper, so it runs on any
+  // platform: the base deadline, then one second per 4 MiB of source.
+  const root = mkdtempSync(join(tmpdir(), 'idd-nofollow-deadline-'));
+  try {
+    const system32 = join(root, 'System32', 'WindowsPowerShell', 'v1.0');
+    mkdirSync(system32, { recursive: true });
+    writeFileSync(join(system32, 'powershell.exe'), '');
+    const scriptPath = join(root, 'windows-nofollow.ps1');
+    writeFileSync(scriptPath, '');
+    const timeouts: number[] = [];
+    const deps: NoFollowDeps = {
+      platform: 'win32',
+      env: { SystemRoot: root },
+      scriptPath,
+      execFile: ((
+        _file: string,
+        _args: readonly string[],
+        options: { timeout: number },
+      ) => {
+        timeouts.push(options.timeout);
+        return JSON.stringify({
+          ok: true,
+          created: true,
+          sourceVolume: 1,
+          sourceIndex: '2',
+        });
+      }) as never,
+    };
+    const source = join(root, 'source.bin');
+    const destination = join(root, 'destination.bin');
+    writeFileSync(source, '');
+    copyNoFollow(source, destination, deps);
+    copyNoFollow(source, destination, deps, 0);
+    copyNoFollow(source, destination, deps, 1024 ** 3);
+    copyNoFollow(source, destination, deps, -1);
+    assert.deepEqual(timeouts, [30_000, 30_000, 286_000, 30_000]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

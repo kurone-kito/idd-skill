@@ -45,6 +45,9 @@ const HERE = pathDirname(fileURLToPath(import.meta.url));
 const SCRIPT_NAME = 'windows-nofollow.ps1';
 const PROCESS_TIMEOUT_MS = 30_000;
 const PROCESS_MAX_BUFFER = 16 * 1024 * 1024;
+// A copy streams the whole source, so its deadline grows with the size. The
+// rate is the slowest throughput the deadline allows for before it is killed.
+const COPY_BYTES_PER_SECOND_FLOOR = 4 * 1024 * 1024;
 function describe(error) {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -347,7 +350,13 @@ function parseHelperOutput(stdout) {
   }
   return parsed;
 }
-function runWindowsHelper(mode, paths, deps, input) {
+function runWindowsHelper(
+  mode,
+  paths,
+  deps,
+  input,
+  timeoutMs = PROCESS_TIMEOUT_MS,
+) {
   const env = deps.env ?? process.env;
   const exec = deps.execFile ?? execFileSync;
   const scriptPath = resolveScriptPath(deps);
@@ -371,7 +380,7 @@ function runWindowsHelper(mode, paths, deps, input) {
   try {
     stdout = exec(powershell, args, {
       encoding: 'utf8',
-      timeout: PROCESS_TIMEOUT_MS,
+      timeout: timeoutMs,
       windowsHide: true,
       maxBuffer: PROCESS_MAX_BUFFER,
       stdio:
@@ -557,17 +566,40 @@ export function writeExclusiveNoFollow(path, content, deps = {}) {
   writePosix(path, buffer, deps);
 }
 /**
+ * The helper deadline for a copy of `sourceBytes`: the base deadline plus the
+ * time the rate floor allows for those bytes. Without a size, the base applies.
+ */
+function copyTimeoutMs(sourceBytes) {
+  if (
+    sourceBytes === undefined ||
+    !Number.isSafeInteger(sourceBytes) ||
+    sourceBytes < 0
+  ) {
+    return PROCESS_TIMEOUT_MS;
+  }
+  return (
+    PROCESS_TIMEOUT_MS +
+    Math.ceil((sourceBytes * 1000) / COPY_BYTES_PER_SECOND_FLOOR)
+  );
+}
+/**
  * Copy a regular file to a new exclusive destination without following links
  * on either path. Refuses when the destination would escape its verified
  * parent through a directory link.
  */
 // audit:ignore-dead-export: callers land in later Windows roadmap children (#5290); this child only adds the primitive
-export function copyNoFollow(source, destination, deps = {}) {
+export function copyNoFollow(source, destination, deps = {}, sourceBytes) {
   assertAbsoluteNormalized(source);
   assertAbsoluteNormalized(destination);
   const platform = deps.platform ?? process.platform;
   if (platform === 'win32') {
-    const result = runWindowsHelper('copy', [source, destination], deps);
+    const result = runWindowsHelper(
+      'copy',
+      [source, destination],
+      deps,
+      undefined,
+      copyTimeoutMs(sourceBytes),
+    );
     refuseUnlessOk(result);
     return copyIdentityFrom(result);
   }
