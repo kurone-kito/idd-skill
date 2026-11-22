@@ -61,7 +61,9 @@ profile.
   - preferring a deterministic helper command over prose judgment
     wherever one exists for the current step;
   - drafting output for human review rather than running the
-    autonomous merge phases.
+    autonomous merge phases, unless the F2.5 merge handoff resolves the
+    merge policy to the enum `fully_autonomous_merge` (a raw
+    `mergePolicy` value does not count).
 
   This design's job is to give that already-confined role a condensed
   **instruction shape** to execute against. [Phase scoping](#phase-scoping)
@@ -157,7 +159,9 @@ pass needs all five for any single lite file to be worth shipping.
 
 Deriving directly from #1415's three role-confinement bullets (quoted
 above), a lite profile covers **single-issue execution** phases and
-excludes **open-ended selection** and **autonomous merge** phases. Two
+excludes **open-ended selection** and **autonomous merge** phases,
+except the F2.5 route to a resolved `fully_autonomous_merge` (see the
+F2.5 and F3 rows below). Two
 categories need a third label, **judgment-heavy**, because they are
 neither open-ended selection nor F3-onward merge execution, yet still
 depend on model judgment a weak model is not confined to exercise: E4-E8
@@ -179,9 +183,9 @@ review-triage classification and the F2 merge-readiness gate decision.
 | `idd-review-triage.instructions.md` (E4-E8) | **Excluded (judgment-heavy)** | Classification, severity scoring, and Accept/Reject disposition are exactly the judgment-based gates the roadmap says this tier fails. Stays excluded even though it is not F3-onward. The [needs-decision route](idd-review-policy-profiles.md#needs-decision-deferral) is excluded with it: the lite review-fix file keeps its stop-and-ask bullet and its steps as they are. |
 | `idd-review-fix.instructions.md` (E9-E15) | Partial — in scope for the whole mechanical E9-E15 execution chain (fix, validate, resolve conflicts, lint/test/push, reply, re-review request, CI wait) | Every step here executes an **already-triaged** Accepted item: E9's fix, E13's reply, and E14's re-review request (a deterministic AW3 decision table, not judgment) all act on a disposition someone else already made. E15 delegates to `idd-ci.instructions.md`, itself in scope below. The triage decisions being executed must still come from an excluded E4-E8 pass authored by a stronger session or a human — a lite E9-E15 file must say this boundary explicitly, not assume it. |
 | `idd-pre-merge.instructions.md` (F1-F2) | Partial — F1's read-only branch check and reading the `pre-merge-readiness` helper's `ready`/`blockers` verdict are mechanical (in scope); the written prose fallback stays excluded | Per [F2 merge-readiness evidence checklist](idd-workflow.md#f2-merge-readiness-evidence-checklist), the live `pre-merge-readiness` helper run is already "the authoritative source for the F2/F3 merge decision" — reading its verdict is a mechanical helper-gate read, matching content principle 4. But F2 explicitly allows discarding that helper output and falling back to live-fetch-plus-prose-judgment when it is unavailable, invalid, or disagrees with GitHub state; that fallback is the judgment-heavy part and stays excluded. A lite F2 file should therefore treat a missing/failing/discarded helper as the stop-and-ask condition (principle 5) rather than attempt the prose fallback itself. |
-| `idd-merge-handoff.instructions.md` (F2.5) | In scope, for the handoff-stop outcome only | #1415 bullet 3 ("drafting output for human review rather than running the autonomous merge phases") plus the [merge-policy recommendation](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy) (`human_merge` / `separate_merge_agent` for weak-model repositories) mean a lite session's only job at F2.5 is to stop and hand off cleanly, not to evaluate whether autonomous merge should proceed. This still depends on the mechanical F2 helper evidence above already existing to quote in the handoff comment — the same must-say-the-boundary-explicitly pattern as the E9-E15/E4-E8 dependency. |
-| `idd-merge.instructions.md` (F3-F5) | **Excluded** | Autonomous merge phases — #1415 bullet 3's explicit exclusion and the roadmap's own named example. |
-| `idd-advisory-wait.instructions.md` | Split by caller | In scope via its E14 caller (in-scope); excluded via F2's prose-fallback caller and the F3 caller (both excluded) — a lite session correctly never reaches those call sites if it stops at F2.5 as designed above. |
+| `idd-merge-handoff.instructions.md` (F2.5) | In scope | The lite file reads the recorded policy and does not run `gh pr merge`. A string is one enum for every tier and does not read a tier name. An object has `frontier`, `middle-tier`, and `lightweight`. A schema-valid object is resolved only when `git fetch origin {development-branch}` succeeds (a failed fetch never falls back to a local ref), `config.json` matches `origin/{development-branch}`, the operator named one of those three tiers, and the resolver exits 0 with stdout exactly one of the three enums. Any other result stays unrecognized. A resolved `fully_autonomous_merge` continues at the standard handoff. A resolved `human_merge` posts the handoff comment and keeps the claim. A resolved `separate_merge_agent` posts that comment and releases the claim only when `ready` is true and the guard passes; otherwise it posts no release. The lite file does not evaluate standard step 5. `mergePolicyAck` stays diagnostic. The handoff comment still quotes the mechanical F2 helper evidence. |
+| `idd-merge.instructions.md` (F3-F5) | **No lite file** | The lite profile has no F3 file. A resolved `fully_autonomous_merge` continues at the standard handoff, which runs F3 after the existing gates. The older exclusion kept autonomous merge out of the lite file; that file still does not run `gh pr merge`. |
+| `idd-advisory-wait.instructions.md` | Split by caller | In scope via its E14 caller. The lite sibling still omits F2's prose fallback and the F3 call site. A resolved `fully_autonomous_merge` continues at the standard handoff, which runs F3 after the existing gates. The lite profile has no F3 file and does not run `gh pr merge`. |
 | `idd-roadmap-audit.instructions.md` (A1.5) | Excluded | Roadmap-level completion judgment, not single-issue execution. |
 <!-- dprint-ignore-end -->
 
@@ -388,13 +392,16 @@ this design issue.
   dispositions must already exist from an excluded, stronger-session or
   human-authored pass before a lite session acts on them.
 - **Author the lite instructions for the mechanical F2 helper-read
-  subset and the F2.5 handoff-stop** — condense the in-scope parts of
+  subset and the F2.5 handoff** — condense the in-scope parts of
   `idd-pre-merge.instructions.md` (reading the `pre-merge-readiness`
   helper verdict; stop-and-ask if it is missing, failing, or discarded)
-  and `idd-merge-handoff.instructions.md` down to the single in-scope
-  outcome identified in [Phase scoping](#phase-scoping): stop and hand
-  off cleanly under `human_merge` / `separate_merge_agent`, never
-  evaluate autonomous-merge readiness via the excluded prose fallback.
+  and `idd-merge-handoff.instructions.md` down to the route in
+  [Phase scoping](#phase-scoping): a string or a resolved tier object,
+  with `frontier`, `middle-tier`, and `lightweight`. A resolved
+  `fully_autonomous_merge` continues at the standard handoff. The lite
+  profile has no F3 file and does not run `gh pr merge`.
+  `mergePolicyAck` stays diagnostic. Do not evaluate autonomous-merge
+  readiness via the excluded prose fallback.
 - **Document the lite-profile entry and opt-in convention** — specify
   how a weak-model session discovers and opts into the lite bundle set
   (for example, an explicit operator-set policy field, or a distinct

@@ -183,7 +183,9 @@ their own targets.
     [IDD helper script evaluation](idd-helper-scripts.md)) over prose
     judgment wherever one exists for the current step;
   - drafting output for human review rather than running the
-    autonomous merge phases.
+    autonomous merge phases, unless the F2.5 merge handoff resolves the
+    merge policy to the enum `fully_autonomous_merge` (a raw
+    `mergePolicy` value does not count).
 - **Large-context, non-self-directing** (named out-of-band class):
   models that clear the context-sufficiency bar but cannot reliably
   self-direct a multi-turn execution loop. They are **not** admitted
@@ -255,8 +257,33 @@ When a lightweight-tier model runs any part of this loop:
   change the upstream repository's Copilot advisory-review convergence
   scope decision or the lite-profile exclusion of
   `idd-review-triage.instructions.md`.
-- Do not run the autonomous merge phases (F3 onward) on this tier. See
-  the merge-policy recommendation for weak-model sessions in
+- Follow the resolved merge policy, including on this tier. A recorded
+  value is either one string, which applies to every tier and does not
+  read a tier name, or an object with `frontier`, `middle-tier`, and
+  `lightweight`, each one of `human_merge`, `fully_autonomous_merge`,
+  or `separate_merge_agent`. On the standard profile, a resolved
+  `fully_autonomous_merge` runs F3 after the existing gates.
+  `separate_merge_agent` keeps handoff step 5: the first branch runs only when
+  repository documentation explicitly records that this session is the
+  designated merge-capable actor and the documented resume condition is
+  satisfied, and the Otherwise branch keeps both bullets, including no release
+  post when the claim was already lost. An
+  unresolved tier on an object is the standard unknown-policy hold.
+  On the lite profile, a schema-valid tier object is resolved only when `git
+  fetch origin {development-branch}` succeeds (a failed fetch never falls back
+  to a local ref), `config.json` matches `origin/{development-branch}`, the
+  operator named one of those three tiers, and the resolver exits 0 with stdout
+  exactly one of the three enums. Any other result stays unrecognized.
+  A string does not read a tier name. A resolved
+  `fully_autonomous_merge` continues at the standard handoff, which runs F3
+  after the existing gates. The lite
+  profile has no F3 file and does not run `gh pr merge`. A resolved
+  `human_merge` keeps the claim. A resolved `separate_merge_agent`
+  releases the claim only when `ready` is true and the guard passes.
+  The lite file does not evaluate standard step 5. `mergePolicyAck`
+  stays diagnostic. The older sentence, "do not run the autonomous merge phases
+  (F3 onward) on this tier," described the hold that ends only when the F2.5
+  handoff resolves this route. See
   [Onboarding Reference — Policy Decisions](onboarding/policy-decisions.md#merge-policy).
 - This is additional to, not a replacement for, the uniform C-phase
   objective diff validation floor in
@@ -398,12 +425,25 @@ and whether your repository has authored any of its own:
 The F1-F2 and F2.5 rows cover a **partial** slice of their standard
 files only: the lite F1-F2 file covers just F1's read-only branch
 check and reading the `pre-merge-readiness` helper verdict, never the
-standard file's written prose fallback; the lite F2.5 file covers
-just the handoff-stop outcome, never autonomous-merge routing.
-Neither falls back to the standard file for its excluded sub-case
-within the same phase — both instead treat that sub-case as a
-stop-and-ask condition (a broken/missing helper for F1-F2; anything
-but the handoff-stop outcome for F2.5).
+standard file's written prose fallback. The lite F2.5 file reads the
+recorded policy. A string is one enum for every tier and does not
+read a tier name. An object has `frontier`, `middle-tier`, and
+`lightweight`, each a known enum. A schema-valid object is resolved only when
+`git fetch origin {development-branch}` succeeds (a failed fetch never falls
+back to a local ref), `config.json` matches `origin/{development-branch}`, the
+operator named one of those three tiers, and the resolver exits 0 with stdout
+exactly one of the three enums. Any other result
+stays unrecognized. A resolved
+`fully_autonomous_merge` continues at the standard handoff, which
+then runs F3 after the existing gates.
+The lite profile has no F3 file and does not run `gh pr merge`.
+A resolved `human_merge` posts the handoff comment and keeps the
+claim. A resolved `separate_merge_agent` posts that comment and
+releases the claim only when `ready` is true and the guard passes;
+otherwise it posts no release. The lite file does not evaluate
+standard step 5. Any other value stays unrecognized.
+`mergePolicyAck` stays diagnostic. A broken or missing F1-F2 helper
+stays a stop-and-ask condition.
 
 `idd-ci.instructions.md` and `idd-advisory-wait.instructions.md` are
 shared helper files, not phases of their own, so they never appear as
@@ -425,12 +465,15 @@ its standard instruction file — this is the documented default, not
 an implied gap. Some phases lack a lite file because a repository's
 own lite-profile track has not shipped one yet even though it is in
 scope by design; others are permanently excluded by design — the
-open-ended selection, judgment-heavy classification, and autonomous
-merge phases (Discover, Suitability, Review-triage, and Merge) stay on
-the standard file always, regardless of how much of a repository's
-lite-profile work has landed. A lite-opted-in session encountering
-either case reads the standard file the same way a standard-tier
-session would.
+open-ended selection and judgment-heavy classification phases
+(Discover, Suitability, and Review-triage) stay on the standard file
+always. The lite profile has no F3 file. A resolved
+`fully_autonomous_merge` continues at the standard handoff, which runs
+F3 after the existing gates. A string applies to every tier and does
+not read a tier name. An object names `frontier`, `middle-tier`, and
+`lightweight`. `mergePolicyAck` stays diagnostic. A lite-opted-in
+session encountering a missing lite file reads the standard file the
+same way a standard-tier session would.
 
 ## IDD file map
 
