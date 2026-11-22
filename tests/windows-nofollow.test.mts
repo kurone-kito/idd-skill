@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
   writeSync,
@@ -21,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import {
   copyNoFollow,
   hasPosixNoFollowFlags,
+  type NoFollowDeps,
   readNoFollowFile,
   writeExclusiveNoFollow,
 } from '../src/scripts/windows-nofollow.mts';
@@ -425,6 +427,90 @@ test('Windows probe-relative opens the final via the held parent (#5292)', () =>
       result.sha256,
       createHash('sha256').update(payload).digest('hex'),
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('copyNoFollow streams a multi-chunk file on Windows and reports the identity it read (issue #5326)', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-nofollow-stream-'));
+  try {
+    const source = join(dir, 'source.bin');
+    const destination = join(dir, 'destination.bin');
+    const payload = Buffer.alloc(3 * 65536 + 17, 0x5a);
+    writeFileSync(source, payload);
+    const identity = copyNoFollow(source, destination);
+    assert.ok(identity !== null);
+    assert.deepEqual(readFileSync(destination), payload);
+    const measured = statSync(source, { bigint: true });
+    assert.equal(identity.volume, measured.dev);
+    assert.equal(identity.index, measured.ino);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('copyNoFollow bounds the helper deadline by the source size (issue #5326)', () => {
+  // The deadline is checked through an injected helper, so it runs on any
+  // platform: the base deadline, then one second per 4 MiB of source.
+  const root = mkdtempSync(join(tmpdir(), 'idd-nofollow-deadline-'));
+  try {
+    const system32 = join(root, 'System32', 'WindowsPowerShell', 'v1.0');
+    mkdirSync(system32, { recursive: true });
+    writeFileSync(join(system32, 'powershell.exe'), '');
+    const scriptPath = join(root, 'windows-nofollow.ps1');
+    writeFileSync(scriptPath, '');
+    const timeouts: number[] = [];
+    const deps: NoFollowDeps = {
+      platform: 'win32',
+      env: { SystemRoot: root },
+      scriptPath,
+      execFile: ((
+        _file: string,
+        _args: readonly string[],
+        options: { timeout: number },
+      ) => {
+        timeouts.push(options.timeout);
+        return JSON.stringify({
+          ok: true,
+          created: true,
+          sourceVolume: 1,
+          sourceIndex: '2',
+        });
+      }) as never,
+    };
+    const source = join(root, 'source.bin');
+    const destination = join(root, 'destination.bin');
+    writeFileSync(source, '');
+    copyNoFollow(source, destination, deps);
+    copyNoFollow(source, destination, deps, 0);
+    copyNoFollow(source, destination, deps, 1024 ** 3);
+    copyNoFollow(source, destination, deps, -1);
+    assert.deepEqual(timeouts, [30_000, 30_000, 286_000, 30_000]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('copyNoFollow copies through a hard link on Windows and reports the linked file identity (issue #5326)', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-nofollow-hardlink-'));
+  try {
+    const source = join(dir, 'source.bin');
+    const link = join(dir, 'link.bin');
+    const destination = join(dir, 'destination.bin');
+    const payload = Buffer.alloc(65536 + 9, 0x2b);
+    writeFileSync(source, payload);
+    linkSync(source, link);
+    const identity = copyNoFollow(link, destination);
+    assert.ok(identity !== null);
+    assert.deepEqual(readFileSync(destination), payload);
+    const measured = statSync(link, { bigint: true });
+    assert.equal(identity.volume, measured.dev);
+    assert.equal(identity.index, measured.ino);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

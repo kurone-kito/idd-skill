@@ -49,6 +49,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  type BigIntStats,
   closeSync,
   constants,
   fchmodSync,
@@ -119,6 +120,8 @@ import {
   type PreserveGuardDeps,
 } from './preserve-destination.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
+import { isWindowsNoFollowOpenAvailable } from './user-global-paths.mts';
+import { copyNoFollow, type NoFollowDeps } from './windows-nofollow.mts';
 import {
   type ConfirmationReference,
   canonicalSubject,
@@ -1088,6 +1091,14 @@ export interface LocalWorktreeRecoveryDeps {
   acquireCloneLock: (repoPath: string, agentId: string) => CloneLockHandle;
   releaseCloneLock: (handle: CloneLockHandle) => void;
   resolveDevelopmentBranch: () => string;
+  /** The no-follow flags the regular-file copy and the apply gate check.
+   * Production uses the node:fs constants. Tests inject flags that are absent,
+   * which is how native Windows looks to Node. */
+  noFollowFlags?: { O_NOFOLLOW?: number; O_NONBLOCK?: number };
+  /** The Windows no-follow helper (issue #5287) used when the flags above are
+   * absent. `false` forces the refusal; an object supplies helper deps;
+   * `true` or omitted uses the default discovery. Applies only on `win32`. */
+  windowsNoFollow?: boolean | NoFollowDeps;
   copyPath: (
     from: string,
     to: string,
@@ -5570,15 +5581,16 @@ function runRecoveryCore(
   // Node does not expose that primitive on every platform (notably
   // Windows), so reject apply before any stash, ref, or copy mutation rather
   // than discovering the limitation after partial preservation.
+  const noFollowFlags = deps.noFollowFlags ?? constants;
   if (
-    constants.O_NOFOLLOW === undefined ||
-    constants.O_NONBLOCK === undefined
+    (noFollowFlags.O_NOFOLLOW === undefined ||
+      noFollowFlags.O_NONBLOCK === undefined) &&
+    resolveWindowsCopyDeps(deps.windowsNoFollow) === null
   ) {
     return recordRemovalFailure(
       'refusing --apply: this platform does not support the no-follow and nonblocking file opens required for recovery copies; no mutation',
     );
   }
-
   if (primaryRecoveryResume) {
     if (!restorePrimaryRecoveryPlan()) {
       return recordRemovalFailure(
@@ -8640,24 +8652,48 @@ function loadRecoveryIddConfig(repositoryRoot: string): unknown | null {
  * that lexically points into the source root fails closed rather than being
  * recorded as preserved merely because its directory entry exists.
  */
+/**
+ * The Windows no-follow helper for the recovery copy, when it applies. It is
+ * used only on `win32` and only when the POSIX flags are absent. `false`
+ * forces the refusal, an object supplies the helper deps, and `true` or an
+ * omitted override uses the default discovery.
+ */
+function resolveWindowsCopyDeps(
+  override: boolean | NoFollowDeps | undefined,
+): NoFollowDeps | null {
+  if (override === false) return null;
+  const deps: NoFollowDeps =
+    typeof override === 'object' && override !== null ? override : {};
+  const platform = deps.platform ?? process.platform;
+  if (platform !== 'win32') return null;
+  return isWindowsNoFollowOpenAvailable(deps) ? deps : null;
+}
+
 export function copyPathWithSafeSymlinks(
   from: string,
   to: string,
   sourceRoot: string = from,
   additionalSourceRoots: string[] = [],
+  noFollowFlags: { O_NOFOLLOW?: number; O_NONBLOCK?: number } = constants,
+  windowsNoFollow: boolean | NoFollowDeps | undefined = undefined,
 ): void {
   const sourceRootsAbsolute = [sourceRoot, ...additionalSourceRoots].map(
     (root) => resolve(root),
   );
   const sourceRootsReal = sourceRootsAbsolute.map((root) => realpathSync(root));
   const activeDirectories = new Set<string>();
-  const sameSourceMetadata = (before: Stats, after: Stats): boolean =>
+  // Bigint fields only: BigIntStats time fields in milliseconds drop the
+  // sub-millisecond part, so the nanosecond fields carry the change check.
+  const sameSourceMetadata = (
+    before: BigIntStats,
+    after: BigIntStats,
+  ): boolean =>
     before.dev === after.dev &&
     before.ino === after.ino &&
     before.mode === after.mode &&
     before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs;
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs;
 
   const ensureDestinationParent = (destination: string): string => {
     const parent = resolve(dirname(destination));
@@ -8701,13 +8737,13 @@ export function copyPathWithSafeSymlinks(
 
   const assertSourceSymlinkStable = (
     source: string,
-    sourceStat: Stats,
+    sourceStat: BigIntStats,
     linkText: string,
     resolvedTarget: string | null,
   ): void => {
-    let currentStat: Stats;
+    let currentStat: BigIntStats;
     try {
-      currentStat = lstatSync(source);
+      currentStat = lstatSync(source, { bigint: true });
     } catch {
       throw new Error(`source symlink changed during copy: ${source}`);
     }
@@ -8759,7 +8795,10 @@ export function copyPathWithSafeSymlinks(
   };
 
   const copyEntry = (source: string, destination: string): void => {
-    const sourceStat = lstatSync(source);
+    // One bigint snapshot of the source supplies the type checks, the metadata
+    // comparisons, and the identity the helper's handle must match. The bigint
+    // fields are exact; the number fields round large Windows file indexes.
+    const sourceStat = lstatSync(source, { bigint: true });
     const parentReal = ensureDestinationParent(destination);
 
     if (sourceStat.isSymbolicLink()) {
@@ -8831,7 +8870,7 @@ export function copyPathWithSafeSymlinks(
           copyEntry(join(source, entry), join(destination, entry));
         }
         const entriesAfterCopy = readdirSync(source).sort();
-        const sourceAfterCopyStat = lstatSync(source);
+        const sourceAfterCopyStat = lstatSync(source, { bigint: true });
         if (
           !sourceAfterCopyStat.isDirectory() ||
           sourceAfterCopyStat.isSymbolicLink() ||
@@ -8881,54 +8920,91 @@ export function copyPathWithSafeSymlinks(
     try {
       let sourceFd: number | null = null;
       let temporaryFd: number | null = null;
-      let copiedSourceStat: Stats | null = null;
-      try {
-        const noFollow = constants.O_NOFOLLOW;
-        const nonBlocking = constants.O_NONBLOCK;
-        if (noFollow === undefined || nonBlocking === undefined) {
-          throw new Error(
-            'recovery source copy requires platform-supported no-follow and nonblocking opens',
-          );
-        }
-        sourceFd = openSync(
+      let copiedSourceStat: BigIntStats | null = null;
+      const windowsCopy =
+        noFollowFlags.O_NOFOLLOW === undefined ||
+        noFollowFlags.O_NONBLOCK === undefined
+          ? resolveWindowsCopyDeps(windowsNoFollow)
+          : null;
+      if (windowsCopy !== null) {
+        // Native Windows has no POSIX no-follow flags. The helper streams the
+        // copy into a new exclusive destination and reports the identity of the
+        // handle it read. Bind that to the baseline taken before the copy, and
+        // check the path again after it, so neither a swapped path nor a
+        // replaced ancestor can supply other bytes.
+        const read = copyNoFollow(
           source,
-          constants.O_RDONLY | noFollow | nonBlocking,
-        );
-        const openedSourceStat = fstatSync(sourceFd);
-        if (!openedSourceStat.isFile()) {
-          throw new Error(
-            `recovery source changed to a special file during copy: ${source}`,
-          );
-        }
-        const temporaryMode = 0o600 | (sourceStat.mode & 0o111);
-        temporaryFd = openSync(
           temporaryPath,
-          constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
-          temporaryMode,
+          windowsCopy,
+          Number(sourceStat.size),
         );
-        // openSync applies the process umask to a creation mode, so a
-        // restrictive umask (for example 077) would drop the group and other
-        // execute bits the source had. fchmod ignores the umask and acts on
-        // the open descriptor, so set the exact mode before any byte is copied.
-        fchmodSync(temporaryFd, temporaryMode);
-        const buffer = Buffer.allocUnsafe(64 * 1024);
-        for (;;) {
-          const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
-          if (bytesRead === 0) break;
-          let offset = 0;
-          while (offset < bytesRead) {
-            offset += writeSync(
-              temporaryFd,
-              buffer,
-              offset,
-              bytesRead - offset,
+        if (
+          read === null ||
+          read.volume !== sourceStat.dev ||
+          read.index !== sourceStat.ino
+        ) {
+          throw new Error(`source changed before the copy read it: ${source}`);
+        }
+        // The post-copy comparison below covers dev, ino, size, and times.
+        copiedSourceStat = lstatSync(source, { bigint: true });
+      } else {
+        try {
+          const noFollow = noFollowFlags.O_NOFOLLOW;
+          const nonBlocking = noFollowFlags.O_NONBLOCK;
+          if (noFollow === undefined || nonBlocking === undefined) {
+            throw new Error(
+              'recovery source copy requires platform-supported no-follow and nonblocking opens',
             );
           }
+          sourceFd = openSync(
+            source,
+            constants.O_RDONLY | noFollow | nonBlocking,
+          );
+          const openedSourceStat = fstatSync(sourceFd);
+          if (!openedSourceStat.isFile()) {
+            throw new Error(
+              `recovery source changed to a special file during copy: ${source}`,
+            );
+          }
+          const temporaryMode = 0o600 | (Number(sourceStat.mode) & 0o111);
+          temporaryFd = openSync(
+            temporaryPath,
+            constants.O_WRONLY |
+              constants.O_CREAT |
+              constants.O_EXCL |
+              noFollow,
+            temporaryMode,
+          );
+          // openSync applies the process umask to a creation mode, so a
+          // restrictive umask (for example 077) would drop the group and other
+          // execute bits the source had. fchmod ignores the umask and acts on
+          // the open descriptor, so set the exact mode before any byte is copied.
+          fchmodSync(temporaryFd, temporaryMode);
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          for (;;) {
+            const bytesRead = readSync(
+              sourceFd,
+              buffer,
+              0,
+              buffer.length,
+              null,
+            );
+            if (bytesRead === 0) break;
+            let offset = 0;
+            while (offset < bytesRead) {
+              offset += writeSync(
+                temporaryFd,
+                buffer,
+                offset,
+                bytesRead - offset,
+              );
+            }
+          }
+          copiedSourceStat = fstatSync(sourceFd, { bigint: true });
+        } finally {
+          if (temporaryFd !== null) closeSync(temporaryFd);
+          if (sourceFd !== null) closeSync(sourceFd);
         }
-        copiedSourceStat = fstatSync(sourceFd);
-      } finally {
-        if (temporaryFd !== null) closeSync(temporaryFd);
-        if (sourceFd !== null) closeSync(sourceFd);
       }
       if (
         copiedSourceStat === null ||
@@ -8936,7 +9012,7 @@ export function copyPathWithSafeSymlinks(
       ) {
         throw new Error(`source changed during copy: ${source}`);
       }
-      const finalSourceStat = lstatSync(source);
+      const finalSourceStat = lstatSync(source, { bigint: true });
       if (
         !finalSourceStat.isFile() ||
         !sameSourceMetadata(sourceStat, finalSourceStat)
@@ -8994,6 +9070,10 @@ export function copyPathWithSafeSymlinks(
   copyEntry(from, to);
 }
 
+// Production copies resolve the same no-follow flags and Windows helper as
+// the apply gate, because both default to the node:fs constants and to helper
+// discovery. Tests that inject `noFollowFlags` or `windowsNoFollow` stub this
+// function, and they check the copy itself through copyPathWithSafeSymlinks.
 function copyPathProduction(
   from: string,
   to: string,

@@ -7814,9 +7814,16 @@ that runs it is
   This is preventive hardening; no observed incident yet.
 - On platforms where Node does not expose the no-follow and nonblocking
   file-open primitives used by the secure recovery copy (notably Windows),
-  `--apply` refuses before step 3 starts. This prevents stash or recovery-ref
-  mutations from preceding a copy failure; use dry-run for inspection and an
-  environment with the required no-follow and nonblocking support for apply.
+  `--apply` copies regular files through the Windows no-follow helper
+  (issue `#5287`) when that helper is available. The helper streams each copy
+  in bounded chunks. It copies exactly the length it reads at open, and its
+  deadline grows with that size (30 seconds, plus one second per 4 MiB). It
+  reports the identity of the file it read, and `--apply` refuses a copy whose
+  source identity differs from the file it measured just before. A hard-linked
+  source is copied as bytes. Without the helper, `--apply` refuses before step
+  3 starts. This prevents stash or recovery-ref mutations from preceding a copy
+  failure; use dry-run for inspection, or an environment with both the
+  no-follow and nonblocking open flags, when the helper is absent.
   This guard follows the Copilot review finding in PR `#3550`, comment
   `#4116259512`.
 - Must be invoked from the primary worktree (or from the primary worktree

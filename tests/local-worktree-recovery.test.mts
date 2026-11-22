@@ -73,6 +73,7 @@ import {
   statSnapshotsAgree,
   submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
+import type { NoFollowDeps } from '../src/scripts/windows-nofollow.mts';
 import {
   createDefaultEvidencePorts,
   type PreserveGuardFilesystem,
@@ -138,6 +139,168 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A win32 helper substitute for the recovery copy: a fake System32 and script,
+ * and a stub exec. `respond` receives the helper mode and its path arguments.
+ */
+function windowsRecoveryCopyShim(
+  respond: (mode: string, paths: readonly string[]) => unknown,
+): { deps: NoFollowDeps; calls: string[][]; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-win-'));
+  const system32 = join(root, 'System32', 'WindowsPowerShell', 'v1.0');
+  mkdirSync(system32, { recursive: true });
+  writeFileSync(join(system32, 'powershell.exe'), '');
+  const scriptPath = join(root, 'windows-nofollow.ps1');
+  writeFileSync(scriptPath, '');
+  const calls: string[][] = [];
+  const deps: NoFollowDeps = {
+    platform: 'win32',
+    env: { SystemRoot: root },
+    scriptPath,
+    execFile: ((file: string, args: readonly string[]) => {
+      calls.push([file, ...args]);
+      const at = args.indexOf(scriptPath);
+      const mode = args[at + 1] ?? '';
+      return JSON.stringify(respond(mode, args.slice(at + 2)));
+    }) as never,
+  };
+  return {
+    deps,
+    calls,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test('copyPathWithSafeSymlinks copies a regular file through the Windows helper without POSIX flags (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-win-copy-'));
+  const shim = windowsRecoveryCopyShim((mode, paths) => {
+    assert.equal(mode, 'copy');
+    const measured = lstatSync(paths[0] ?? '', { bigint: true });
+    copyFileSync(paths[0] ?? '', paths[1] ?? '');
+    return {
+      ok: true,
+      created: true,
+      sourceVolume: Number(measured.dev),
+      sourceIndex: String(measured.ino),
+    };
+  });
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'preserve', 'destination.txt');
+    mkdirSync(join(root, 'preserve'));
+    writeFileSync(source, 'recovered bytes');
+    copyPathWithSafeSymlinks(source, destination, source, [], {}, shim.deps);
+    assert.equal(readFileSync(destination, 'utf8'), 'recovered bytes');
+    assert.equal(shim.calls.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses a Windows copy that read another file than the one measured (issue #5326)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-identity-'));
+  const shim = windowsRecoveryCopyShim(() => ({
+    ok: true,
+    created: true,
+    sourceVolume: 1,
+    sourceIndex: '1',
+  }));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(
+          source,
+          destination,
+          source,
+          [],
+          {},
+          shim.deps,
+        ),
+      /source changed before the copy read it/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses a Windows copy that reports no source identity (issue #5326)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-no-identity-'));
+  const shim = windowsRecoveryCopyShim(() => ({ ok: true, created: true }));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(
+          source,
+          destination,
+          source,
+          [],
+          {},
+          shim.deps,
+        ),
+      /did not report the source identity/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
+  }
+});
+
+test('copyPathWithSafeSymlinks refuses before any copy when no Windows helper applies (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-refuse-'));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(source, destination, source, [], {}, false),
+      /requires platform-supported no-follow and nonblocking opens/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('copyPathWithSafeSymlinks surfaces the Windows helper refusal for a link and copies nothing (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-link-'));
+  const shim = windowsRecoveryCopyShim(() => ({
+    ok: false,
+    reason: 'refusing: final component is a reparse point',
+  }));
+  try {
+    const source = join(root, 'source.txt');
+    const destination = join(root, 'destination.txt');
+    writeFileSync(source, 'bytes');
+    assert.throws(
+      () =>
+        copyPathWithSafeSymlinks(
+          source,
+          destination,
+          source,
+          [],
+          {},
+          shim.deps,
+        ),
+      /reparse point/,
+    );
+    assert.equal(existsSync(destination), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    shim.cleanup();
   }
 });
 
@@ -1234,6 +1397,29 @@ test('never mutates without --operator-confirmed-no-live-session, regardless of 
   assert.match(verdict.result, /operator-confirmed-no-live-session/);
 });
 
+test('--apply refuses before any mutation when neither POSIX flags nor a Windows helper apply (issue #5316)', () => {
+  const deps = fakeDeps();
+  deps.noFollowFlags = {};
+  deps.windowsNoFollow = false;
+  let mutatingCalls = 0;
+  deps.runGit = (argv) => {
+    if (argv[0] === 'worktree' && argv[1] === 'remove') mutatingCalls += 1;
+    if (argv[0] === 'stash' && argv[1] === 'push') mutatingCalls += 1;
+    if (argv[0] === 'update-ref') mutatingCalls += 1;
+    return cleanRepoRunGit(argv);
+  };
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.mutated, false);
+  assert.equal(mutatingCalls, 0);
+  assert.match(
+    verdict.result,
+    /does not support the no-follow and nonblocking file opens/,
+  );
+});
+
 test('default (no --apply) never mutates, and reports the full plan', () => {
   const deps = fakeDeps();
   let mutatingCalls = 0;
@@ -1325,6 +1511,74 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
     'remove',
     'release',
   ]);
+});
+
+test('apply passes the gate and reaches the same mutation flow when the Windows helper stands in for the POSIX flags (issue #5316)', () => {
+  const shim = windowsRecoveryCopyShim(() => ({ ok: true }));
+  try {
+    const callOrder: string[] = [];
+    const deps = fakeDeps({
+      noFollowFlags: {},
+      windowsNoFollow: shim.deps,
+      acquireCloneLock: () => {
+        callOrder.push('acquire');
+        return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      },
+      releaseCloneLock: () => {
+        callOrder.push('release');
+      },
+      confirmBlock: (() => {
+        let call = 0;
+        return () => {
+          call += 1;
+          callOrder.push(call === 1 ? 'confirm-step1' : 'confirm-recheck');
+          return {
+            ok: true,
+            routing: {
+              state: 'local_worktree_occupied',
+              reason: 'stale-claim-local-worktree-occupied',
+              active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+              evidence: {
+                local_worktree: {
+                  status: 'occupied',
+                  paths: ['/repo/linked'],
+                  reason: null,
+                },
+              },
+            },
+            error: null,
+          };
+        };
+      })(),
+      runGit: (argv) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          callOrder.push('remove');
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv);
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+      deps,
+    );
+    assert.doesNotMatch(verdict.result, /does not support the no-follow/);
+    assert.equal(verdict.mutated, true);
+    assert.deepEqual(callOrder, [
+      'confirm-step1',
+      'acquire',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'remove',
+      'release',
+    ]);
+  } finally {
+    shim.cleanup();
+  }
 });
 
 test('linked cleanup stops when an ignored path is reclassified by stash', () => {
