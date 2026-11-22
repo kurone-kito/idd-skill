@@ -743,9 +743,14 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
  * argument, or a pipe into `iex` or a shell.
  */
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c[a-z]*:?)\s*\(*\s*$/iu;
+  /(?:^|[\s;(|{])(?:&|\.|iex|invoke-expression|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
   /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
+
+/** Block comments are whitespace to PowerShell, so they are dropped first. */
+function withoutBlockComments(text: string): string {
+  return text.replace(/<#[\s\S]*?#>/gu, ' ');
+}
 
 function isInvokedHereString(
   characters: string[],
@@ -760,20 +765,13 @@ function isInvokedHereString(
   ) {
     lineStart -= 1;
   }
-  let lineEnd = closer + 2;
-  while (
-    lineEnd < characters.length &&
-    characters[lineEnd] !== '\n' &&
-    characters[lineEnd] !== '\r'
-  ) {
-    lineEnd += 1;
-  }
+  // A pipeline may continue on a later line, so the rest of the text counts.
   return (
     POWERSHELL_INVOKED_BEFORE.test(
-      characters.slice(lineStart, opener).join(''),
+      withoutBlockComments(characters.slice(lineStart, opener).join('')),
     ) ||
     POWERSHELL_INVOKED_AFTER.test(
-      characters.slice(closer + 2, lineEnd).join(''),
+      withoutBlockComments(characters.slice(closer + 2).join('')),
     )
   );
 }

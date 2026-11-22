@@ -2042,6 +2042,33 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'pipeline continued on the next line into iex is scanned',
+      body: ["@'", 'C:/tools/gh.exe api repos/o/r', "'@ |", 'iex', ''].join(
+        '\n',
+      ),
+      expectBlocked: true,
+    },
+    {
+      name: 'block comment before a here-string after iex is scanned',
+      body: [
+        "iex <# explain #> @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'CurrentOperation here-string is display text',
+      body: [
+        "Write-Progress -Activity 'Checking' -CurrentOperation @'",
+        'gh --version',
+        "'@",
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
       name: 'piped here-string keeps a line comment boundary',
       body: ["@'", '# heading', 'gh api repos/o/r', "'@ | iex", ''].join('\n'),
       expectBlocked: true,
