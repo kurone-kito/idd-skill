@@ -7818,10 +7818,11 @@ that runs it is
   (issue `#5287`) when that helper is available. The helper buffers each file
   whole, so on that path `--apply` also refuses before any mutation when a
   regular file in the checkout is larger than the helper's single-read limit
-  (`uint32.MaxValue` bytes). Without the helper, `--apply` refuses before
-  step 3 starts. This prevents stash or recovery-ref
-  mutations from preceding a copy failure; use dry-run for inspection, or an
-  environment with the required no-follow support, when the helper is absent.
+  (2,147,483,647 bytes, the largest `int32` the helper allocates), or has
+  more than one hard link. Without the helper, `--apply` refuses before
+  step 3 starts. This prevents stash or recovery-ref mutations from
+  preceding a copy failure; use dry-run for inspection, or an environment
+  with the required no-follow support, when the helper is absent.
   This guard follows the Copilot review finding in PR `#3550`, comment
   `#4116259512`.
 - Must be invoked from the primary worktree (or from the primary worktree

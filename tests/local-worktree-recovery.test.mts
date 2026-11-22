@@ -244,25 +244,55 @@ test('copyPathWithSafeSymlinks surfaces the Windows helper refusal for a link an
 
 test('findOversizeCopySource names the first regular file over the limit (issue #5316)', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-'));
-  const linkRoot = mkdtempSync(join(tmpdir(), 'idd-lwr-size-link-'));
   try {
     mkdirSync(join(root, 'nested'));
     writeFileSync(join(root, 'small.txt'), 'abc');
     writeFileSync(join(root, 'nested', 'large.bin'), '0123456789');
-    assert.equal(
-      findOversizeCopySource([root], 3),
-      join(root, 'nested', 'large.bin'),
-    );
+    assert.deepEqual(findOversizeCopySource([root], 3), {
+      path: join(root, 'nested', 'large.bin'),
+      reason: 'size',
+    });
     assert.equal(findOversizeCopySource([root], 100), null);
     assert.equal(findOversizeCopySource([join(root, 'missing')], 3), null);
-    symlinkSync(join(root, 'nested', 'large.bin'), join(linkRoot, 'link.bin'));
-    assert.equal(
-      findOversizeCopySource([linkRoot], 3),
-      join(linkRoot, 'link.bin'),
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('findOversizeCopySource measures an in-tree link and skips an external one (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-link-'));
+  const outside = mkdtempSync(join(tmpdir(), 'idd-lwr-size-out-'));
+  try {
+    writeFileSync(join(root, 'big.bin'), '0123456789');
+    symlinkSync(join(root, 'big.bin'), join(root, 'alias.bin'));
+    const found = findOversizeCopySource([root], 3);
+    assert.equal(found?.reason, 'size');
+    writeFileSync(join(outside, 'big.bin'), '0123456789');
+    const external = mkdtempSync(join(tmpdir(), 'idd-lwr-size-ext-'));
+    try {
+      symlinkSync(join(outside, 'big.bin'), join(external, 'out.bin'));
+      assert.equal(findOversizeCopySource([external], 3), null);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('findOversizeCopySource refuses a file with more than one hard link (issue #5316)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-size-hard-'));
+  try {
+    writeFileSync(join(root, 'a.bin'), 'abc');
+    linkSync(join(root, 'a.bin'), join(root, 'b.bin'));
+    const found = findOversizeCopySource([root], 100);
+    assert.equal(found?.reason, 'hard-link');
+    assert.ok(
+      [join(root, 'a.bin'), join(root, 'b.bin')].includes(found?.path ?? ''),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
-    rmSync(linkRoot, { recursive: true, force: true });
   }
 });
 
