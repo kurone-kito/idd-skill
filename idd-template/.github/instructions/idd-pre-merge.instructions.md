@@ -76,7 +76,9 @@ activity-universe values the handoff phase consumes.
 Do not treat "one bot says clean" as sufficient evidence: checks must cover
 the full activity universe (human reviewers and advisory bots such as
 Copilot, CodeRabbit, and Codex), meaning each item actually posted is read
-and dispositioned. Never wait for a non-primary bot's missing review.
+and dispositioned. Never wait for a non-primary bot's missing review, except the
+first-push hold at E12 when `advisoryWait.firstFixPushSecondaryWait` is set; that
+hold runs before the push, not here.
 
 The advisory-wait window is Copilot-only
 (`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
@@ -288,8 +290,9 @@ with a `hint` names this step; the hint never changes the verdict.
   `secondary-quiet-window` blocker means that window has not elapsed
   since the last substantive review activity; wait (poll per
   `advisoryWait.pollInterval`), then re-evaluate F2. The only wait for a
-  non-primary advisory bot is this `secondary-quiet-window` blocker, and
-  it never waits for any bot to review; `advisoryWait.primaryBotLogin`
+  non-primary advisory bot here is this `secondary-quiet-window` blocker, and
+  it never waits for any bot to review (the E12 first-push hold runs before
+  the push, not at this gate); `advisoryWait.primaryBotLogin`
   (default Copilot) is the only primary. When issue `#2544`'s settled
   buffer clamps the wait, the blocker names that buffer apart from the
   configured window.

@@ -121,7 +121,8 @@ Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
 `advisoryWait.secondaryBotLogin` accepts one login or a list; request every
-`secondaryRequestLogins` entry, not only the first, never polling any.
+`secondaryRequestLogins` entry, not only the first, never polling any, except the
+E12 first-push hold when `advisoryWait.firstFixPushSecondaryWait` is set.
 Trigger condition and per-login procedure:
 `idd-review-fix.instructions.md`'s E14 step 5.
 
