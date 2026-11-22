@@ -300,6 +300,9 @@ function readPostRemovalKeep(raw, claimId, agentId, worktree) {
     owner.agent_and_branch_match !== null ||
     localRecord === null ||
     localRecord.status !== owner.occupancy_probe ||
+    // A live holder beside the unreadable record is a second worktree on the
+    // claim branch, so the removed path alone cannot prove sole occupancy.
+    localRecord.matchedPaths !== undefined ||
     !localPathsAgree(owner.occupancy_probe, localRecord.paths, worktree)
   ) {
     return null;

@@ -10439,8 +10439,8 @@ is null. The later owner proofs (`claim_lock_matches`,
 `unreadable` probe lists only the removed worktree path, and any other
 listed path still holds; an `absent` probe lists no paths. A zero exit,
 any other action, a mismatched claim, an unreadable assert, a
-contradictory local-worktree record, or a live occupied worktree still
-holds.
+contradictory local-worktree record, a live matching worktree listed as
+`matchedPaths`, or a live occupied worktree still holds.
 Checks before step 5 are unchanged. Observed
 2026-11-21 on host `win32` during cleanup of issue `#5290` (PR `#5296`),
 recorded in issue `#5299`.

@@ -209,6 +209,13 @@
                       "type": "string"
                     }
                   },
+                  "matchedPaths": {
+                    "description": "Present only on an unreadable probe that also found live matching worktrees: their paths, reported beside paths so a holder hidden by an unreadable record stays visible. Absent otherwise.",
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "reason": {
                     "description": "Diagnostic reason, or null when no matching worktree exists; the JSON Schema type array expresses this string|null union.",
                     "type": [

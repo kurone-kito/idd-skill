@@ -4867,6 +4867,12 @@ test('discover-roadmap-union schema accepts localWorktree status variants', () =
       paths: ['/repo/missing-worktree'],
       reason: 'cannot inspect matching local worktree metadata',
     },
+    {
+      status: 'unreadable',
+      paths: ['/repo/missing-worktree'],
+      reason: 'cannot inspect matching local worktree metadata',
+      matchedPaths: ['/repo/live-worktree'],
+    },
   ];
 
   for (const localWorktree of variants) {
