@@ -1005,7 +1005,7 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
 // Text before a here-string opener, and after its closer, that makes PowerShell
 // run the here-string value. Keep these identical to isolate-gh.mts.
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{])(?:&|\.|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
+  /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
   /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 
@@ -1024,8 +1024,8 @@ function withoutLineContinuations(text) {
 function powerShellPayloadVariables(source) {
   const names = new Set();
   const consumer =
-    /(?:^|[\s;(|{])(?:&|\.|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$([a-z_]\w*)/giu;
-  for (const match of source.matchAll(consumer)) {
+    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$([a-z_]\w*)/giu;
+  for (const match of withoutLineContinuations(source).matchAll(consumer)) {
     names.add((match[1] ?? '').toLowerCase());
   }
   return names;
@@ -1050,10 +1050,9 @@ function isInvokedHereString(characters, opener, closer, payloadVariables) {
   );
 }
 
-function blankPowerShellHereStrings(source) {
+function blankPowerShellHereStrings(source, payloadVariables) {
   const characters = [...source];
   const expandableHereStrings = [];
-  const payloadVariables = powerShellPayloadVariables(source);
   let quote = null;
   for (let index = 0; index < characters.length; index += 1) {
     const character = characters[index];
@@ -1245,7 +1244,14 @@ function stripPowerShellComments(source) {
 }
 
 function stripPowerShellCommentsAndHereStrings(source) {
-  const blanked = blankPowerShellHereStrings(source);
+  // Find payload variables from executable text only. Literal here-strings and
+  // comments are removed first, so prose that mentions `iex $name` is not a
+  // consumer.
+  const literalsOnly = blankPowerShellHereStrings(source, new Set());
+  const payloadVariables = powerShellPayloadVariables(
+    stripPowerShellComments(literalsOnly.source),
+  );
+  const blanked = blankPowerShellHereStrings(source, payloadVariables);
   return {
     source: stripPowerShellComments(blanked.source),
     expandableHereStrings: blanked.expandableHereStrings,

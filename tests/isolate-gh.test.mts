@@ -2042,6 +2042,39 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: true,
     },
     {
+      name: 'scriptblock Create on a here-string is scanned',
+      body: [
+        "[scriptblock]::Create(@'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@).Invoke()",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'literal body that mentions iex of its own variable stays prose',
+      body: [
+        "$code = @'",
+        'gh api repos/o/r',
+        'iex $code',
+        "'@; Write-Output $code",
+        '',
+      ].join('\n'),
+      expectBlocked: false,
+    },
+    {
+      name: 'continued iex before a variable payload is scanned',
+      body: [
+        "$payload = @'",
+        'gh --version',
+        "'@",
+        'iex `',
+        '  $payload',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'backtick-continued iex before a here-string is scanned',
       body: ['iex `', "@'", 'C:/tools/gh.exe api repos/o/r', "'@", ''].join(
         '\n',
