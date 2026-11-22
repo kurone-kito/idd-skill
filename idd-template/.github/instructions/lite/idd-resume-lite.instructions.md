@@ -139,8 +139,7 @@ agent-id alone.
 | Multiple open PRs for the claim branch | STOP — ambiguous                                                |
 | No PR, no remote, no local branch      | → B1 fresh worktree                                             |
 
-Primary worktree must stay on `{default-branch}`. Never `git switch` the primary
-onto the issue branch.
+Keep the primary worktree on `{default-branch}`; never `git switch` it.
 
 ## Step 3 — PR / CI / review route (helper-first)
 
@@ -191,4 +190,5 @@ If claim lost: STOP. Do not post further operational markers.
 
 ## Stop-and-ask
 
-Do **not** run autonomous merge (F3+) on the lite tier.
+Do **not** run autonomous merge (F3+) unless F2.5 resolves
+`fully_autonomous_merge`.
