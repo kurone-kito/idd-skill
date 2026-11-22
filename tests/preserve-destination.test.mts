@@ -4,10 +4,13 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +25,10 @@ import {
   type PreserveDirectoryName,
   type PreserveGuardDeps,
 } from '../src/scripts/preserve-destination.mts';
+import type {
+  WindowsAclReader,
+  WindowsDirectoryTools,
+} from '../src/scripts/windows-acl.mts';
 
 // The guards check owner, mode, and symlinks, so they run on POSIX only. The
 // Windows ACL branch has its own tests in windows-acl.test.mts.
@@ -623,3 +630,504 @@ function swappingIdentity(fixture: Fixture, fromCall: number) {
     },
   };
 }
+
+// Windows ACL tightening (kurone-kito/idd-skill#5318). The platform, the ACL
+// reader, the owner reader, and the writer are injected, so these run on every
+// host against real directories. The icacls and PowerShell argument lists are
+// asserted against a fake process starter in windows-acl.test.mts, and the
+// real calls are not run in CI; the pull request records a native Windows run.
+const USER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1001';
+const OTHER_USER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1002';
+
+interface WindowsAclFixture {
+  /** Real paths whose ACL reads as private; every other directory is permissive. */
+  readonly privatePaths: Set<string>;
+  readonly reader: WindowsAclReader;
+  readonly tools: WindowsDirectoryTools;
+  readonly owners: string[];
+  readonly restricted: string[];
+  setOwner: (owner: string | null | 'throw') => void;
+  onRestrict: (hook: (path: string) => void) => void;
+  /** Make the writer succeed without changing the ACL. */
+  setRestrictEffective: (effective: boolean) => void;
+}
+
+function windowsAcl(withCurrentSid = true): WindowsAclFixture {
+  const privatePaths = new Set<string>();
+  const owners: string[] = [];
+  const restricted: string[] = [];
+  let owner: string | null | 'throw' = USER_SID;
+  let hook: (path: string) => void = () => {};
+  let effective = true;
+  const reader: WindowsAclReader = (directory) => ({
+    kind: 'entries',
+    ...(withCurrentSid ? { currentSid: USER_SID } : {}),
+    entries: privatePaths.has(directory)
+      ? [
+          { sid: USER_SID, allow: true },
+          { sid: 'S-1-5-18', allow: true },
+        ]
+      : [
+          { sid: USER_SID, allow: true },
+          { sid: 'S-1-1-0', allow: true },
+        ],
+  });
+  const tools: WindowsDirectoryTools = {
+    readOwner: (directory) => {
+      owners.push(directory);
+      if (owner === 'throw') throw new Error('owner read failed');
+      return owner;
+    },
+    restrict: (directory, currentSid) => {
+      restricted.push(directory);
+      assert.equal(currentSid, USER_SID);
+      hook(directory);
+      if (effective) privatePaths.add(directory);
+    },
+  };
+  return {
+    privatePaths,
+    reader,
+    tools,
+    owners,
+    restricted,
+    setOwner: (value) => {
+      owner = value;
+    },
+    onRestrict: (value) => {
+      hook = value;
+    },
+    setRestrictEffective: (value) => {
+      effective = value;
+    },
+  };
+}
+
+function windowsEnsure(path: string, acl: WindowsAclFixture): void {
+  ensurePrivateStateDirectory(path, 'win32', acl.reader, acl.tools);
+}
+
+function permissiveDirectory(fixture: Fixture, name = 'victim'): string {
+  const path = join(fixture.root, name);
+  mkdirSync(path);
+  return realResolve(path) as string;
+}
+
+test('windows: a permissive real directory is restricted, read again as private, and the helper continues', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const path = permissiveDirectory(fx);
+  assert.equal(inspectDirectoryPrivacy(path, 'win32', acl.reader), 'unsafe');
+  windowsEnsure(path, acl);
+  assert.deepEqual(acl.restricted, [path]);
+  assert.deepEqual(acl.owners, [path]);
+  assert.equal(inspectDirectoryPrivacy(path, 'win32', acl.reader), 'private');
+});
+
+test('windows: an already private directory is left alone with no owner read and no write', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const path = permissiveDirectory(fx);
+  acl.privatePaths.add(path);
+  windowsEnsure(path, acl);
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+});
+
+test('windows: a symlink to a permissive target is refused and nothing is read or written', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const target = permissiveDirectory(fx, 'target');
+  const link = join(fx.root, 'link');
+  symlinkSync(target, link, 'junction');
+  assert.throws(
+    () => windowsEnsure(link, acl),
+    /symlink target is not private/,
+  );
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+  assert.equal(acl.privatePaths.has(target), false);
+});
+
+test('windows: a symlink to an already private target is still accepted unchanged', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const target = permissiveDirectory(fx, 'target');
+  acl.privatePaths.add(target);
+  const link = join(fx.root, 'link');
+  symlinkSync(target, link, 'junction');
+  windowsEnsure(link, acl);
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+});
+
+test('windows: a file, a missing path, and a populated directory are refused before any write', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const file = join(fx.root, 'file');
+  writeFileSync(file, 'x');
+  const populated = permissiveDirectory(fx, 'populated');
+  writeFileSync(join(populated, 'entry'), 'x');
+  for (const path of [file, join(fx.root, 'missing'), populated]) {
+    assert.throws(
+      () => windowsEnsure(path, acl),
+      /ownership or privacy could not be verified/,
+      path,
+    );
+  }
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+});
+
+test('windows: an unreadable ACL, or one without the current user SID, is refused before any owner read', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  const unreadable = windowsAcl();
+  assert.throws(
+    () =>
+      ensurePrivateStateDirectory(
+        path,
+        'win32',
+        () => ({ kind: 'unreadable' }),
+        unreadable.tools,
+      ),
+    /ownership or privacy could not be verified/,
+  );
+  const throwing = windowsAcl();
+  assert.throws(
+    () =>
+      ensurePrivateStateDirectory(
+        path,
+        'win32',
+        () => {
+          throw new Error('icacls failed');
+        },
+        throwing.tools,
+      ),
+    /ownership or privacy could not be verified/,
+  );
+  const noSid = windowsAcl(false);
+  assert.throws(
+    () => windowsEnsure(path, noSid),
+    /ownership or privacy could not be verified/,
+  );
+  for (const acl of [unreadable, throwing, noSid]) {
+    assert.deepEqual(acl.owners, []);
+    assert.deepEqual(acl.restricted, []);
+  }
+});
+
+test('windows: an owner other than the current user, or an unreadable one, is refused with no write', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  for (const owner of [
+    OTHER_USER_SID,
+    // An elevated session owns new directories as Administrators.
+    'S-1-5-32-544',
+    'S-1-5-18',
+    null,
+    'throw',
+  ] as const) {
+    const acl = windowsAcl();
+    acl.setOwner(owner);
+    assert.throws(
+      () => windowsEnsure(path, acl),
+      /directory belongs to another user/,
+      String(owner),
+    );
+    assert.deepEqual(acl.restricted, [], String(owner));
+  }
+  const matching = windowsAcl();
+  matching.setOwner(USER_SID.toLowerCase());
+  windowsEnsure(path, matching);
+  assert.deepEqual(matching.restricted, [path]);
+});
+
+test('windows: a re-read that is still permissive or unreadable is refused', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  const stillPermissive = windowsAcl();
+  stillPermissive.setRestrictEffective(false);
+  assert.throws(
+    () => windowsEnsure(path, stillPermissive),
+    /could not be restricted to its owner/,
+  );
+  assert.deepEqual(stillPermissive.restricted, [path]);
+
+  const acl = windowsAcl();
+  let reads = 0;
+  assert.throws(
+    () =>
+      ensurePrivateStateDirectory(
+        path,
+        'win32',
+        (directory) => {
+          reads += 1;
+          // The first two reads are the inspection and the pre-write read.
+          return reads <= 2 ? acl.reader(directory) : { kind: 'unreadable' };
+        },
+        acl.tools,
+      ),
+    /could not be restricted to its owner/,
+  );
+  assert.deepEqual(acl.restricted, [path]);
+});
+
+test('windows: a failing writer is reported and the helper does not continue', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  const acl = windowsAcl();
+  acl.onRestrict(() => {
+    throw new Error('Access is denied');
+  });
+  assert.throws(
+    () => windowsEnsure(path, acl),
+    /could not be restricted to its owner: Access is denied/,
+  );
+});
+
+test('windows: a directory replaced before the write, or during it, is reported', () => {
+  const fx = fresh();
+  const swap = (path: string) => {
+    renameSync(path, `${path}.old`);
+    mkdirSync(path);
+  };
+  const before = permissiveDirectory(fx, 'before');
+  const early = windowsAcl();
+  const earlyTools: WindowsDirectoryTools = {
+    ...early.tools,
+    readOwner: (directory) => {
+      swap(directory);
+      return USER_SID;
+    },
+  };
+  assert.throws(
+    () =>
+      ensurePrivateStateDirectory(before, 'win32', early.reader, earlyTools),
+    /directory changed after inspection/,
+  );
+  assert.deepEqual(early.restricted, []);
+
+  const during = permissiveDirectory(fx, 'during');
+  const late = windowsAcl();
+  late.onRestrict(swap);
+  assert.throws(
+    () => windowsEnsure(during, late),
+    /directory changed while it was being restricted/,
+  );
+});
+
+test('windows: inspection and a dry run never write an ACL', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    ensurePrivateDirectory: (path) => windowsEnsure(path, acl),
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+});
+
+test('windows: creation restricts the parents and the leaf it creates, and records them', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    ensurePrivateDirectory: (path) => windowsEnsure(path, acl),
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  const created = createPreserveDestination(
+    deps,
+    inspected.destination,
+    inspected.parents,
+  );
+  assert.equal(created.hold, null);
+  const iddDirectory = join(fx.stateRoot, 'idd-skill');
+  const preserveDirectory = join(iddDirectory, 'b1-preserved');
+  assert.deepEqual(acl.restricted, [
+    iddDirectory,
+    preserveDirectory,
+    inspected.destination,
+  ]);
+  for (const path of [iddDirectory, preserveDirectory, inspected.destination]) {
+    assert.equal(
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+      'private',
+      path,
+    );
+  }
+  assert.equal(
+    created.parents[created.parents.length - 1]?.path,
+    inspected.destination,
+  );
+});
+
+test('windows: a created leaf that still is not private stays in place and is reported', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const iddDirectory = join(fx.stateRoot, 'idd-skill');
+  const preserveDirectory = join(iddDirectory, 'b1-preserved');
+  mkdirSync(preserveDirectory, { recursive: true });
+  acl.privatePaths.add(iddDirectory);
+  acl.privatePaths.add(preserveDirectory);
+  const destination = destinationFor('b1-preserved', fx.stateRoot);
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    ensurePrivateDirectory: (path) => windowsEnsure(path, acl),
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  // The writer succeeds but the ACL stays permissive.
+  acl.setRestrictEffective(false);
+  const created = createPreserveDestination(
+    deps,
+    destination,
+    inspected.parents,
+  );
+  assert.match(created.hold ?? '', /was created but is not owned and private/);
+  assert.match(created.hold ?? '', /could not be restricted to its owner/);
+  assert.equal(realLstat(destination), 'directory');
+  assert.deepEqual(acl.restricted, [realResolve(destination)]);
+
+  // A leaf whose owner is another user is refused with the reason and no write.
+  const other = windowsAcl();
+  other.privatePaths.add(fx.stateRoot);
+  other.privatePaths.add(iddDirectory);
+  other.privatePaths.add(preserveDirectory);
+  other.setOwner(OTHER_USER_SID);
+  const otherDeps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', other.reader),
+    ensurePrivateDirectory: (path) => windowsEnsure(path, other),
+    now: () => new Date('2026-11-04T04:00:00.000Z'),
+  });
+  const otherInspected = inspectPreserveDestination(
+    otherDeps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  const otherCreated = createPreserveDestination(
+    otherDeps,
+    otherInspected.destination,
+    otherInspected.parents,
+  );
+  assert.match(
+    otherCreated.hold ?? '',
+    /was created but is not owned and private/,
+  );
+  assert.match(otherCreated.hold ?? '', /directory belongs to another user/);
+  assert.deepEqual(other.restricted, []);
+  assert.equal(realLstat(otherInspected.destination), 'directory');
+});
+
+test('windows: an existing permissive state root is refused at inspection with no tool call', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    ensurePrivateDirectory: (path) => windowsEnsure(path, acl),
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'f4-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.match(inspected.hold ?? '', /state root is not owned and private/);
+  assert.deepEqual(acl.restricted, []);
+  assert.deepEqual(acl.owners, []);
+});
+
+test('windows: a populated parent whose ACL turns permissive after inspection is never rewritten', () => {
+  const fx = fresh();
+  const acl = windowsAcl();
+  acl.privatePaths.add(fx.stateRoot);
+  const iddDirectory = join(fx.stateRoot, 'idd-skill');
+  mkdirSync(iddDirectory);
+  writeFileSync(join(iddDirectory, 'other-tool-state'), 'x');
+  acl.privatePaths.add(iddDirectory);
+  const deps = depsFor(fx, {
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, 'win32', acl.reader),
+    // Another process loosens the shared directory after the parents were
+    // checked and before the helper restricts it: the state root is the first
+    // parent restricted.
+    ensurePrivateDirectory: (path) => {
+      if (path === fx.stateRoot) acl.privatePaths.delete(iddDirectory);
+      windowsEnsure(path, acl);
+    },
+  });
+  const inspected = inspectPreserveDestination(
+    deps,
+    'b1-preserved',
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.equal(inspected.hold, null);
+  const created = createPreserveDestination(
+    deps,
+    inspected.destination,
+    inspected.parents,
+  );
+  assert.match(created.hold ?? '', /could not prepare .*idd-skill/);
+  assert.deepEqual(acl.restricted, []);
+  assert.equal(acl.privatePaths.has(iddDirectory), false);
+});
+
+test('windows: the shared read paths cannot reach the ACL writer', () => {
+  // The GitHub API read cache, the discover hint cache, and gh-exec read an
+  // ACL through windows-acl.mts and must never write one (issue #5318). They
+  // may not import the preserve helper or any writer symbol.
+  for (const name of [
+    'github-api-read-cache',
+    'discover-hint-cache',
+    'gh-exec',
+  ]) {
+    const source = readFileSync(
+      new URL(`../src/scripts/${name}.mts`, import.meta.url),
+      'utf8',
+    );
+    for (const forbidden of [
+      'preserve-destination',
+      'ensurePrivateStateDirectory',
+      'restrictWindowsDirectory',
+      'defaultWindowsDirectoryTools',
+      'WindowsDirectoryTools',
+      'readWindowsOwner',
+    ]) {
+      assert.equal(source.includes(forbidden), false, `${name}: ${forbidden}`);
+    }
+  }
+});
