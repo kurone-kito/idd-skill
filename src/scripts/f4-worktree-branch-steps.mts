@@ -438,6 +438,126 @@ export function classifyClaimAssert(
   return { ok: false, code: 'claim-lost' };
 }
 
+/**
+ * The claim check after an applied step 5. The worktree path is already
+ * gone, so `resume-claim-routing --assert --worktree <removed>` can return
+ * `owner_evidence_required` while the issue markers still match: a prunable
+ * record for that path makes the occupancy probe unreadable, and the path
+ * has no worktree identity. That result is kept only when the assert exited
+ * 1 with `action: stop`, the same contract as every other stop verdict,
+ * and `occupancy_paths_match` is exactly null. That field is null unless
+ * the probe is occupied, so a boolean here is an inconsistent envelope. The
+ * later owner proofs (`claim_lock_matches`, `generated_tokens_match`,
+ * `agent_and_branch_match`) must also be exactly null, because the helper
+ * stops evaluating after the first failed proof.
+ * An `unreadable` probe must list only the removed worktree path, and any
+ * other listed path holds; an `absent` probe must list no paths. A zero exit,
+ * any other action, a mismatched claim, an unreadable assert, or a live
+ * occupied worktree is not kept. Checks before step 5 keep
+ * {@link classifyClaimAssert}. Observed 2026-11-21 on host win32 during
+ * cleanup of issue #5290 (PR #5296), recorded in issue #5299.
+ */
+export function classifyPostRemovalClaimAssert(
+  raw: SpawnedResult,
+  claimId: string,
+  agentId: string,
+  worktree: string,
+): { ok: true; branch: string } | { ok: false; code: HoldCode } {
+  const ordinary = classifyClaimAssert(raw, claimId, agentId);
+  if (ordinary.ok) return ordinary;
+  const kept = readPostRemovalKeep(raw, claimId, agentId, worktree);
+  return kept ?? ordinary;
+}
+
+function localPathsAgree(
+  probe: unknown,
+  paths: unknown,
+  worktree: string,
+): boolean {
+  if (
+    !Array.isArray(paths) ||
+    paths.some((entry) => typeof entry !== 'string')
+  ) {
+    return false;
+  }
+  if (probe === 'absent') return paths.length === 0;
+  if (probe !== 'unreadable') return false;
+  // Only the removed worktree's own record may stay unreadable. Any other
+  // listed path is an unrelated, ambiguous registration, so hold on it.
+  const [only] = paths;
+  return (
+    paths.length === 1 &&
+    typeof only === 'string' &&
+    canonicalPathKey(only, () => null) ===
+      canonicalPathKey(worktree, () => null)
+  );
+}
+
+function readPostRemovalKeep(
+  raw: SpawnedResult,
+  claimId: string,
+  agentId: string,
+  worktree: string,
+): { ok: true; branch: string } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.stdout);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const routing = parsed as {
+    state?: unknown;
+    action?: unknown;
+    reason?: unknown;
+    claim_id_checked?: unknown;
+    active_claim?: { agent_id?: unknown; claim_id?: unknown; branch?: unknown };
+    evidence?: {
+      owner_evidence?: {
+        worktree_identity?: unknown;
+        claim_lock_matches?: unknown;
+        generated_tokens_match?: unknown;
+        agent_and_branch_match?: unknown;
+        occupancy_probe?: unknown;
+        occupancy_paths_match?: unknown;
+      } | null;
+      local_worktree?: unknown;
+    };
+  };
+  const active = routing.active_claim;
+  const owner = routing.evidence?.owner_evidence;
+  const local = routing.evidence?.local_worktree;
+  const localRecord =
+    local !== null && typeof local === 'object'
+      ? (local as { status?: unknown; paths?: unknown })
+      : null;
+  if (
+    raw.exitCode !== 1 ||
+    owner === undefined ||
+    owner === null ||
+    routing.state !== 'owner_evidence_required' ||
+    routing.action !== 'stop' ||
+    routing.reason !== 'claim-id-match-without-independent-owner-evidence' ||
+    routing.claim_id_checked !== claimId ||
+    active?.claim_id !== claimId ||
+    active?.agent_id !== agentId ||
+    typeof active?.branch !== 'string' ||
+    owner.worktree_identity !== false ||
+    (owner.occupancy_probe !== 'unreadable' &&
+      owner.occupancy_probe !== 'absent') ||
+    owner.occupancy_paths_match !== null ||
+    owner.claim_lock_matches !== null ||
+    owner.generated_tokens_match !== null ||
+    owner.agent_and_branch_match !== null ||
+    localRecord === null ||
+    localRecord.status !== owner.occupancy_probe ||
+    !localPathsAgree(owner.occupancy_probe, localRecord.paths, worktree)
+  ) {
+    return null;
+  }
+  return { ok: true, branch: active.branch };
+}
+
 export interface ReleasedClaimLineage {
   readonly kind: 'released' | 'stale';
   readonly branch: string;
@@ -1430,12 +1550,21 @@ function runPlan(
     );
   }
 
-  // 4. Claim check before step 6.
-  const claimPost = classifyClaimAssert(
-    deps.assertClaim(worktree),
-    input.claimId,
-    input.agentId,
-  );
+  // 4. Claim check before step 6. Apply has already removed the worktree,
+  // so an expected post-removal occupancy result is kept. A dry run has
+  // not removed it, and still requires a normal assert.
+  const claimPost = input.apply
+    ? classifyPostRemovalClaimAssert(
+        deps.assertClaim(worktree),
+        input.claimId,
+        input.agentId,
+        worktree,
+      )
+    : classifyClaimAssert(
+        deps.assertClaim(worktree),
+        input.claimId,
+        input.agentId,
+      );
   if (!claimPost.ok) {
     return holdAt(5, 'claim-check', 'before-step-6', {
       code: claimPost.code,
