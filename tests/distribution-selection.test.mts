@@ -2608,17 +2608,23 @@ test('readNoFollowBytes reads through the Windows helper when the POSIX flags ar
 });
 
 test('readNoFollowBytes keeps the refusal when no Windows helper applies (issue #5315)', () => {
-  const posixless = { constants: {} } as unknown as FsOps;
-  assert.throws(
-    () => readNoFollowBytes('/tmp/distribution-target.json', posixless),
-    /does not support the no-follow reads required for distribution selection/,
-  );
+  // `windowsNoFollow: false` forces the refusal on every host, so the case does
+  // not depend on whether a real helper exists on native Windows.
   const disabled = {
     constants: {},
     windowsNoFollow: false,
   } as unknown as FsOps;
   assert.throws(
     () => readNoFollowBytes('/tmp/distribution-target.json', disabled),
+    /does not support the no-follow reads required for distribution selection/,
+  );
+  // A non-win32 platform override never reaches the helper either.
+  const linux = {
+    constants: {},
+    windowsNoFollow: { platform: 'linux' },
+  } as unknown as FsOps;
+  assert.throws(
+    () => readNoFollowBytes('/tmp/distribution-target.json', linux),
     /does not support the no-follow reads required for distribution selection/,
   );
 });
