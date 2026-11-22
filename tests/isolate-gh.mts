@@ -743,7 +743,7 @@ const POWERSHELL_BAREWORD_CONTINUATION = /[\p{L}\p{N}_.\-$\\/~?*%!@^`]/u;
  * argument, or a pipe into `iex` or a shell.
  */
 const POWERSHELL_INVOKED_BEFORE =
-  /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
+  /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|start-process(?:\s+-[a-z]+(?:\s+[^\s@-][^\s@]*)?)*\s+-file(?:path)?:?|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*$/iu;
 const POWERSHELL_INVOKED_AFTER =
   /^\s*\)*\s*\|\s*(?:&|iex|invoke-expression|powershell|pwsh|cmd)(?![\w-])/iu;
 
@@ -772,7 +772,7 @@ function variableName(match: RegExpMatchArray): string {
 function powerShellPayloadVariables(source: string): Set<string> {
   const names = new Set<string>();
   const consumer =
-    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))/giu;
+    /(?:^|[\s;(|{=,])(?:&|\.|\[scriptblock\]::create|(?:iex|invoke-expression)(?:\s+-[a-z]+(?:\s+[a-z0-9.$]+)?)*|start-process(?:\s+-[a-z]+(?:\s+[^\s@-][^\s@]*)?)*\s+-file(?:path)?:?|-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?:?)\s*\(*\s*\$(?:\{(?:[a-z]+:)?([a-z_]\w*)\}|(?:[a-z]+:)?([a-z_]\w*))/giu;
   const text = withoutLineContinuations(source);
   for (const match of text.matchAll(consumer)) {
     names.add(variableName(match));
@@ -1028,8 +1028,13 @@ function stripPowerShellCommentsAndHereStrings(source: string): {
   let payloadVariables = new Set<string>();
   let blanked = blankPowerShellHereStrings(source, payloadVariables);
   for (;;) {
+    // Expandable bodies are blanked for tokenization, but their `$()` run during
+    // expansion, so the subexpressions are part of the executable text.
+    const subexpressions = blanked.expandableHereStrings
+      .flatMap(expandableHereStringSubstitutions)
+      .join('\n');
     const discovered = powerShellPayloadVariables(
-      stripPowerShellComments(blanked.source),
+      `${stripPowerShellComments(blanked.source)}\n${subexpressions}`,
     );
     if ([...discovered].every((name) => payloadVariables.has(name))) break;
     payloadVariables = new Set([...payloadVariables, ...discovered]);

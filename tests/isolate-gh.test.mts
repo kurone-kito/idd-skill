@@ -2063,6 +2063,29 @@ test('PowerShell -File here-string regions stay out of command-position scans', 
       expectBlocked: false,
     },
     {
+      name: 'subexpression of an expandable here-string runs a payload',
+      body: [
+        "$code = @'",
+        'C:/tools/gh.exe api repos/o/r',
+        "'@",
+        'Write-Output @"',
+        '$(iex $code)',
+        '"@',
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
+      name: 'Start-Process runs a here-string used as its FilePath',
+      body: [
+        "Start-Process -FilePath @'",
+        'C:/tools/gh.exe',
+        "'@ -ArgumentList '--version'",
+        '',
+      ].join('\n'),
+      expectBlocked: true,
+    },
+    {
       name: 'payload run from a payload held in a variable is scanned',
       body: [
         "$code = @'",
