@@ -448,7 +448,7 @@
         "firstFixPushSecondaryWait": {
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$",
-          "description": "Optional whole-minute ISO 8601 duration; standard profile only. When set, the first E12 push of a head is held, before the claim revalidation gate and the push, until each secondary advisory bot (the same set secondaryQuietWindow covers, minus both identities of the primary bot) has submitted a review on the PR head before that push, or the duration elapses, whichever comes first. An empty set holds for the full duration. Inline findings from those reviews that pass the E12 cross-round rules join that push. Omitted means unchanged E12, with no wait. There is no explicit off value."
+          "description": "Optional whole-minute ISO 8601 duration; standard profile only. When set, the first E12 push of a head is held, before the claim revalidation gate and the push, until each secondary advisory bot (the same set secondaryQuietWindow covers, minus both identities of the primary bot, or the distributed review bots when no advisoryBotLogins resolves) has submitted a review on the PR head before that push, or the duration elapses, whichever comes first. The duration starts when the push is otherwise ready. An empty set holds for the full duration. Inline findings from those reviews that pass the E12 cross-round rules join that push, and reaching the 10-minute accumulation bound ends the hold at once. Omitted means unchanged E12, with no wait. There is no explicit off value."
         },
         "providerOutage": {
           "type": "object",
