@@ -1450,6 +1450,74 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   ]);
 });
 
+test('apply passes the gate and reaches the same mutation flow when the Windows helper stands in for the POSIX flags (issue #5316)', () => {
+  const shim = windowsRecoveryCopyShim(() => ({ ok: true }));
+  try {
+    const callOrder: string[] = [];
+    const deps = fakeDeps({
+      noFollowFlags: {},
+      windowsNoFollow: shim.deps,
+      acquireCloneLock: () => {
+        callOrder.push('acquire');
+        return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      },
+      releaseCloneLock: () => {
+        callOrder.push('release');
+      },
+      confirmBlock: (() => {
+        let call = 0;
+        return () => {
+          call += 1;
+          callOrder.push(call === 1 ? 'confirm-step1' : 'confirm-recheck');
+          return {
+            ok: true,
+            routing: {
+              state: 'local_worktree_occupied',
+              reason: 'stale-claim-local-worktree-occupied',
+              active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+              evidence: {
+                local_worktree: {
+                  status: 'occupied',
+                  paths: ['/repo/linked'],
+                  reason: null,
+                },
+              },
+            },
+            error: null,
+          };
+        };
+      })(),
+      runGit: (argv) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          callOrder.push('remove');
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv);
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+      deps,
+    );
+    assert.doesNotMatch(verdict.result, /does not support the no-follow/);
+    assert.equal(verdict.mutated, true);
+    assert.deepEqual(callOrder, [
+      'confirm-step1',
+      'acquire',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'confirm-recheck',
+      'remove',
+      'release',
+    ]);
+  } finally {
+    shim.cleanup();
+  }
+});
+
 test('linked cleanup stops when an ignored path is reclassified by stash', () => {
   let ignoredStatusCalls = 0;
   let stashListCalls = 0;
