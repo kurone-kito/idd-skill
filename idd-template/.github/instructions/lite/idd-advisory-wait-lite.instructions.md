@@ -27,8 +27,8 @@ own table.
 
 A lite session excludes A0-A4.5/E4-E8, and F3-F5 unless F2.5 resolves
 `fully_autonomous_merge`. A resolved `fully_autonomous_merge` continues at the
-standard handoff. It uses only E1 Step 2, E14, lite F1-F2 read-only helpers,
-and F2.5 handoff-stop. Excluded call sites: stop and ask a stronger
+standard handoff. Otherwise, it uses only E1 Step 2, E14, lite F1-F2 read-only
+helpers, and F2.5 handoff-stop. Excluded call sites: stop and ask a stronger
 session/human.
 
 **Do not build a substitute wait for a non-primary bot** (full-size Scope
