@@ -178,7 +178,19 @@ export interface LocalGitCommandResult {
   stderr: string;
 }
 
-function runLocalGitCommand(
+/** Stdout limit, in bytes, of one local git call: 64 MiB (67,108,864 bytes),
+ * the value `trial-merge-audit.mts` uses for its git reads. Node's default of
+ * 1 MiB makes `execFileSync` throw `ENOBUFS` on a read that lists every
+ * ignored file of a scope (`git status --porcelain=v1 -z --ignored
+ * --untracked-files=all`), and recovery of a worktree with many ignored files
+ * then refuses. In the measured shape a path costs about 21 bytes of status
+ * output (80,000 paths print 1,668,904 bytes), so 64 MiB holds about 3.2
+ * million ignored paths; real paths are longer, so the covered count is
+ * smaller for them. This is a resource limit, not a safety check: a read
+ * above it still fails and `runLocalGitCommand` still returns `ok: false`. */
+const LOCAL_GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
+export function runLocalGitCommand(
   argv: string[],
   cwd: string,
 ): LocalGitCommandResult {
@@ -188,6 +200,7 @@ function runLocalGitCommand(
       env: sanitizedGitEnvironment(),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: LOCAL_GIT_MAX_BUFFER_BYTES,
     });
     return { ok: true, status: 0, stdout, stderr: '' };
   } catch (error) {
