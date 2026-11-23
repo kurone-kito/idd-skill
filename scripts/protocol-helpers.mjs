@@ -10629,6 +10629,18 @@ function isWellFormedDeferFollowUpItem(entry) {
  */
 export function computePreMergeReadinessBlockers(report) {
   const blockers = [];
+  // #5342: a repository file above the raw-read limit blocks the merge gate. F3
+  // re-runs this reducer from the collected report, so the blocker must come
+  // from the report too; an omitted field is a report from before this gate.
+  if (Array.isArray(report.repositoryFileBlockers)) {
+    for (const entry of report.repositoryFileBlockers) {
+      const blocker = preMergeAsRecord(entry);
+      blockers.push({
+        gate: 'repository-file-too-large',
+        detail: String(blocker.detail ?? ''),
+      });
+    }
+  }
   // #4676: F3 re-runs this shared reducer from the collected report. Keep
   // the claim-bound scope-overrun evidence in that path as well, so the
   // merge executor cannot lose a blocker that F2 reported. An omitted field

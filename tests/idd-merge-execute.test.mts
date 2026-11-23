@@ -2871,3 +2871,26 @@ test('#4717: a claim-id none sentinel with an agent id is claim-bound, so the ga
     'the gate must not fail open on --claim-id none --agent-id <id>',
   );
 });
+
+test('the merge gate fails for a repository file blocker, and a clean report carries none (#5342)', () => {
+  const blockers = computePreMergeReadinessBlockers({
+    ready: false,
+    blockers: [],
+    repositoryFileBlockers: [
+      {
+        path: 'src/big.bin',
+        gate: 'repository-file-too-large',
+        detail:
+          'repository file "src/big.bin" is above the 104,857,600-byte limit',
+      },
+    ],
+  });
+  const gated = blockers.filter((b) => b.gate === 'repository-file-too-large');
+  assert.equal(gated.length, 1);
+  assert.match(gated[0]?.detail ?? '', /src\/big\.bin/);
+  const clean = computePreMergeReadinessBlockers({ ready: true, blockers: [] });
+  assert.equal(
+    clean.some((b) => b.gate === 'repository-file-too-large'),
+    false,
+  );
+});
