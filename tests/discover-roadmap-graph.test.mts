@@ -85,7 +85,10 @@ function assertKeywordReferenceScaling({
       negationChars: 0,
       closingChars: 0,
     };
-    const references = extractKeywordReferences(inputForSize(size), { work });
+    const input = inputForSize(size);
+    const references = extractKeywordReferences(input, { work });
+    // The sink must not change what is returned (#5352).
+    assert.deepEqual(references, extractKeywordReferences(input));
     assert.equal(references.length, expectedReferenceCount(size));
     return work;
   };
