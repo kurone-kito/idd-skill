@@ -1119,6 +1119,8 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
 function collectScopeOverrunWithBaseEntries(
   baseEntries: Readonly<Record<string, unknown>>,
   changedFiles: readonly string[],
+  // Paths whose raw read reports too-large, as a file above the limit (#5342).
+  tooLarge: readonly string[] = [],
 ) {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
   try {
@@ -1146,6 +1148,9 @@ function collectScopeOverrunWithBaseEntries(
         return baseEntries[path];
       },
       getRepositoryFileBytesAtRef: (owner, repo, path, ref) => {
+        if (tooLarge.includes(path)) {
+          return { outcome: 'too-large' };
+        }
         if (!Object.hasOwn(baseEntries, path)) {
           return rawRouteOutcomeFromContents(
             base.getRepositoryContentAtRef(owner, repo, path, ref),
@@ -1232,6 +1237,55 @@ test('collectPreMergeReadiness still throws when the base sync manifest read is 
         changedFiles,
       ),
     /malformed repository content for "audit\/sync-manifest\.json"/u,
+  );
+});
+
+test('an oversized changed path is a repository-file-too-large blocker through the collector, and the result is not ready (#5342)', () => {
+  const { report } = collectScopeOverrunWithBaseEntries(
+    {},
+    ['src/listed.mts', 'src/big.mts'],
+    ['src/big.mts'],
+  );
+  assert.equal(report.ready, false);
+  assert.deepEqual(
+    report.repositoryFileBlockers?.map((blocker) => [
+      blocker.path,
+      blocker.gate,
+    ]),
+    [['src/big.mts', 'repository-file-too-large']],
+  );
+});
+
+test('an oversized sync manifest is a repository-file-too-large blocker through the collector, and the result is not ready (#5342)', () => {
+  const { report } = collectScopeOverrunWithBaseEntries(
+    {},
+    ['src/listed.mts'],
+    ['audit/sync-manifest.json'],
+  );
+  assert.equal(report.ready, false);
+  assert.deepEqual(
+    report.repositoryFileBlockers?.map((blocker) => [
+      blocker.path,
+      blocker.gate,
+    ]),
+    [['audit/sync-manifest.json', 'repository-file-too-large']],
+  );
+});
+
+test('a too-large file read twice is one blocker, not one per read (#5342)', () => {
+  // The manifest is a changed path and also the sync target, so the audit
+  // reads it twice; the sink records the path once.
+  const { report } = collectScopeOverrunWithBaseEntries(
+    {},
+    ['src/listed.mts', 'audit/sync-manifest.json'],
+    ['audit/sync-manifest.json'],
+  );
+  assert.deepEqual(
+    report.repositoryFileBlockers?.map((blocker) => [
+      blocker.path,
+      blocker.gate,
+    ]),
+    [['audit/sync-manifest.json', 'repository-file-too-large']],
   );
 });
 
