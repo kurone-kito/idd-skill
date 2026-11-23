@@ -7774,7 +7774,9 @@ that runs it is
      record of any other owner is skipped; a live record of the current user
      inside the worktree is a match, one with an unreadable owner inside it
      fails the condition, and another account's is counted and not refused;
-     an error record, a missing or throwing reader, and a record that
+     an error record, a missing or throwing reader, a result with no
+     records, a record that is not a process record (an unknown kind, a pid
+     that is not positive, an owner that is not a SID), and a record that
      contradicts the shape of its kind fail the condition. Paths are
      compared as Windows paths with letter case ignored, by the lexical form
      first and then by the resolved form of a directory and of each root. A
