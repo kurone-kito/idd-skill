@@ -9172,6 +9172,21 @@ Compare the live base and default for D3.5 with
   a fresh collector report, at the first gate and again just before the
   merge, so F2 and F3 apply the same rule with no verdict field of their
   own.
+- `repositoryFileBlockers` (issue `#5342`) lists each repository file that the
+  readiness audit could not read because it is above the raw-read limit of
+  104,857,600 bytes (100 MiB). Each entry has the shape `{ path, gate, detail }`:
+  `gate` is `repository-file-too-large`, and `detail` names the file path. The
+  field is emitted only when the list is not empty. Each entry also adds a
+  `{ gate, detail }` item to `blockers[]`, so the result is not ready. The
+  CODEOWNERS file is read at the base branch. It tries `.github/CODEOWNERS`,
+  `CODEOWNERS`, and `docs/CODEOWNERS` in that order and stops at the first file
+  it can read, so it takes up to six requests per collection. In a claim-bound
+  readiness check, a changed file or the sync manifest
+  `audit/sync-manifest.json` above the limit is listed the same way. A file
+  read takes two requests: the directory listing, which gives the file size,
+  and then the raw request, which is sent only when the listed size is at most
+  the limit. A file above the limit takes one request, and a file missing at
+  the base takes only the listing request.
 - `deferFollowUps` (#3624) is the deferred-follow-up merge-gate evidence:
   `{ checked, unverifiedReason, items: [{ number, heldByAuthoringLabel,
   origin, reconciled }] }`. A follow-up is an open issue carrying the
