@@ -7588,6 +7588,34 @@ test('getRepositoryFileBytesAtRef returns a 5 MiB and a 50 MiB file in full, pas
   }
 });
 
+test('getRepositoryFileBytesAtRef reports a child of a base file as not-found, with no raw request (#5342)', () => {
+  // A file that the base has at the parent's path has no children, so a
+  // converted file-to-directory change reads its new nested path as absent.
+  let rawRequests = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        JSON.stringify({
+          type: 'file',
+          name: 'docs',
+          size: 3,
+          sha: 'a'.repeat(40),
+        }),
+      ghBytesUnbounded: () => {
+        rawRequests += 1;
+        return Buffer.from('x');
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'docs/new.md', 'main'),
+    { outcome: 'not-found' },
+  );
+  assert.equal(rawRequests, 0);
+});
+
 test('getRepositoryFileBytesAtRef lists the parent and reads the path, encoding each segment (#5341)', () => {
   const bytes = Buffer.from('x');
   const calls: string[] = [];

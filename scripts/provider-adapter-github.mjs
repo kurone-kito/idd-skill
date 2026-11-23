@@ -3427,6 +3427,15 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       }
       const listing = JSON.parse(listingText);
       if (!Array.isArray(listing)) {
+        // A parent that is a regular file has no children, so a path beneath
+        // it is absent. This is the file-to-directory change case (#5342).
+        if (
+          typeof listing === 'object' &&
+          listing !== null &&
+          listing.type === 'file'
+        ) {
+          return { outcome: 'not-found' };
+        }
         throw new Error(`directory listing for ${path} is not an array`);
       }
       const match = listing.find(
