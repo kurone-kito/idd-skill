@@ -396,6 +396,7 @@ jobs:
               tests/verify-install-deps.test.mts
               tests/windows-acl.test.mts
               tests/windows-nofollow.test.mts
+              tests/windows-process-cwd.test.mts
               tests/worktree-remnant-evidence.test.mts
           - shard: distribution
             check-groups: build:check audit
