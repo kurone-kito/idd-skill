@@ -298,6 +298,20 @@ process.stdin.on('end', () => {
   }
 });
 `;
+/**
+ * Node script run by the win32 backup watchdog (see {@link spawnWatchdogWindows}).
+ * Its two argv entries are the kill target's pid and a delay in milliseconds.
+ * After the delay it runs `taskkill /PID <pid> /T /F` with `windowsHide: true`
+ * and without `detached`. The script is one line with no double quotes, so it
+ * is passed as a single `node -e` argument on Windows.
+ */
+const WIN32_WATCHDOG_SCRIPT =
+  "const { spawn } = require('node:child_process'); " +
+  'setTimeout(() => { ' +
+  "const killer = spawn('taskkill', ['/PID', process.argv[1], '/T', '/F'], " +
+  "{ stdio: 'ignore', windowsHide: true }); " +
+  "killer.on('error', () => {}); " +
+  '}, Number(process.argv[2]));';
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('idd-critique-telemetry-hook', runCli);
@@ -984,20 +998,6 @@ function spawnWatchdogPosix(spawnFn, pid, timeoutMs) {
     return null;
   }
 }
-/**
- * Node script run by the win32 backup watchdog (see {@link spawnWatchdogWindows}).
- * Its two argv entries are the kill target's pid and a delay in milliseconds.
- * After the delay it runs `taskkill /PID <pid> /T /F` with `windowsHide: true`
- * and without `detached`. The script is one line with no double quotes, so it
- * is passed as a single `node -e` argument on Windows.
- */
-const WIN32_WATCHDOG_SCRIPT =
-  "const { spawn } = require('node:child_process'); " +
-  'setTimeout(() => { ' +
-  "const killer = spawn('taskkill', ['/PID', process.argv[1], '/T', '/F'], " +
-  "{ stdio: 'ignore', windowsHide: true }); " +
-  "killer.on('error', () => {}); " +
-  '}, Number(process.argv[2]));';
 /**
  * Environment for the win32 watchdog: the caller's environment minus any
  * `NODE_OPTIONS`, matched case-insensitively as Windows environment names are.
