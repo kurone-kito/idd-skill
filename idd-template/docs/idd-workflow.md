@@ -270,7 +270,7 @@ When a lightweight-tier model runs any part of this loop:
   standard unknown-policy hold. On the lite profile, a schema-valid tier object
   is resolved only when `git fetch origin {development-branch}` succeeds (a
   failed fetch never falls back to a local ref), `config.json` matches
-  `origin/{development-branch}` (an `iddVersion`-only change aside), the
+  `origin/{development-branch}` (a semver `iddVersion`-only change aside), the
   operator named one of those three tiers, and the resolver exits 0 with stdout
   exactly one of the three enums. Any other
   result stays unrecognized. A string does not read a tier name. A resolved
@@ -429,9 +429,9 @@ every tier and does not read a tier name. An object has `frontier`,
 `middle-tier`, and `lightweight`, each a known enum. A schema-valid object is
 resolved only when `git fetch origin {development-branch}` succeeds (a failed
 fetch never falls back to a local ref), `config.json` matches
-`origin/{development-branch}` (an `iddVersion`-only change aside), the operator
-named one of those three tiers, and the resolver exits 0 with stdout exactly one
-of the three enums. Any other
+`origin/{development-branch}` (a semver `iddVersion`-only change aside), the
+operator named one of those three tiers, and the resolver exits 0 with stdout
+exactly one of the three enums. Any other
 result stays unrecognized. A resolved `fully_autonomous_merge` continues at the
 standard handoff, which then runs F3 after the existing gates. The lite profile
 has no F3 file. The lite file does not run `gh pr merge`; a resolved
