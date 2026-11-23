@@ -1250,10 +1250,14 @@ against an unrelated branch, and none has an observed incident of its own
       followed. Any tool that runs a plain `git status` in the worktree
       rewrites its index and restarts the window (replayed on git 2.53.0).
    5. No process of the current user has its working directory inside the
-      worktree, not counting its git-admin directory (Linux `/proc` only;
-      another platform fails). A process of another user is not counted. A
-      process that denies the read is listed as not inspected and does not
-      refuse.
+      worktree, not counting its git-admin directory. Linux reads `/proc`.
+      Windows reads one batch of process records, and a 32-bit process of any
+      owner fails the condition because its directory is not read (the
+      operator hearing of 2026-11-23, issue `#5347`). Another platform
+      fails. A process of another user is not counted. A process that denies
+      the read is listed as not inspected and does not refuse; on Windows
+      that covers a denied record of the current user, of LocalSystem, or
+      with an unreadable owner.
    6. The confirmation issue and decision match a trusted record: open, with
       the confirmation label and without the authoring label, for
       `class=worktreeRemnant`, this issue as `source`, the recovered claim,
@@ -1274,7 +1278,8 @@ against an unrelated branch, and none has an observed incident of its own
    The evidence does not prove that the other session is gone: a harness can
    keep no working directory between commands, a session can be paused past
    the stale age or can only poll GitHub, and a same-user process can deny
-   reads of its `/proc` entry. The operator accepted the cost at the hearing
+   reads of its working directory (its `/proc` entry on Linux). The operator
+   accepted the cost at the hearing
    of 2026-11-01: if the evidence is wrong, a live session's worktree is
    removed after its changes are preserved. The run leaves three risks open:
    the window between the recheck and step 3, the PR `#3550` race in which a

@@ -7762,10 +7762,26 @@ that runs it is
      exited process (`ENOENT`) is skipped, a process of another user is not
      counted, a process whose entry denies the read (`EACCES`) and whose owner
      is the current user or root is listed in the report as not inspected and
-     does not refuse, and any other read error fails the condition. On a
-     platform where the check cannot run, or where the current user is
-     unknown, the condition fails. Finding no process is only the absence of a
-     known use.
+     does not refuse, and any other read error fails the condition. On Windows
+     it classifies every record of the batch reader in
+     `windows-process-cwd.mts` (one System32 PowerShell call), and no record
+     ends the scan early. It compares the lexical and the resolved path with
+     letter case ignored (the operator hearing of 2026-11-23, issue `#5347`):
+     an exited process is skipped; a 32-bit process of any owner fails the
+     condition with the reason `wow64`, because its directory is not read; a
+     denied record whose owner is the current user, LocalSystem (`S-1-5-18`,
+     which stands for root), or unreadable is listed as not inspected and
+     does not refuse, and a denied record of any other owner is skipped; a
+     live record of the current user inside the worktree is a match, one with
+     an unreadable owner inside it fails the condition, and another account's
+     is counted and not refused; an error record, a missing or throwing
+     reader, a record outside the reader's documented shape, a root that is
+     not a full Windows path or whose resolution fails, and a directory of the
+     current user (or with an unreadable owner) that is not a full path or
+     whose resolution fails all fail the condition. A match wins the status,
+     and the detail also names the first error. On a platform where the check
+     cannot run, or where the current user is unknown, the condition fails.
+     Finding no process is only the absence of a known use.
   6. The confirmation issue and decision match a trusted record read through
      `idd-auto-decision-records`' reader: open, carrying the configured
      confirmation label, no longer carrying the authoring label, with
