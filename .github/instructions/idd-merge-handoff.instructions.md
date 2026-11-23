@@ -28,7 +28,19 @@ gate, the routing below still decides, and `ready: false` holds.
      stop.
 2. Resolve the recorded policy to one enum, `{f25-policy}`; steps 3-6
    use it. First run `git fetch origin {development-branch}`, then
-   `git diff --quiet origin/{development-branch} -- .github/idd/config.json`.
+   `git diff -U0 --no-ext-diff --no-textconv --no-color
+   origin/{development-branch} -- .github/idd/config.json`
+   with no pipe, so that no diff driver, textconv filter, or color
+   setting alters the output. The check passes only when the diff exits 0
+   and prints either nothing or an `iddVersion`-only change: after the
+   file header (`diff --git`, `index`, `---`, `+++`), exactly one `@@`
+   line, one `-` line, and one `+` line, and nothing else, where each of
+   the `-` and `+` lines matches the PCRE-style pattern
+   `^[-+]\s*"iddVersion": "\d+\.\d+\.\d+",?$` (that is, each of them
+   matches `^\s*"iddVersion": "\d+\.\d+\.\d+",?$` once its leading `-` or
+   `+` is removed). An `iddVersion` change grants no merge authority, so
+   it cannot widen who may merge; any other diff output is an unknown
+   policy (step 3).
    With helper runtime, run the profile-selected form of
    `node scripts/idd-effective-config.mjs --resolve-merge-policy` and use
    its stdout; pass `--model-tier <tier>` only when the operator's own
@@ -38,9 +50,9 @@ gate, the routing below still decides, and `ready: false` holds.
    enum and reads no tier. An object needs exactly
    `frontier`, `middle-tier`, and `lightweight`, each a known enum, and
    the `IDD_MODEL_TIER` environment variable (never inferred) names the
-   property to use. A failed fetch, a non-zero exit from the diff or the
-   helper, a missing or other tier name, or any other value is an
-   unknown policy (step 3).
+   property to use. A failed fetch, a failed diff or one that fails the
+   check above, a non-zero exit from the helper, a missing or other tier
+   name, or any other value is an unknown policy (step 3).
 3. If the resolved value is not one of `fully_autonomous_merge`,
    `human_merge`, or `separate_merge_agent`, treat it as an unknown merge
    policy: stop, post a hold comment naming the cause, and request
