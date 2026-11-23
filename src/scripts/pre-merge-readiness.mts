@@ -597,7 +597,10 @@ function recordRepositoryFileBlocker(
   sink: RepositoryFileBlocker[] | undefined,
   path: string,
 ): void {
-  sink?.push({
+  // The same path can be read more than once (a changed CODEOWNERS file, or a
+  // changed sync manifest), so each path is recorded once (#5342).
+  if (sink === undefined || sink.some((entry) => entry.path === path)) return;
+  sink.push({
     path,
     gate: 'repository-file-too-large',
     detail: `repository file ${JSON.stringify(path)} is above the 104,857,600-byte limit, so its base content cannot be read`,
@@ -703,8 +706,8 @@ export function resolveScopeOverrunReadiness(
       continue;
     }
     if (base.outcome === 'too-large') {
+      // Its contents were not audited, so it is a blocker and not a candidate.
       recordRepositoryFileBlocker(input.repositoryFileBlockers, path);
-      candidateFiles.push(path);
       continue;
     }
     // #5149: the same generated-mirror detection claimed-push uses.
