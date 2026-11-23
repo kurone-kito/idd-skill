@@ -7766,18 +7766,22 @@ that runs it is
      it classifies every record of the batch reader in
      `windows-process-cwd.mts` (one System32 PowerShell call), and no record
      ends the scan early. The classification follows issue `#5347` and its
-     operator hearing of 2026-11-23: an exited process is skipped; a 32-bit
-     process of any owner fails the condition with the reason `wow64`,
-     because its directory is not read; a denied record whose owner is the
-     current user, LocalSystem (`S-1-5-18`, which stands for root), or
-     unreadable is listed as not inspected and does not refuse, and a denied
-     record of any other owner is skipped; a live record of the current user
-     inside the worktree is a match, one with an unreadable owner inside it
-     fails the condition, and another account's is counted and not refused;
-     an error record, a missing or throwing reader, a result with no
-     records, a record that is not a process record (an unknown kind, a pid
-     that is not positive, an owner that is not a SID), and a record that
-     contradicts the shape of its kind fail the condition. Paths are
+     operator hearing of 2026-11-23: an exited process is skipped; a live
+     record of a 32-bit process, of any owner, fails the condition with the
+     reason `wow64`, because its directory is not read (a process that cannot
+     be opened is a denied record with no bitness, so the denied rule decides
+     it); a denied record whose owner is the current user, LocalSystem
+     (`S-1-5-18`, which stands for root), or unreadable is listed as not
+     inspected and does not refuse, and a denied record of any other owner is
+     skipped; a live record of the current user inside the worktree is a
+     match, one with an unreadable owner inside it fails the condition, and
+     another account's is counted and not refused; an error record, a
+     missing or throwing reader, a result with no records, a record that is
+     not a process record (an unknown kind, a pid that is not positive, an
+     owner that is not a SID), and a record that contradicts the shape of
+     its kind fail the condition (preventive; no observed incident yet: the
+     reader's parser already rejects an unknown kind, a pid that is not
+     positive, and a contradiction of the kind). Paths are
      compared as Windows paths with letter case ignored, by the lexical form
      first and then by the resolved form of a directory and of each root. A
      root that is not a full drive or UNC path as written, a directory of the
