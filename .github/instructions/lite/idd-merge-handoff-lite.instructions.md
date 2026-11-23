@@ -74,9 +74,8 @@ the same as a commit or push:
    `git fetch origin {development-branch}` (concurrent workers sharing one
    clone: serialize this behind the clone-scoped lock,
    `docs/idd-helper-scripts.md#clone-scoped-lock`, the same as B1's own fetch).
-   If the fetch itself fails, do not fall back to a possibly-stale local
-   `origin/{development-branch}` — an already-existing ref must never substitute
-   for a fresh fetch. Only after a successful fetch, read the config file
+   If the fetch itself fails, never fall back to an already-existing local
+   `origin/{development-branch}`. Only after a successful fetch, read the file
    from there — `git show origin/{development-branch}:.github/idd/config.json` —
    never the local worktree's own possibly-edited copy on this PR's branch, so a
    PR cannot change its own release route (the #2373 trusted-ref reasoning).
@@ -88,11 +87,12 @@ the same as a commit or push:
      or `separate_merge_agent`: that enum. A string reads no tier name.
    - A `mergePolicy` object whose properties are exactly `frontier`,
      `middle-tier`, and `lightweight`, each one of the policy strings
-     above (a tier object): the resolver reads the worktree copy, so
-     only when
-     `git diff --quiet origin/{development-branch} -- .github/idd/config.json`
-     exits with status 0 (else unrecognized), run the profile-selected
-     form of
+     above (a tier object): the resolver reads the worktree copy, so only when
+     `git diff -U0 --no-ext-diff origin/{development-branch} -- .github/idd/config.json`
+     (no pipe) exits 0 and prints nothing or, after its header, exactly
+     one `@@`, one `-`, and one `+` line, those last two matching
+     `^[-+]\s*"iddVersion": "\d+\.\d+\.\d+",?$` (else unrecognized), run
+     the profile-selected form of
      `node scripts/idd-effective-config.mjs --resolve-merge-policy`.
      Pass `--model-tier <tier>` only when the operator's own session
      instructions named the tier; never invent one. Exit 0 with stdout
