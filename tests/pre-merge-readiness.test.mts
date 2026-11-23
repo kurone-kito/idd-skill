@@ -22801,6 +22801,19 @@ test('a base file above the raw-read limit is too-large, for a source path and f
   );
 });
 
+test('a base file of 5 MiB read through the raw route is returned in full (#5342)', () => {
+  const bytes = Buffer.alloc(5 * 1024 * 1024, 0x62);
+  bytes[bytes.length - 1] = 0x0a;
+  const port = {
+    getRepositoryFileBytesAtRef: () => ({ outcome: 'ok', bytes }),
+  } as unknown as ProviderPort;
+  const read = readRepositoryContentAtRef(port, 'o', 'r', 'src/big.mts', 'b');
+  assert.equal(read.outcome, 'ok');
+  if (read.outcome === 'ok') {
+    assert.ok(Buffer.from(read.value, 'base64').equals(bytes));
+  }
+});
+
 test('a base file read through the raw route returns its bytes as base64 (#5342)', () => {
   const portWith = (bytes: Buffer) =>
     ({

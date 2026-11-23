@@ -7541,6 +7541,53 @@ test('getRepositoryFileBytesAtRef returns the exact bytes when the listing sha m
   assert.ok(rawArgs.includes('Accept: application/vnd.github.raw'));
 });
 
+test('getRepositoryFileBytesAtRef maps a zero-byte CODEOWNERS file to ok with empty bytes (#5342)', () => {
+  const bytes = Buffer.alloc(0);
+  let rawRequests = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('CODEOWNERS', bytes)]),
+      ghBytesUnbounded: () => {
+        rawRequests += 1;
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', '.github/CODEOWNERS', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.equal(rawRequests, 1);
+});
+
+test('getRepositoryFileBytesAtRef returns a 5 MiB and a 50 MiB file in full, past the old 1 MB contents limit (#5342)', () => {
+  for (const size of [5 * 1024 * 1024, 50 * 1024 * 1024]) {
+    const bytes = Buffer.alloc(size, 0x61);
+    bytes[size - 1] = 0x0a;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => listingText([listingEntry('big.bin', bytes)]),
+        ghBytesUnbounded: () => bytes,
+      }),
+    );
+    const outcome = port.getRepositoryFileBytesAtRef(
+      'o',
+      'r',
+      'data/big.bin',
+      'main',
+    );
+    assert.equal(outcome.outcome, 'ok');
+    if (outcome.outcome === 'ok') {
+      assert.equal(outcome.bytes.length, size);
+      assert.ok(outcome.bytes.equals(bytes));
+    }
+  }
+});
+
 test('getRepositoryFileBytesAtRef lists the parent and reads the path, encoding each segment (#5341)', () => {
   const bytes = Buffer.from('x');
   const calls: string[] = [];
