@@ -2416,6 +2416,40 @@ test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 re
   }
 });
 
+test('invokeCritiqueTelemetryHook clamps a timeoutMs above the Node timer limit to the largest whole-second delay, for the win32 watchdog too (kurone-kito/idd-skill#5350)', async () => {
+  // Node timers reset a delay above 2,147,483,647 ms to 1 ms. A 30-day request
+  // must therefore reach the win32 watchdog as the clamped delay, not as the
+  // raw value, or the backup would kill the hook almost at once.
+  let watchdogArgs: string[] | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (isWin32NodeWatchdogSpawn(args)) {
+      watchdogArgs = args[1] as string[];
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-quick-exit-clamp',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-quick-exit-clamp',
+      samplePayload(),
+      { timeoutMs: 30 * 24 * 60 * 60 * 1000, spawnFn, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(watchdogArgs, 'expected the win32 watchdog to have been spawned');
+    assert.equal(
+      watchdogArgs[3],
+      '2147483000',
+      'expected a 30-day timeoutMs to reach the watchdog as the largest whole-second Node timer delay',
+    );
+  } finally {
+    restore();
+  }
+});
+
 // --- CLI --invoke: fire-and-forget at the process boundary (#2679) -------
 //
 // The fixture acceptance criterion 3 asks for at the process-boundary

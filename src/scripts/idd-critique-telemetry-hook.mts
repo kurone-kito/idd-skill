@@ -57,6 +57,15 @@ const NO_TELEMETRY_HOOK_REASONS: Record<string, string> = {
 /** Bound on how long a spawned hook command may run before it is killed. */
 const DEFAULT_INVOKE_TIMEOUT_MS = 5_000;
 
+/**
+ * Largest timeout the hook accepts. Node timers reset any delay above
+ * 2,147,483,647 ms to 1 ms (`TimeoutOverflowWarning`), so a longer request
+ * would kill the hook and the win32 watchdog almost at once. This is the
+ * largest whole-second delay below that limit (kurone-kito/idd-skill#5350,
+ * Copilot review).
+ */
+const MAX_INVOKE_TIMEOUT_MS = 2_147_483_000;
+
 /** Bound on how long `--invoke` waits for a piped stdin payload. */
 const STDIN_READ_TIMEOUT_MS = 2_000;
 
@@ -613,7 +622,7 @@ export function invokeCritiqueTelemetryHook(
     typeof requestedTimeoutMs === 'number' &&
     Number.isFinite(requestedTimeoutMs) &&
     requestedTimeoutMs >= 0
-      ? requestedTimeoutMs
+      ? Math.min(requestedTimeoutMs, MAX_INVOKE_TIMEOUT_MS)
       : DEFAULT_INVOKE_TIMEOUT_MS;
   const platform = options?.platform ?? process.platform;
   let delivered = false;
