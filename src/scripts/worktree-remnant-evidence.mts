@@ -747,10 +747,12 @@ function isText(value: unknown): value is string {
 
 /**
  * Why a record breaks the per-kind shape the reader documents, or `null`. The
- * same invariants as `parseWindowsProcessRecords`, which the injected ports do
- * not have to pass through, so a record that contradicts its kind (a denied one
- * with a bitness, an exited one with a directory) is not classified as if it
- * were well formed. `kind` is already known to be one of the four.
+ * invariants of `parseWindowsProcessRecords` that decide how a record is
+ * classified; the injected ports do not have to pass through that parser, so a
+ * record that contradicts its kind (a denied one with a bitness, an exited one
+ * with a directory) is not classified as if it were well formed. The field
+ * types of an `error` record are not checked, because its classification reads
+ * only the reason. `kind` is already known to be one of the four.
  */
 function recordShapeProblem(record: Record<string, unknown>): string | null {
   const { kind, bitness, directory, reason } = record;
