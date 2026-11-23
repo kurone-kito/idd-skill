@@ -937,6 +937,8 @@ test('condition 5 is unmet for a 32-bit process', () => {
 });
 
 test('condition 5 is unmet for a 32-bit process outside every root', () => {
+  // The reader gives a 32-bit record no directory, so "outside" holds by
+  // construction: the record cannot be placed in any root, and still fails.
   const result = inspectProcessDirectories(
     winProc([winRecord(91), wow64Record(92), winRecord(93)]),
     [WIN_ROOT, 'C:\\other\\wt'],
@@ -1397,13 +1399,20 @@ test('condition 5 fails for a live child process of the current user on win32', 
   // which can be an 8.3 short name; `root` is the form `realpath.native` gives.
   const raw = mkdtempSync(join(tmpdir(), 'idd-wre-child-'));
   const root = realpathSync.native(raw);
-  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
-    cwd: root,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  // A junction to the root, made outside it. A process that works in the
+  // junction reports the junction's path, which is lexically outside the root,
+  // so only the resolved path can place it inside.
+  const linkParent = realpathSync.native(
+    mkdtempSync(join(tmpdir(), 'idd-wre-link-')),
+  );
+  const link = join(linkParent, 'alias');
+  symlinkSync(root, link, 'junction');
+  const idle = ['-e', 'setTimeout(() => {}, 60000)'];
+  const options = { stdio: 'ignore', windowsHide: true } as const;
+  const child = spawn(process.execPath, idle, { ...options, cwd: root });
+  const aliased = spawn(process.execPath, idle, { ...options, cwd: link });
   try {
-    await once(child, 'spawn');
+    await Promise.all([once(child, 'spawn'), once(aliased, 'spawn')]);
     const real = createDefaultEvidencePorts({
       repository: { owner: 'o', repo: 'r' },
     }).proc;
@@ -1423,18 +1432,34 @@ test('condition 5 fails for a live child process of the current user on win32', 
         result.matches.some((entry) => entry.pid === child.pid),
         `a match for pid ${child.pid}: ${result.detail}`,
       );
-      assert.match(result.detail, new RegExp(`process ${child.pid} `));
+      assert.match(result.detail, /process \d+ has its working directory at /);
     }
+    // The child in the junction matches only through the resolved path.
+    const viaLink = inspectProcessDirectories(ports, [root]);
+    assert.ok(
+      viaLink.matches.some(
+        (entry) => entry.pid === aliased.pid && entry.cwd !== root,
+      ),
+      `a match for pid ${aliased.pid} through its junction: ${viaLink.detail}`,
+    );
+    // And a root named through the junction resolves to the real directory.
+    const viaRoot = inspectProcessDirectories(ports, [link]);
+    assert.ok(
+      viaRoot.matches.some((entry) => entry.pid === child.pid),
+      `a match for pid ${child.pid} through the junction as a root: ${viaRoot.detail}`,
+    );
     // Not an assertion: what a real host gives for a root that no process
     // uses, so the CI log shows whether a real read can come out clear.
     const clean = inspectProcessDirectories(ports, [join(root, 'unused')]);
     t.diagnostic(`a root no process uses: ${clean.status}: ${clean.detail}`);
   } finally {
-    await endChild(child);
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // A leftover temporary directory must not fail the test.
+    await Promise.all([endChild(child), endChild(aliased)]);
+    for (const path of [linkParent, root]) {
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch {
+        // A leftover temporary directory must not fail the test.
+      }
     }
   }
 });
