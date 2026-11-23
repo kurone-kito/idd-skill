@@ -1421,10 +1421,9 @@ test('condition 5 fails for a live child process of the current user on win32', 
     // A junction to the root, made outside it. A process that works in the
     // junction reports the junction's path, which is lexically outside the
     // root, so only the resolved path can place it inside.
-    const linkParent = realpathSync.native(
-      mkdtempSync(join(tmpdir(), 'idd-wre-link-')),
-    );
-    dirs.push(linkParent);
+    const linkRaw = mkdtempSync(join(tmpdir(), 'idd-wre-link-'));
+    dirs.push(linkRaw);
+    const linkParent = realpathSync.native(linkRaw);
     const link = join(linkParent, 'alias');
     symlinkSync(root, link, 'junction');
     const idle = ['-e', 'setTimeout(() => {}, 60000)'];
@@ -1455,6 +1454,25 @@ test('condition 5 fails for a live child process of the current user on win32', 
       );
       assert.match(result.detail, /process \d+ has its working directory at /);
     }
+    // One evaluation in which the direct child is the only match, so its
+    // detail must name it: a missed match cannot pass as an error.
+    const direct: ProcPorts = {
+      ...ports,
+      readWindowsProcesses: () => ({
+        ...read,
+        records: read.records.filter((entry) => entry.pid !== aliased.pid),
+      }),
+    };
+    const only = inspectProcessDirectories(direct, [root]);
+    assert.equal(only.status, 'match', only.detail);
+    assert.deepEqual(
+      only.matches.map((entry) => entry.pid),
+      [child.pid],
+    );
+    assert.match(
+      only.detail,
+      new RegExp(`^process ${child.pid} has its working directory at `),
+    );
     // The child in the junction matches only through the resolved path: the
     // directory it reports is not lexically inside the root.
     const viaLink = inspectProcessDirectories(ports, [root]);
@@ -1476,7 +1494,9 @@ test('condition 5 fails for a live child process of the current user on win32', 
     const clean = inspectProcessDirectories(ports, [join(root, 'unused')]);
     t.diagnostic(`a root no process uses: ${clean.status}: ${clean.detail}`);
   } finally {
-    await Promise.all(children.map((started) => endChild(started)));
+    // Every shutdown is awaited even if one fails, so the directories below
+    // are always removed.
+    await Promise.allSettled(children.map((started) => endChild(started)));
     // The junction's parent first, then the root: neither follows the link.
     for (const path of [...dirs].reverse()) {
       try {
