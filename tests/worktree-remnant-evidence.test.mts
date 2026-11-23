@@ -1158,6 +1158,32 @@ test('condition 5 is unmet for a record that contradicts its kind', () => {
   }
 });
 
+test('condition 5 is unmet for a root that is not a full Windows path', () => {
+  // The guard runs on the root as written, before `win32.resolve`, which on a
+  // Windows host would anchor a relative root to the current directory.
+  let reads = 0;
+  const counting = winProc([winRecord(1)], {
+    readWindowsProcesses: () => {
+      reads += 1;
+      throw new Error('the reader must not run');
+    },
+  });
+  for (const root of ['relative\\root', 'C:wt', '\\repo\\wt', '', 'wt']) {
+    const result = inspectProcessDirectories(counting, [WIN_ROOT, root]);
+    assert.equal(result.status, 'error', JSON.stringify(root));
+    assert.match(result.detail, /not a full Windows path/, root);
+    assert.match(result.detail, /reason unresolvable/, root);
+  }
+  assert.equal(reads, 0);
+  // A resolved form that is not a full path is refused too.
+  const resolved = inspectProcessDirectories(
+    winProc([winRecord(1)], { realpath: () => 'relative\\real' }),
+    [WIN_ROOT],
+  );
+  assert.equal(resolved.status, 'error');
+  assert.match(resolved.detail, /a resolved root is not a full Windows path/);
+});
+
 test('condition 5 resolves the roots before it reads the processes', () => {
   let reads = 0;
   const result = inspectProcessDirectories(

@@ -607,6 +607,13 @@ function inspectWindowsProcessRecords(ports, roots) {
   const targets = [];
   try {
     for (const root of roots) {
+      // Before `win32.resolve`: on a Windows host it would anchor a relative
+      // root to the current directory and make it look like a full path.
+      if (!isQualifiedWin32Path(root)) {
+        return fail(
+          'a root is not a full Windows path (reason unresolvable), so no directory can be compared with it',
+        );
+      }
       targets.push(win32.resolve(root));
       const real = ports.realpath(root);
       if (real !== null) targets.push(real);
@@ -618,7 +625,7 @@ function inspectWindowsProcessRecords(ports, roots) {
   }
   if (!targets.every(isQualifiedWin32Path)) {
     return fail(
-      'a root is not a full Windows path (reason unresolvable), so no directory can be compared with it',
+      'a resolved root is not a full Windows path (reason unresolvable), so no directory can be compared with it',
     );
   }
   const reader = ports.readWindowsProcesses;
