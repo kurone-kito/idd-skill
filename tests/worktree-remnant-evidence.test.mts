@@ -1379,6 +1379,9 @@ test('the win32 root comparison places drives, separators, prefixes, and escapes
   assert.equal(within('wt', WIN_INSIDE), false);
 });
 
+/** The longest a `taskkill.exe` call may block, in milliseconds. */
+const TASKKILL_TIMEOUT_MS = 5_000;
+
 /**
  * End a child and everything it started, by process id and never by name, then
  * wait for it to exit so its directory can be removed.
@@ -1386,12 +1389,17 @@ test('the win32 root comparison places drives, separators, prefixes, and escapes
 async function endChild(child: ChildProcess): Promise<void> {
   if (child.pid !== undefined && child.exitCode === null) {
     try {
+      // `execFileSync` blocks the event loop, so only its own `timeout` can
+      // stop a `taskkill.exe` that stalls; without it the exit wait below, the
+      // fallback kill, and the directory removal would never run.
       execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
+        timeout: TASKKILL_TIMEOUT_MS,
       });
     } catch {
-      // The process may already be gone; kill() below is the fallback.
+      // The process may already be gone, or `taskkill.exe` may have timed out
+      // or failed in some other way; kill() below is the fallback.
     }
   }
   child.kill();
