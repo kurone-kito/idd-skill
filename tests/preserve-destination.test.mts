@@ -861,7 +861,7 @@ test('windows: an owner read that throws or names no SID is refused as unverifie
   }
 });
 
-test('windows: a directory whose identity has inode 0 is refused as unverified before any owner read or write', () => {
+test('windows: a directory whose identity has inode 0 is refused as unverified before any ACL read, owner read, or write', () => {
   const fx = fresh();
   const path = permissiveDirectory(fx);
   const acl = windowsAcl();
@@ -880,12 +880,8 @@ test('windows: a directory whose identity has inode 0 is refused as unverified b
     aclReads += 1;
     return acl.reader(directory);
   };
-  // The privacy inspection reads the ACL before the rewrite starts. The
-  // identity refusal must add no ACL read after that, so count the inspection
-  // alone as the baseline.
-  inspectDirectoryPrivacy(path, 'win32', countingReader);
-  const inspectionReads = aclReads;
-  aclReads = 0;
+  // The identity is refused before the privacy inspection, so no ACL read of
+  // any kind happens for this directory.
   assert.throws(
     () =>
       ensurePrivateStateDirectory(path, 'win32', countingReader, {
@@ -894,7 +890,7 @@ test('windows: a directory whose identity has inode 0 is refused as unverified b
       }),
     /directory ownership or privacy could not be verified/,
   );
-  assert.equal(aclReads, inspectionReads);
+  assert.equal(aclReads, 0);
   assert.deepEqual(acl.owners, []);
   assert.deepEqual(acl.restricted, []);
 });

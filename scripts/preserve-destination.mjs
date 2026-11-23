@@ -205,12 +205,34 @@ function restrictWindowsStateDirectory(path, windowsAclReader, tools) {
     throw new Error('directory could not be restricted to its owner');
   }
 }
+/**
+ * True when the path is a real directory whose identity has inode `0`. The
+ * check is a no-follow identity read only, so it runs before any ACL read. A
+ * read that fails is not inode `0`; the caller's later checks report it.
+ */
+function hasInodeZeroDirectory(path, readIdentity) {
+  try {
+    const stat = (readIdentity ?? defaultReadIdentity)(path);
+    return stat.isDirectory() && stat.ino === 0n;
+  } catch {
+    return false;
+  }
+}
+const defaultReadIdentity = (target) => lstatSync(target, { bigint: true });
 export function ensurePrivateStateDirectory(
   path,
   platform,
   windowsAclReader,
   windowsTools = defaultWindowsDirectoryTools,
 ) {
+  // On Windows an inode-0 directory is refused before the privacy inspection,
+  // which reads the ACL, so no ACL call is made for it.
+  if (
+    platform === 'win32' &&
+    hasInodeZeroDirectory(path, windowsTools.readIdentity)
+  ) {
+    throw new Error('directory ownership or privacy could not be verified');
+  }
   const privacy = inspectDirectoryPrivacy(path, platform, windowsAclReader);
   if (privacy === 'private') return;
   if (platform === 'win32') {
