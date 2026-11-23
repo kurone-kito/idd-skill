@@ -9,7 +9,7 @@ tags: [onboarding, policy-decisions]
 
 Use this reference alongside `idd-template/ONBOARDING.md` when you need
 the detailed policy-decision guidance that the thin onboarding entry
-point now links to.
+point links to.
 
 This page is the detailed companion for:
 
@@ -42,8 +42,9 @@ every tier, or an object with `frontier`, `middle-tier`, and `lightweight`.
 Standard: `fully_autonomous_merge` runs F3 after the gates;
 `separate_merge_agent` keeps handoff step 5; an unresolved object tier
 holds. On lite, an object resolves only when `git fetch origin` succeeds,
-`config.json` matches `origin`, the operator named one of the three tiers,
-and the resolver exits 0 with one enum.
+`config.json` matches `origin` (a semver `iddVersion`-only change aside),
+the operator named one of the three tiers, and the resolver exits 0 with
+one enum.
 `fully_autonomous_merge` continues at the standard handoff, which runs F3;
 lite runs no `gh pr merge`. `mergePolicyAck` stays diagnostic.
 
@@ -157,7 +158,7 @@ Keep this human-readable policy choice distinct from the machine-readable
 distributed discover/claim runtime uses the documented approval model.
 The optional `maintainerApprovalActors` config field is a
 schema-supported explicit GitHub login allowlist, but the distributed
-runtime does not enforce that explicit allowlist yet.
+runtime does not enforce it yet.
 
 ### Issue-authoring companion
 
