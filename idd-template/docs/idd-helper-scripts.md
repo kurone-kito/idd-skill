@@ -7777,8 +7777,9 @@ that runs it is
      unreadable owner inside it fails the condition, and another account's is
      counted and not refused; an error record, a missing or throwing reader, a
      result with no records, a record that is not a process record (an unknown
-     kind, a pid that is not positive, an owner that is not a SID), and a record
-     that contradicts the shape of its kind fail the condition (preventive; no
+     kind, a pid that is not positive, an owner that is not a SID), a record
+     whose fields cannot be read (each field is read once), and a record that
+     contradicts the shape of its kind fail the condition (preventive; no
      observed incident yet: the reader's parser already rejects an unknown kind,
      a pid that is not positive, and a contradiction of the kind). Paths are
      compared as Windows paths with letter case ignored, by the lexical form
