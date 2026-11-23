@@ -51,6 +51,14 @@ const NO_TELEMETRY_HOOK_REASONS = {
 };
 /** Bound on how long a spawned hook command may run before it is killed. */
 const DEFAULT_INVOKE_TIMEOUT_MS = 5_000;
+/**
+ * Largest timeout the hook accepts. Node timers reset any delay above
+ * 2,147,483,647 ms to 1 ms (`TimeoutOverflowWarning`), so a longer request
+ * would kill the hook and the win32 watchdog almost at once. This is the
+ * largest whole-second delay below that limit (kurone-kito/idd-skill#5350,
+ * Copilot review).
+ */
+const MAX_INVOKE_TIMEOUT_MS = 2_147_483_000;
 /** Bound on how long `--invoke` waits for a piped stdin payload. */
 const STDIN_READ_TIMEOUT_MS = 2_000;
 /**
@@ -73,7 +81,7 @@ const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
  * {@link PAYLOAD_DELIVERY_TIMEOUT_MS}: that one times a stdin write
  * (normally near-instant, no new OS process involved), while this one
  * times an actual *process spawn* completing -- on Windows in particular,
- * a fresh `powershell.exe` launch can be measurably slower than a
+ * a fresh `node.exe` watchdog launch can be measurably slower than a
  * pipe write under real-time antivirus/Defender scanning of each new
  * process image, a well-documented source of Windows CI latency
  * unrelated to this file's own logic. An earlier fix reused
@@ -114,14 +122,14 @@ const WIN32_RELAY_NODE_OPTIONS_ENV =
  * `spawnFn(process.execPath, ['--input-type=commonjs', '-e',
  * WIN32_RELAY_SCRIPT], {...})` in {@link invokeCritiqueTelemetryHook}
  * below -- mirrors this file's
- * existing precedent of inlining the watchdog's PowerShell script as a
- * string constant (see {@link spawnWatchdogWindows}). Two `${...}`
+ * existing precedent of inlining the watchdog's node script as a
+ * string constant (see {@link WIN32_WATCHDOG_SCRIPT}). Two `${...}`
  * substitutions (the two env-var-name constants above) are all this
  * template literal needs; the rest of the script body contains no
  * literal `${` sequence of its own, so there is no collision risk with
  * the outer `.mts` template-literal interpolation to guard against here,
- * unlike the watchdog's longer, multiply-interpolated PowerShell
- * one-liner.
+ * unlike the watchdog script, which interpolates nothing and takes its
+ * values as argv.
  *
  * **The relay's own environment is sanitized of `NODE_OPTIONS`**
  * (kurone-kito/idd-skill#2910 review, Copilot): the relay is itself a
@@ -158,8 +166,8 @@ const WIN32_RELAY_NODE_OPTIONS_ENV =
  * `DETACHED_PROCESS` rather than anything Node/libuv- or payload-size-
  * specific. This is the same "`DETACHED_PROCESS` breaks a
  * console-subsystem process's own I/O/message-pump initialization"
- * pattern already root-caused for {@link spawnWatchdogWindows}'s own
- * `powershell.exe` hop (kurone-kito/idd-skill#2892 / PR #2897),
+ * pattern already root-caused for the earlier `powershell.exe` hop of
+ * {@link spawnWatchdogWindows} (kurone-kito/idd-skill#2892 / PR #2897),
  * recurring for `cmd.exe`'s stdin relay instead of `powershell.exe`'s
  * ConsoleHost startup.
  *
@@ -199,7 +207,7 @@ const WIN32_RELAY_NODE_OPTIONS_ENV =
  * non-zero exit, a timeout), a defect in this script's own body would
  * also fail silently in production (its `stdio` discards stderr) --
  * an accepted extension of the existing contract, not a new risk;
- * the same gap already exists for the inline PowerShell watchdog
+ * the same gap already exists for the inline node watchdog
  * script below, with no unit-level syntax check for either. The tests
  * this issue adds are the mitigation, run for real (not just
  * argument-shape asserted) both locally, via the `platform: 'win32'`
@@ -298,6 +306,20 @@ process.stdin.on('end', () => {
   }
 });
 `;
+/**
+ * Node script run by the win32 backup watchdog (see {@link spawnWatchdogWindows}).
+ * Its two argv entries are the kill target's pid and a delay in milliseconds.
+ * After the delay it runs `taskkill /PID <pid> /T /F` with `windowsHide: true`
+ * and without `detached`. The script is one line with no double quotes, so it
+ * is passed as a single `node -e` argument on Windows.
+ */
+const WIN32_WATCHDOG_SCRIPT =
+  "const { spawn } = require('node:child_process'); " +
+  'setTimeout(() => { ' +
+  "const killer = spawn('taskkill', ['/PID', process.argv[1], '/T', '/F'], " +
+  "{ stdio: 'ignore', windowsHide: true }); " +
+  "killer.on('error', () => {}); " +
+  '}, Number(process.argv[2]));';
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('idd-critique-telemetry-hook', runCli);
@@ -442,7 +464,7 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     typeof requestedTimeoutMs === 'number' &&
     Number.isFinite(requestedTimeoutMs) &&
     requestedTimeoutMs >= 0
-      ? requestedTimeoutMs
+      ? Math.min(requestedTimeoutMs, MAX_INVOKE_TIMEOUT_MS)
       : DEFAULT_INVOKE_TIMEOUT_MS;
   const platform = options?.platform ?? process.platform;
   let delivered = false;
@@ -985,110 +1007,74 @@ function spawnWatchdogPosix(spawnFn, pid, timeoutMs) {
   }
 }
 /**
- * Win32 half of the backup watchdog pair (see {@link spawnWatchdog}) --
- * kurone-kito/idd-skill#2892. Before this, the POSIX-only backup watchdog
- * silently did nothing useful on Windows (no `sh` on `PATH`), leaving a
- * native-Windows IDD agent's fire-and-forget `--invoke` with no deadline
- * enforcement at all once the CLI process itself has already exited (the
- * primary, JS-level timer in {@link invokeCritiqueTelemetryHook} cannot
- * fire from a dead process either -- see that function's own comment on
- * why this backup exists in the first place).
+ * Environment for the win32 watchdog: the caller's environment minus any
+ * `NODE_OPTIONS`, matched case-insensitively as Windows environment names are.
+ * The watchdog is itself a `node` process, so an inherited preload (for example
+ * a `--require` that only loads in the caller's context) could stop it at
+ * startup and silently remove the backup deadline. The win32 relay branch of
+ * `invokeCritiqueTelemetryHook` strips the same variable for the same reason.
+ */
+export function watchdogEnvironment(source = process.env) {
+  const env = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key.toUpperCase() !== 'NODE_OPTIONS') {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+/**
+ * win32 half of the backup watchdog pair (see {@link spawnWatchdog}).
+ * Spawns a detached `node` process directly, with no shell hop:
+ * `process.execPath -e WIN32_WATCHDOG_SCRIPT <pid> <delayMs>`, with
+ * `detached: true`, `stdio: 'ignore'`, and `windowsHide: true`. The delay
+ * rounds up to whole seconds, as the watchdog always has.
  *
- * Spawns `powershell.exe` (Windows PowerShell 5.1, present on every
- * Windows install since 7 SP1 / Server 2008 R2 -- not `pwsh`/PowerShell
- * Core, whose presence is not guaranteed) through a `cmd.exe` hop
- * (`shell: true`), **not** directly (kurone-kito/idd-skill#2892, #2897 CI
- * follow-up, confirmed live on native Windows 11): `spawnFn('powershell.exe',
- * [...], { detached: true, stdio: 'ignore' })` -- no shell hop -- exits in
- * roughly 70-140ms with code 0 and never runs its `-Command`/`-File`
- * script at all, a false "success." Verified with the quoting variable
- * removed entirely (a `-File <script.ps1>` invocation, so no `-Command`
- * string-escaping is involved): still a same-result no-op under
- * `detached: true`, while the identical `-File` invocation through a
- * `cmd.exe` hop runs correctly and survives the caller's own
- * `process.exit()`. This isolates the cause to `DETACHED_PROCESS` itself
- * (no console object at all) breaking `powershell.exe`'s ConsoleHost
- * startup, not this file's own command construction -- adding the
- * `cmd.exe` hop back (as this file's primary hook spawn already uses for
- * `command`) is the fix. The extra process layer this reintroduces is
- * bounded: {@link cancelWatchdog}'s win32 tree-kill already uses
- * `taskkill /PID <pid> /T /F` (the `/T` flag), which reaches this
- * watchdog's own `cmd.exe` wrapper *and* the `powershell.exe` it spawns,
- * so disarming an early-settling hook's watchdog is unaffected by the
- * extra hop.
+ * Why not `powershell.exe` (kurone-kito/idd-skill#5339): a detached parent
+ * has no console, so a console program it starts gets a console of its own,
+ * and Windows Terminal shows that console as a window. The previous
+ * `powershell.exe` watchdog, started through `cmd.exe`, left one such window
+ * behind per spawn. In kurone-kito/idd-skill#5333, one run of the hook test
+ * file took the count of `CASCADIA_HOSTING_WINDOW_CLASS` windows from 1 to 18
+ * on a Windows Terminal host. The node watchdog is a detached process too,
+ * so it gets no console, as the win32 relay already does; the relay opened
+ * no window in the same measurement. Its only console child, `taskkill`, is
+ * started with `windowsHide: true` and without `detached`, so Windows honors
+ * `CREATE_NO_WINDOW` for it.
  *
- * `timeout.exe` is deliberately not used for the sleep: with
- * `stdio: 'ignore'` it fails outright ("Input redirection is not
- * supported"). `Start-Sleep -Seconds <n>` (a PowerShell built-in cmdlet,
- * not a further child process) is the sleep primitive instead.
+ * `detached: true` stays on the watchdog on purpose. The watchdog must
+ * outlive the caller's `process.exit()` (`--invoke`'s whole point), and it
+ * keeps the Ctrl+C behavior this file already has. {@link cancelWatchdog}
+ * still disarms it with a `taskkill /T /F` tree-kill on the watchdog's own
+ * pid, which ends the watchdog and any `taskkill` it has started.
  *
- * The kill step builds a `System.Diagnostics.Process` directly
- * (`UseShellExecute = $false; CreateNoWindow = $true`) rather than
- * `Start-Process -WindowStyle Hidden` (kurone-kito/idd-skill#2897 CI
- * finding, `windows-latest`): an earlier `windows-latest` CI round already
- * showed this watchdog not actually killing its target before the
- * `DETACHED_PROCESS` no-op above was isolated as the real cause; kept here
- * regardless since `UseShellExecute = $false` is the same underlying
- * mechanism Node's own `windowsHide` option (and this file's
- * already-confirmed-working `killProcessTreeWindows`) relies on, so both
- * `taskkill` call sites stay on the same, empirically-working
- * process-creation path instead of two different ones. `.Arguments` (a
- * single space-joined string), not the array-based `.ArgumentList`: the
- * latter requires .NET Core 2.1+, unavailable on `powershell.exe`
- * (Windows PowerShell 5.1's .NET Framework runtime). `$p.WaitForExit()`
- * keeps this whole script's own execution (and thus the watchdog process)
- * alive until `taskkill` actually finishes, matching the POSIX version's
- * `sleep <n>; kill ...` sequencing.
+ * Residual, as before: Windows recycles freed pids much faster than POSIX, so
+ * a quick-exit hook's watchdog can stay armed for the rest of `timeoutMs`
+ * against an already-freed pid. {@link cancelWatchdog} disarming it as soon as
+ * the hook settles is what bounds that in practice.
  *
- * **Known residual, not present on the POSIX side**: {@link
- * cancelWatchdog}'s PID-reuse-race argument (see {@link
- * spawnWatchdogPosix}'s own doc comment) relies on POSIX pid/pgid reuse
- * requiring the entire process group to exit, be reaped, *and* a full
- * `pid_max` wrap before the number can be reused. Windows recycles freed
- * PIDs far faster (observably within seconds under process churn, nothing
- * resembling a full namespace wrap), so the residual window where a
- * quick-exit hook's watchdog stays armed against an already-freed pid for
- * the rest of `timeoutMs` is measurably wider here. `cancelWatchdog`
- * disarming this watchdog as soon as the hook settles (unchanged from the
- * POSIX path) is what actually bounds this in practice, not any
- * Windows-side pid-reuse guarantee -- an unexplained Windows-only flake in
- * a quick-exit test is the first place to look.
+ * The watchdog runs with {@link watchdogEnvironment}, so an inherited
+ * `NODE_OPTIONS` cannot stop it at startup.
  *
- * Never throws: spawn failure here (no `cmd.exe`/`powershell.exe`
- * resolvable -- essentially never on a real Windows install) silently
- * forfeits this backup, the same accepted gap {@link spawnWatchdogPosix}
- * documents for a bare environment with no POSIX shell.
+ * Never throws: spawn failure here silently forfeits this backup, the same
+ * accepted gap {@link spawnWatchdogPosix} documents for a bare environment.
  */
 function spawnWatchdogWindows(spawnFn, pid, timeoutMs) {
   try {
     // Same rounding rationale as spawnWatchdogPosix's own comment.
     const seconds = Math.ceil(Math.max(timeoutMs, 0) / 1000);
-    const script =
-      `Start-Sleep -Seconds ${seconds}; ` +
-      '$p = New-Object System.Diagnostics.Process; ' +
-      "$p.StartInfo.FileName = 'taskkill'; " +
-      `$p.StartInfo.Arguments = '/PID ${pid} /T /F'; ` +
-      '$p.StartInfo.UseShellExecute = $false; ' +
-      '$p.StartInfo.CreateNoWindow = $true; ' +
-      '[void]$p.Start(); ' +
-      '$p.WaitForExit()';
-    // shell:true (cmd.exe hop) is required -- see the doc comment above
-    // for why a direct spawnFn('powershell.exe', ..., {detached:true})
-    // silently no-ops on this platform. The script itself uses only
-    // single quotes internally, so wrapping the whole -Command argument
-    // in double quotes here needs no further escaping.
-    const command =
-      'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden ' +
-      `-Command "${script}"`;
-    const watchdog = spawnFn(command, {
-      shell: true,
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    const watchdog = spawnFn(
+      process.execPath,
+      ['-e', WIN32_WATCHDOG_SCRIPT, String(pid), String(seconds * 1000)],
+      {
+        detached: true,
+        env: watchdogEnvironment(),
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
     // Same asynchronous-spawn-failure rationale as spawnWatchdogPosix's own
-    // comment -- an unresolvable cmd.exe/powershell.exe must not crash the
-    // caller.
+    // comment -- a failing `node` spawn must not crash the caller.
     watchdog.on('error', () => {
       // Best-effort only -- see doc comment above and on this function.
     });
