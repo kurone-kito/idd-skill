@@ -1272,6 +1272,20 @@ test('an oversized sync manifest is a repository-file-too-large blocker through 
   );
 });
 
+test('a sync manifest that is not found keeps the empty set, with no blocker (#5342)', () => {
+  const { report, keyedReads } = collectScopeOverrunWithBaseEntries(
+    { 'audit/sync-manifest.json': null },
+    ['src/listed.mts'],
+  );
+  assert.deepEqual(
+    keyedReads
+      .filter((read) => read.path === 'audit/sync-manifest.json')
+      .map((read) => read.ref),
+    ['b'.repeat(40)],
+  );
+  assert.equal(report.repositoryFileBlockers, undefined);
+});
+
 test('a too-large file read twice is one blocker, not one per read (#5342)', () => {
   // The manifest is a changed path and also the sync target, so the audit
   // reads it twice; the sink records the path once.
