@@ -379,3 +379,18 @@ jobs:
       # whole-file step distinct from the narrowed claim-lock coverage.
       - name: Run branch-conflict-state tests
         run: node --test --import ./tests/isolate-state.mts tests/branch-conflict-state.test.mts
+      # The Windows process record reader (kurone-kito/idd-skill#5346) reads
+      # the current directory of other processes through System32 PowerShell,
+      # which only a real Windows process can exercise. Only the two tests whose
+      # titles start with `real reader sees` run: a 64-bit child of the current
+      # user and a 32-bit (WOW64) child. The exit code alone cannot catch a
+      # pattern that matches no test, since Node exits 0 for that, so each exact
+      # title must also appear as a passing TAP line, and `timeout-minutes`
+      # bounds a native call that hangs.
+      - name: Run Windows process record reader tests
+        timeout-minutes: 5
+        run: |
+          node --test --import ./tests/isolate-state.mts --test-reporter=tap --test-name-pattern "real reader sees" tests/windows-process-cwd.test.mts | Tee-Object -FilePath windows-process-cwd.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path windows-process-cwd.tap -Pattern '^ok \d+ - real reader sees a child process of the current user$' -Quiet)) { throw 'real reader sees a child process of the current user did not pass' }
+          if (-not (Select-String -Path windows-process-cwd.tap -Pattern '^ok \d+ - real reader sees a 32-bit child process$' -Quiet)) { throw 'real reader sees a 32-bit child process did not pass' }
