@@ -23,6 +23,7 @@ import {
   buildCritiqueTelemetryHookReport,
   type CritiqueTelemetryHookPayload,
   invokeCritiqueTelemetryHook,
+  watchdogEnvironment,
 } from '../src/scripts/idd-critique-telemetry-hook.mts';
 import { trackTempDirectories } from './temp-fixtures.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -1664,6 +1665,20 @@ test('invokeCritiqueTelemetryHook gives the win32 backup watchdog an environment
       process.env.NODE_OPTIONS = previousNodeOptions;
     }
   }
+});
+
+test('watchdogEnvironment drops every NODE_OPTIONS spelling and keeps the other variables (kurone-kito/idd-skill#5350 review)', () => {
+  // Windows environment names are case-insensitive, but the object this
+  // function copies is not. Each spelling must be removed, so a mixed-case
+  // key cannot keep a preload alive in the watchdog.
+  const env = watchdogEnvironment({
+    PATH: '/bin',
+    NODE_OPTIONS: '--require /a.cjs',
+    Node_Options: '--require /b.cjs',
+    node_options: '--require /c.cjs',
+    KEEP_ME: 'x',
+  });
+  assert.deepEqual(env, { PATH: '/bin', KEEP_ME: 'x' });
 });
 
 test('invokeCritiqueTelemetryHook keeps the win32 backup watchdog running while the hook runs, and ends it once the hook settles (kurone-kito/idd-skill#5339)', {

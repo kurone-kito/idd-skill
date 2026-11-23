@@ -1204,9 +1204,11 @@ function spawnWatchdogPosix(
  * startup and silently remove the backup deadline. The win32 relay branch of
  * `invokeCritiqueTelemetryHook` strips the same variable for the same reason.
  */
-function watchdogEnvironment(): NodeJS.ProcessEnv {
+export function watchdogEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(source)) {
     if (key.toUpperCase() !== 'NODE_OPTIONS') {
       env[key] = value;
     }
