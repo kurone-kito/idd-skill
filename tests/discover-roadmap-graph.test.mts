@@ -52,78 +52,56 @@ import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { stubExecutable } from './test-utils.mts';
 
-// Keep these before allocation-heavy tests so their CPU samples remain
-// representative (#4466).
+// Scaling checks (#1970, #3876) compare deterministic work counts from
+// extractKeywordReferences instead of CPU time, so host load cannot move them
+// (#5352). The failure message reports each kind so a regression can be
+// located.
+const KEYWORD_WORK_KINDS = [
+  'matches',
+  'tokenSteps',
+  'segmentChars',
+  'negationChars',
+  'closingChars',
+] as const;
+type KeywordWork = Record<(typeof KEYWORD_WORK_KINDS)[number], number>;
+
 function assertKeywordReferenceScaling({
   name,
   inputForSize,
   smallerSize,
-  iterationsPerSample,
   expectedReferenceCount,
 }: {
   name: string;
   inputForSize: (size: number) => string;
   smallerSize: number;
-  iterationsPerSample: number;
   expectedReferenceCount: (size: number) => number;
 }): void {
   const largerSize = smallerSize * 2;
-  const smallerInput = inputForSize(smallerSize);
-  const largerInput = inputForSize(largerSize);
-  const smallerSamples: number[] = [];
-  const largerSamples: number[] = [];
-
-  const measure = (input: string, size: number, samples: number[]) => {
-    const start = process.cpuUsage();
-    for (let iteration = 0; iteration < iterationsPerSample; iteration += 1) {
-      const references = extractKeywordReferences(input);
-      assert.equal(references.length, expectedReferenceCount(size));
-    }
-    const elapsed = process.cpuUsage(start);
-    samples.push((elapsed.user + elapsed.system) / 1000 / iterationsPerSample);
+  const measure = (size: number): KeywordWork => {
+    const work: KeywordWork = {
+      matches: 0,
+      tokenSteps: 0,
+      segmentChars: 0,
+      negationChars: 0,
+      closingChars: 0,
+    };
+    const references = extractKeywordReferences(inputForSize(size), { work });
+    assert.equal(references.length, expectedReferenceCount(size));
+    return work;
   };
+  const total = (work: KeywordWork): number =>
+    KEYWORD_WORK_KINDS.reduce((sum, kind) => sum + work[kind], 0);
 
-  // Warm both input sizes before recording timings so V8's first-use work
-  // does not disproportionately affect the smaller median.
-  const warm = (input: string, size: number) => {
-    for (let iteration = 0; iteration < 3; iteration += 1) {
-      const references = extractKeywordReferences(input);
-      assert.equal(references.length, expectedReferenceCount(size));
-    }
-  };
-  warm(smallerInput, smallerSize);
-  warm(largerInput, largerSize);
-
-  // Measure process CPU time so other test files' CPU load does not skew a
-  // sample. Alternate order to avoid a consistent run-order effect.
-  // Each size still gets five measurements. Repeating each input within a
-  // sample reduces timer noise for cases whose work takes only a few ms.
-  for (let sample = 0; sample < 5; sample += 1) {
-    if (sample % 2 === 0) {
-      measure(smallerInput, smallerSize, smallerSamples);
-      measure(largerInput, largerSize, largerSamples);
-    } else {
-      measure(largerInput, largerSize, largerSamples);
-      measure(smallerInput, smallerSize, smallerSamples);
-    }
-  }
-
-  const median = (samples: number[]) => {
-    const value = [...samples].sort((left, right) => left - right)[
-      Math.floor(samples.length / 2)
-    ];
-    if (value === undefined) {
-      throw new Error('expected five timing samples');
-    }
-    return value;
-  };
-  const smallerMedian = median(smallerSamples);
-  const largerMedian = median(largerSamples);
-  const ratio = largerMedian / smallerMedian;
+  const smallerWork = measure(smallerSize);
+  const largerWork = measure(largerSize);
+  const ratio = total(largerWork) / total(smallerWork);
+  const kinds = KEYWORD_WORK_KINDS.map(
+    (kind) => `${kind} ${smallerWork[kind]} -> ${largerWork[kind]}`,
+  );
   const message = [
-    `expected ${name} to scale below 3.0x for sizes ${smallerSize} and ${largerSize}`,
-    `CPU-time medians: ${smallerMedian.toFixed(2)}ms and ${largerMedian.toFixed(2)}ms`,
-    `ratio: ${ratio.toFixed(2)}`,
+    `expected ${name} work to scale below 3.0x for sizes ${smallerSize} and ${largerSize}`,
+    `work ratio: ${ratio.toFixed(3)}`,
+    `per kind: ${kinds.join(', ')}`,
   ].join('; ');
 
   assert.ok(ratio < 3.0, message);
@@ -137,9 +115,6 @@ test('extractKeywordReferences scales on a keyword-dense standalone line (#1970)
     inputForSize: (size) =>
       Array.from({ length: size }, (_, i) => `closes #${i + 1}`).join(', '),
     smallerSize: 10000,
-    // #4859: the loaded 20-run baseline's shortest small-input median was
-    // 20.77ms, so the minimum-three floor gives a ~62ms CPU sample.
-    iterationsPerSample: 3,
     expectedReferenceCount: (size) => size,
   });
 });
@@ -152,8 +127,6 @@ test('extractKeywordReferences scales on a dense non-standalone line (#1970, #38
     name: 'the dense non-standalone line',
     inputForSize: (size) => `Context: ${'Closes #1 '.repeat(size)}`,
     smallerSize: 4000,
-    // #4859: 11 repetitions keep the shortest baseline sample above 50ms.
-    iterationsPerSample: 11,
     expectedReferenceCount: () => 0,
   });
 });
@@ -173,8 +146,6 @@ test('extractKeywordReferences scales on keyword matches glued by non-whitespace
     name: 'keyword matches glued by non-whitespace separators',
     inputForSize: (size) => 'Closes,'.repeat(size),
     smallerSize: 4000,
-    // #4859: 19 repetitions keep the shortest baseline sample above 50ms.
-    iterationsPerSample: 19,
     expectedReferenceCount: () => 0,
   });
 });
