@@ -1646,6 +1646,31 @@ function listVisibleWindowPids(): Set<string> {
   );
 }
 
+/**
+ * Counts the top-level windows of class `CASCADIA_HOSTING_WINDOW_CLASS`,
+ * which Windows Terminal uses for its windows, visible or hidden. Get-Process
+ * `MainWindowHandle` does not see those windows, so this uses EnumWindows.
+ * Diagnostic only (kurone-kito/idd-skill#5333): the caller prints the delta
+ * and asserts nothing on it. Returns -1 when the count cannot be read.
+ */
+function countCascadiaWindows(): number {
+  const script = [
+    'Add-Type -TypeDefinition \'using System; using System.Text; using System.Runtime.InteropServices; public class IddCascadiaCount { public delegate bool EnumProc(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n); public static int Count(string cls) { int n = 0; EnumWindows(delegate(IntPtr h, IntPtr l) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); if (s.ToString() == cls) n++; return true; }, IntPtr.Zero); return n; } }\'',
+    "[Console]::Out.Write([IddCascadiaCount]::Count('CASCADIA_HOSTING_WINDOW_CLASS'))",
+  ].join('; ');
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8' },
+    );
+    const count = Number.parseInt(out.trim(), 10);
+    return Number.isNaN(count) ? -1 : count;
+  } catch {
+    return -1;
+  }
+}
+
 test('invokeCritiqueTelemetryHook does not create a visible console window on win32, for a command that exits quickly or one that hangs and is killed (#2892 acceptance criterion, review follow-up)', {
   skip: process.platform !== 'win32',
 }, async () => {
@@ -1665,6 +1690,9 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     'setInterval(() => {}, 1_000);\n',
   );
   try {
+    // Diagnostic only (kurone-kito/idd-skill#5333): the count of Windows
+    // Terminal windows before and after the test is printed, not asserted.
+    const cascadiaBefore = countCascadiaWindows();
     // Half 1: a command that exits quickly on its own. Snapshot window
     // state WHILE it is still running (#2892 review, Copilot) --
     // `invokeCritiqueTelemetryHook` only resolves once the child has
@@ -1724,6 +1752,10 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     if (hangPid) {
       cleanupProcessTree(hangPid);
     }
+    const cascadiaAfter = countCascadiaWindows();
+    console.log(
+      `# CASCADIA_HOSTING_WINDOW_CLASS count before=${cascadiaBefore} after=${cascadiaAfter} delta=${cascadiaAfter < 0 || cascadiaBefore < 0 ? 'unavailable' : cascadiaAfter - cascadiaBefore}`,
+    );
   } finally {
     // LIFO order: each stubExecutable() call captures PATH/NODE_OPTIONS as
     // they stood immediately before that call, so restoring in creation

@@ -494,17 +494,22 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       // with no console to begin with under DETACHED_PROCESS, so there is
       // nothing to hide there regardless. The relay's *own* inner spawn of
       // the real `command` (see `WIN32_RELAY_SCRIPT` below) is NOT
-      // detached, so CREATE_NO_WINDOW is not overridden there and reliably
-      // suppresses that `cmd.exe` hop's own console window directly --
-      // verified live on native Windows 11 (kurone-kito/idd-skill#2892
-      // review follow-up, re-confirmed for kurone-kito/idd-skill#2910's
-      // relay shape): `MainWindowHandle == 0` (Get-Process) for both a
-      // quick-exiting and a hung-then-killed target, for the whole
-      // process tree this creates. The bound, reliable mitigation for a
-      // window that somehow still appears despite this is
-      // `killProcessGroup`'s win32 tree-kill below, which caps the whole
-      // chain's lifetime at `timeoutMs` rather than preventing it
-      // outright.
+      // detached, so CREATE_NO_WINDOW is not overridden there. Whether that
+      // `cmd.exe` hop opens a window is measured, not assumed. In one
+      // isolated run on a Windows Terminal host (kurone-kito/idd-skill#5333,
+      // 2026-11-23), the same spawn options opened no top-level window of
+      // class `CASCADIA_HOSTING_WINDOW_CLASS`, counted with EnumWindows.
+      // An earlier claim that `MainWindowHandle == 0` (Get-Process) shows
+      // no window appears is withdrawn: that check does not see Windows
+      // Terminal windows, so it cannot establish their absence. The same
+      // measurement found that a detached watchdog spawn opened one window,
+      // titled with its own command line, and that the window closed when
+      // that process exited; the detached relay opened none. A detached
+      // parent has no console, so a console program it starts (`cmd.exe`,
+      // `powershell.exe`, `ping`) gets a console of its own, which Windows
+      // Terminal shows as a window. The tree-kill in `killProcessGroup`
+      // below bounds the lifetime of the process chain, not of a terminal
+      // window that the chain has already opened.
       if (platform === 'win32') {
         // Sanitize NODE_OPTIONS out of the relay's OWN environment
         // (kurone-kito/idd-skill#2910 review, Copilot): the relay is
