@@ -14,6 +14,302 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-23
+
+Release cut after the auto-decide, provisional-decision, standing-approval,
+distribution, and session-identity tracks. Compatibility changes remain within
+the pre-1.0 release policy described in
+[Customizing IDD](docs/customization.md#template-version-and-staleness): four
+helper changes are breaking for direct callers and several stops are stricter,
+so read the default changes below before re-syncing. The signed tag remains the
+separate operator-gated follow-up #5336.
+
+### Added
+
+- Add the opt-in auto-decide and provisional-decision feature set. Every class
+  stays off until `dangerouslyAutoDecide` and the class switch are both enabled.
+  It adds the `autoDecide` policy object (class switches, caps, and a
+  confirmation label), the `idd-provisional-decision` and
+  `idd-auto-decision-records` commands, GitHub-backed decision storage, and a
+  command result schema (#4633, #4829, #4986, #5007, #5011, #5083,
+  plus #5088, #5119, #5125, #5142, #5247, #5260, plus #5264, #5279).
+- Route stops through the auto-decide classes when they are switched on:
+  authoring choices without a hearing, B1 leftovers through `claim-issue
+  --preserve-b1-leftovers`, and `--mechanical-evidence` in place of the local
+  worktree recovery attestation (#5144, #5168, #5193, #5194, #5195).
+- Let discovery, suitability, dependency, and merge checks use provisional work.
+  Discover never selects an issue that awaits an auto-decide confirmation and,
+  with the class on, offers eligible needs-decision work and reports pending
+  confirmations. Verified provisional work can unblock matching dependencies,
+  merge keeps an unconfirmed source open, and a retained decision source can
+  become its rework roadmap (#5010, #5120, #5245, #5256, #5257, #5258,
+  plus #5273, #5278).
+- Add the confirmation issue shape to authoring: an `audit-authored-issue`
+  confirmation lint, `publish-authoring-hold --shape confirmation`, and a
+  confirmation-label guard against untrusted labelers (#5004, #5009, #5024).
+- Add opt-in standing approvals: approval classes with ceilings, budget raises,
+  release of a single held set, a standing split of an overrun issue, and the
+  read-only `standing-approval-report`
+  helper (#4912, #4930, #4938, #4941, #5031).
+- Add scope-overrun evidence handling: persisted records with exact-head owner
+  decisions, a machine-readable commit inventory, an F2 and F3 readiness
+  blocker, a PR-submit route that finalizes a verified held split, and the
+  `idd-pull-request-draft-state`
+  command (#4688, #4975, #4983, #5104, #5197, #5231, plus #5241, #5301).
+- Add the distribution schemas and runtime: manifest and resolved-selection
+  schemas, immutable prepared sets through `idd-onboard`, binding of a coherent
+  distribution to a repository session, and a user-global entry that routes
+  through the session-selected
+  distribution (#4839, #4842, #4881, #4892, #4926, #4935, #4947).
+- Accept a per-tier object for `mergePolicy` and `mergePolicyAck` (`frontier`,
+  `middle-tier`, and `lightweight`) with a resolver that the merge handoff
+  follows. The string form keeps its meaning (#5226, #5230, #5274).
+- Add review-loop settings: the review-count cap
+  `critiqueLoop.deferAllAfterRounds` (its default is listed below), the opt-in
+  `critiqueLoop.e10SkipOnAdvisoryConvergence` and
+  `advisoryWait.firstFixPushSecondaryWait`, and an optional seventh base-ref
+  token on review watermarks (#4770, #4772, #5046, #5312).
+- Add helper surfaces: the `idd-release-tag` signed-tag command (dry-run by
+  default), `audit-authored-issue --dependency-inventory`, an advisory
+  `required-edit-candidate-files` finding, the `sharedNonHighContention`
+  Discover field, a released and stale claim mode for F4 worktree cleanup,
+  retired authoring journals, and an orchestrator single-agent mode chosen from
+  live capabilities (#4613, #4645, #4660, #4771, #4811, #5163, #5244).
+- Make the user-global install and related helpers work on native Windows: a
+  no-follow open helper bound to held directory handles, Windows receipt paths,
+  a processor-queue host signal for the worker budget, a tightened
+  state-directory ACL, a streamed recovery copy that binds the copied file's
+  identity, and a state-directory check that reports an unusable owner or inode
+  as unverified (#5291, #5293, #5294, #5295, #5296, #5325, plus #5328, #5330).
+
+### Changed
+
+- Default changes, read these before re-syncing:
+  - **BREAKING**: `post-idd-marker --type watermark --from-pr` now requires
+    `--prior-base-ref <Step 1 base ref>` on every invocation, and a recorded
+    base that differs from the live base returns the review to E1. Pass the base
+    ref that E1 Step 1 recorded, as the distributed review instructions now do;
+    six-field legacy watermarks stay valid (#4808, #5046, #5049, #5050).
+  - **BREAKING**: `claim-lock --record-tokens` refuses an agent id that is not
+    session-qualified (`<family>-<suffix>`, at least 8 letters or digits after
+    the first hyphen, such as `claude-48429e70`) when it runs without `--nonce`.
+    Pass the session's persisted qualified id; claims made before the upgrade
+    keep their recovery routes (#4954).
+  - **BREAKING**: `claimed-push` requires `--agent-id` for both claim
+    assertions, and a session-qualified claim asserted without it follows the
+    non-owner route. Pass the persisted session-qualified id, as `claim-issue`
+    now does (#5041).
+  - **BREAKING**: `force-handoff` refuses a bare successor id, including with
+    `--plan`, before it renders a marker. Pass a session-qualified successor id
+    instead of a bare number (#5089).
+  - An adopter that omits `critiqueLoop` now gets `deferByUrgency:
+    severity-tiered`, `triageRecord: record`, `deferRelaxAtRounds: [4]`, and
+    `deferAllAfterRounds: 5`. Findings defer under the severity matrix from the
+    first review, every non-safety finding defers from the fifth Copilot review,
+    and an applied Accepted or Rejected PATH A reply needs `--tier` and
+    `--urgency`. To restore the previous behavior, set `deferByUrgency` and
+    `triageRecord` to `off` and the two round settings to
+    `null` (#4997, #4770, #5084).
+  - When `mergePolicy` resolves to `fully_autonomous_merge`, a lite session no
+    longer releases its claim at the F2.5 handoff: it runs F2 and continues at
+    the standard handoff, which decides for itself. At v0.17.0 the lite profile
+    never reached F3 to F5. To keep lite sessions at the handoff, set
+    `mergePolicy` to `human_merge` or `separate_merge_agent`, or give the
+    `lightweight` tier its own value in a per-tier object (#5236, #5226).
+  - A commit-signing failure no longer stops the loop. Full E11, lite E11, and
+    lite D1 move to the configured fallback signer and then to an unsigned
+    commit, and the non-default outcome is recorded. No setting restores the
+    stop, so read the recorded outcome when signatures matter; release tags are
+    unchanged (#4991).
+  - A path count over a worker's S or M effort estimate is advisory drift at B3
+    and D2, not a runtime stop: it triggers one evidence-backed plan
+    reassessment and the claim continues. F2 and F3 still hold a count-only
+    overrun with a `scope-overrun` blocker, so expect that hold until a trusted
+    owner posts `Scope decision: accept head <full SHA>`. Unusable effort
+    evidence keeps its refusals (#5170, #5113, #5104).
+  - Merge readiness, and so merge, blocks when a real `--claim-id` is supplied
+    without `--agent-id`, whether or not Copilot reviewed the current head. Pass
+    both, as the distributed instructions do, or run claimless (#4911).
+  - The post-merge cleanup workflow template pins the remote helper to a
+    reviewed full commit instead of the mutable `main` archive, so the default
+    no longer follows `main`. To track a newer helper, set
+    `helperRuntime.packageSpec` or refresh the pinned commit with the procedure
+    in `docs/idd-helper-scripts.md` (#4732).
+  - A failure before the pre-marker A4.5 or A5 step keeps the pre-created
+    worktree, branch, and lock, and Claim Abort and the needs-decision release
+    run the released-claim cleanup route. Remove a kept worktree through that
+    route (a dry run, then `--apply --attest-no-live-session`), never by
+    hand (#5169).
+  - E1 takes substantive, unsettled human `COMMENTED` review-body findings as
+    PATH A items. Answer each one with an Accepted or Rejected disposition like
+    any other PATH A item (#4651).
+  - Conflict-free merges proceed while accepted review threads remain open, and
+    E11 merges the live target into a behind branch just before each E12 fix
+    push, without a standalone push. Expect the target's merge commit in that
+    push; predicted conflicts keep the confirmation route (#4774).
+  - `resolve-review-thread --claimless` is refused for an unclaimed `issue/<n>-`
+    branch that has no valid out-of-loop marker, and an active claim refuses it
+    even when the closing-reference set is empty. Use `--claim-issue <n>
+    --claim-id <claim-id>` on a claimed branch (#4790).
+  - Merge readiness and the AW1 and F3 instructions require schema-valid,
+    claim-bound stale-request recovery evidence before recovery or merge
+    routing. Pass both `--claim-id` and `--agent-id` to `pre-merge-readiness`; a
+    claimless run is unchanged (#4709, #4741, #4982).
+  - With the optional Pueue admission backend, a failed or unreachable status
+    probe exits 69 instead of falling back to `flock`. Start the daemon or
+    select the `flock` backend; an exit 69 means the command did not start, so
+    report it and do not rerun (#5153).
+  - Installed skill entries dispatch through the selected immutable set, and an
+    upgrade migrates receipt-owned legacy skill files while keeping unowned or
+    changed files. Re-run the user-global install to replace copied skill
+    contracts with the dispatch entries (#5212).
+  - Each read-only `provider-outage-park` invocation has a 120-second default
+    deadline and reports progress on stderr. Pass `--budget-ms` when a larger
+    scan needs more time (#4620).
+  - With the `package-manager` helper runtime profile, the shared template
+    workflows (advisory convergence, its comment trigger, and post-merge
+    cleanup) fail before install when package-manager evidence is absent,
+    ambiguous, or unusable, instead of defaulting to npm. An unsupported
+    `packageManager` declaration such as `bun` now fails instead of falling back
+    to lockfile detection. Declare npm, pnpm, or yarn and commit its frozen
+    lockfile (#4719).
+  - F4 cleanup moves a lone ignored `node_modules/` directory intact to the
+    per-user state directory instead of holding on it, and every apply verifies
+    that directory: owner-owned and mode `0700` on POSIX, a private ACL on
+    Windows. Remove the preserved directory when you no longer need it, because
+    nothing cleans it up (#4606).
+  - E12 review-fix pushes go through `claimed-push` when the helper runtime is
+    available: commit validation or formatter output first, run its dry run,
+    then `--apply` with `--issue` and `--claim-id`, plus `--nonce` when one is
+    recorded. `instructions-only` keeps the normal push after pre-push
+    validation (#4813).
+  - Discover and an explicit target skip an issue that carries the auto-decide
+    confirmation label (`status:needs-confirmation` by default), whatever the
+    auto-decide switches say. If your repository already uses that label for
+    another meaning, set `autoDecide.confirmationLabelName` to another
+    name (#5010).
+  - Claim takeover checks the active claim's session identity first: before
+    `claim-lock --acquire --takeover` the session reads the active claim with
+    `resume-claim-routing` and requires a matching `agent_id`, `claim_id`,
+    recorded nonce winner, and tokens. Pass the session-qualified `--agent-id`
+    to the routing and cleanup helpers (#5053, #5047, #5051).
+  - B1 binds its repository lookups to `origin`: it stops when the repository or
+    host that `gh` resolves differs from `origin`, or when `GH_HOST` names
+    another host. Unset `GH_REPO` before a fresh `claim-issue`, and leave
+    `GH_HOST` unset or equal to the host of `origin` (#5066, #5123).
+  - A fresh claim stops before any claim marker when a local `issue/<n>-*`
+    branch exists that no worktree holds and `origin` lacks
+    (`local-branch-present`). Inspect the branch and reuse or remove it; the
+    exact branch of the latest released claim is claimed first and then attached
+    to a new worktree (#5246, #5259).
+  - A startup failure of the `idd-advisory-convergence` check is recovered once
+    by closing and reopening the pull request on the same head, with no new
+    commit, where v0.17.0 held. If the new run does not succeed the loop still
+    holds, so expect one close and reopen and do not loop reruns (#5243).
+  - Orchestrator sessions resolve a parent-owned scratchpad before Discover,
+    claims, or dispatch from the harness session id and a complete live worker
+    listing, and hold when either is missing or uncertain. They run single-agent
+    only when no launch tool is callable and no launch was attempted, and
+    otherwise recover and hold. The parent may continue after a verified pre-B1
+    worker stop. Make sure the harness supplies a session id and a worker
+    listing (#4690, #4811, #4832, #4868).
+  - The instructions-only F2 shell fallback follows the canonical helper:
+    advisory-bot regular comments stay outstanding until an IDD disposition
+    answers them, a review-thread read that fails or comes back empty exits 2
+    (not converged), and a human thread with no IDD reply is presence-only.
+    Dispose of advisory-bot comments with a one-to-one reply (#4729).
+  - The manual E1 watermark path posts only when HEAD, base, item count, and the
+    newest activity time still match Step 1, and its CI read covers every
+    context page. When anything moved, repeat Step 1 instead of
+    posting (#4733, #4882).
+  - Lite B1 resolves the development branch and stops when the policy reports a
+    diagnostic or `origin` does not list that branch, and lite D3 and D3.5 stop
+    on an unreadable base. Keep `developmentBranch` valid on
+    `origin` (#4784, #4726).
+- Update the orchestrator guidance: provision and recover one parent-owned
+  session scratchpad before fan-out, define the parent-continuation role, and
+  scope foreign scratchpad records (#4690, #4851, #4868).
+- Update the issue-authoring skill: an evidence-backed reason for each hard
+  dependency, a `Question:` line in decision issues, a consumer inventory before
+  a path change, private ledger storage, and verified carrier recovery with
+  mapping budgets and child-intent
+  replacement (#4662, #4728, #4863, #5074, #5100, #5140, plus #5145, #5228).
+- Move the B1 worktree setup details into the new on-demand guide
+  `idd-template/docs/idd-worktree-setup.md`; re-syncing adopters should copy
+  it (#5101). Resolve the default branch from `origin` through a credential-free
+  procedure, and preflight an inherited branch before the claim
+  markers (#5103, #4921).
+- Refine other phase guidance: F2 reads CI freshness the way E1 does,
+  scope-overrun cleanup inventories reusable commits first, a down Pueue daemon
+  is reported without a rerun, a forced-handoff successor may adopt an attached
+  ancestor worktree lock in a verified handoff chain, and the operator-question
+  baseline explains IDD terms (#4931, #5205, #5126, #5111, #4747).
+- Reduce provider reads in `provider-outage-park` and in roadmap
+  audits (#4619, #5176).
+- Update the policy, onboarding, review, claim, authoring, scope-overrun, and
+  helper-reference documentation to match shipped behavior. This covers
+  PRs #4611, #4653, #4656, #4657, #4661, #4682, #4691, #4740, #4776, #4778,
+  plus #4814, #4816, #4844, #4856, #4876, #4882, #4944, #4965, #4984, #5015,
+  and #5025, #5039, #5105, #5130, #5137, #5139, #5162, #5164, #5174, #5190,
+  plus #5196, #5202, #5204, #5249, #5250, #5252, #5253, #5254, #5255, #5259,
+  plus #5282, #5284, #5304, #5310, #5313, #5314, #5322.
+
+### Fixed
+
+- Keep claim, resume, and handoff routing consistent: fresh claims continue B1
+  in their created worktree, verified handoff successors can continue an
+  interrupted rebase, the claim reports a dirty primary worktree before it
+  stops, and the default-branch lookup in B1 is
+  explicit (#4663, #4870, #5048, #5064, #5096).
+- Harden suitability triage: recognize the user as the actor of a manual step,
+  fail closed on ambiguous user and agent assignments, accept singular human
+  recipients, and scan strikethrough delimiters in linear
+  time (#4577, #4604, #4628, #4632).
+- Fix review and advisory evidence handling: neutral CodeRabbit skip notices and
+  wrapped summaries, an idempotent Codex receipt, completed-review recovery
+  routing, workflow-aware CI snapshots, `StatusContext` completion times,
+  unsupported `CheckRun` conclusions, and an E11 pinned to its captured target
+  SHA (#4650, #4652, #4727, #4731, #4806, #4873, plus #4934, #5099).
+- Recognize `npm-shrinkwrap.json` as npm lockfile evidence in the helper runtime
+  and the advisory self-waiver trigger list (#4780, #4785).
+- Fix F4, recovery, and admission edge cases: F4 names a remaining submodule
+  directory, keeps a matching claim after worktree removal, and reports live
+  holders beside an unreadable occupancy record. Recovery stays target-scoped,
+  preserves executable bits under a restrictive umask, and bounds `git clean`
+  arguments and read buffers. Validation slots no longer stay held by detached
+  daemons, and `claimed-push` does not rerun after an unknown admission
+  outcome (#4655, #4689, #4730, #5033, #5038, #5132,
+  plus #5172, #5175, #5232, #5233, #5302, #5309, plus #5311).
+- Read closing references through the pinned GraphQL adapter instead of `gh
+  --json` fields (#4725, #4807, #5023).
+- Fix authoring and marker helpers: closed authoring sets are not reused, anchor
+  release sessions are validated, takeover markers are selected by exact claim
+  id, the merged-PR sweep checks issue-branch PRs with their claim, the
+  `post-idd-marker` schema lists every marker type, and the needs-decision
+  publish lint receives
+  `--origin-issue` (#4677, #4782, #4788, #4815, #4823, #5211).
+- Smaller fixes: runtime guard messages no longer copy the Node range and report
+  `unknown` engines when metadata is missing, adopter workflow templates check
+  the installed Node runtime, the user-global entry shows the user-local
+  launcher on Command Prompt, activation compares concreted local instructions,
+  the lite advisory-wait F3 exclusion follows the resolved merge policy, claimed
+  identity is kept when a PR targets a non-default base, `claimed-push` respects
+  sync-pair modes in scope checks, and the policy schema names the Rule 14
+  verdict `pin-preserved` (#4922, #5107, #5167, #5235, #5028, #5323,
+  plus #4726, #4680, #4850).
+
+### Security
+
+- Refuse `resolve-review-thread --claimless` on a claimed issue branch, and bind
+  claim ownership to a session (#4790, #4954, #5041).
+- Pin the post-merge cleanup workflow's default remote helper, and recommend a
+  reviewed full commit in executable onboarding examples (#4732, #4658).
+- Bind host and read safety in the manual advisory marker examples, and reject
+  execution directives for human-supplied installers, extensions, and
+  executables in suitability triage (#4654, #4687).
+- Bind Windows no-follow reads to held directory handles and tighten a
+  permissive Windows state directory's ACL (#5295, #5325).
+
 ## [0.17.0] - 2026-10-21
 
 Release cut after the policy-documentation and pinned-link tracks.
