@@ -25,10 +25,12 @@ import {
   GhPaginatedResponseLimitError,
   ghApiJson,
   ghApiJsonWithHeaders,
+  ghBytesUnbounded,
   ghGraphql,
   ghText,
   ghTextAsync,
   ghTextUnbounded,
+  RAW_BYTES_TIMEOUT_MS,
   resetGhAuthHostMemo,
   resolveGhApiHostname,
   resolveGhOwnerRepo,
@@ -969,6 +971,11 @@ test('every exported gh api wrapper resolves the GHES host (#3336)', async () =>
       name: 'ghTextUnbounded',
       stdout: `process.stdout.write('{}');`,
       invoke: () => ghTextUnbounded(['api', 'repos/o/r/issues/1']),
+    },
+    {
+      name: 'ghBytesUnbounded',
+      stdout: `process.stdout.write('{}');`,
+      invoke: () => ghBytesUnbounded(['api', 'repos/o/r/issues/1']),
     },
     {
       name: 'ghApiJson',
@@ -4882,4 +4889,76 @@ test('the paginated and GraphQL paths record an unknown status and unknown count
       assert.equal(record.pageCount, 'unknown', name);
     });
   }
+});
+
+test('ghBytesUnbounded returns the exact bytes of a raw response and sends the raw Accept header (#5341)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const fixturePath = join(tempRoot, 'fixture.bin');
+  // Whitespace at both ends and a blank line in the middle would be lost to
+  // a trim, and FF FE 00 would be lost to a text decode.
+  const body = Buffer.concat([
+    Buffer.from('  leading whitespace\n\n'),
+    Buffer.alloc(5 * 1024 * 1024 - 64, 0x61),
+    Buffer.from([0xff, 0xfe, 0x00]),
+    Buffer.from('\n\ntrailing whitespace \n'),
+  ]);
+  writeFileSync(fixturePath, body);
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(fs.readFileSync(${JSON.stringify(fixturePath)}));
+`);
+  try {
+    const bytes = ghBytesUnbounded([
+      'api',
+      'repos/o/r/contents/a.txt?ref=main',
+      '-H',
+      'Accept: application/vnd.github.raw',
+    ]);
+    assert.ok(Buffer.isBuffer(bytes));
+    assert.equal(bytes.equals(body), true);
+    const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+    assert.ok(argv.includes('Accept: application/vnd.github.raw'));
+    assert.equal(argv.includes('--include'), false);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('raw request carries no include flag with telemetry on (#5341)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
+  const argsFile = join(tempRoot, 'args.json');
+  const telemetryPath = join(tempRoot, 'telemetry.jsonl');
+  const restore = stubGh(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+process.stdout.write('raw-body');
+`);
+  try {
+    setGithubApiTelemetryPolicyForTests({
+      enabled: true,
+      maxRecords: 20,
+      path: telemetryPath,
+    });
+    const bytes = ghBytesUnbounded([
+      'api',
+      'repos/o/r/contents/a.txt',
+      '-H',
+      'Accept: application/vnd.github.raw',
+    ]);
+    assert.equal(bytes.toString('utf8'), 'raw-body');
+    const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
+    assert.equal(argv.includes('--include'), false);
+  } finally {
+    restore();
+    setGithubApiTelemetryPolicyForTests(null);
+    resetGithubApiTelemetryPolicyCacheForTests();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('raw helper uses the 300 second timeout (#5341)', () => {
+  assert.equal(RAW_BYTES_TIMEOUT_MS, 300_000);
 });

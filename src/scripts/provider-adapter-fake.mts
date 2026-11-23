@@ -50,6 +50,7 @@ import type {
   ProviderTraversalIssueLookup,
   ProviderUserContentEdit,
   ProviderWorkItem,
+  RepositoryFileBytesOutcome,
 } from './provider-port.mts';
 // kurone-kito/idd-skill#2926: the fake's `listCheckRunWorkflowPaths`
 // default derivation reuses this same run-id extraction so an unconfigured
@@ -176,6 +177,10 @@ export interface FakeProviderFixture {
   /** Backs {@link ProviderPort.getRepositoryFileContentAtRef}, keyed by
    * `${repoRef}/${path}@${ref}`; absent key means `not-found`. */
   repositoryFileContentAtRef?: Record<string, string>;
+  /** Backs {@link ProviderPort.getRepositoryFileBytesAtRef}, keyed by
+   * `${owner}/${repo}/${path}@${ref}` with the unencoded path; absent key
+   * means `not-found`. */
+  repositoryFileBytesAtRef?: Record<string, RepositoryFileBytesOutcome>;
   /** Backs {@link ProviderPort.getTeamMembershipStateSafe}, keyed by
    * `${org}/${teamSlug}/${login}`; absent key means `''`. */
   teamMembershipStates?: Record<string, string>;
@@ -738,6 +743,18 @@ export function createFakeProviderAdapter(
       return value === undefined
         ? { outcome: 'not-found' }
         : { outcome: 'ok', value };
+    },
+
+    getRepositoryFileBytesAtRef(
+      owner: string,
+      repo: string,
+      path: string,
+      ref: string,
+    ): RepositoryFileBytesOutcome {
+      const key = `${owner}/${repo}/${path}@${ref}`;
+      return (
+        fixture.repositoryFileBytesAtRef?.[key] ?? { outcome: 'not-found' }
+      );
     },
 
     getTeamMembershipStateSafe(

@@ -230,6 +230,18 @@ export type ProviderGovernanceReadOutcome<T> =
   | { outcome: 'ok'; value: T }
   | { outcome: 'not-found' };
 
+/**
+ * The outcome of {@link ProviderPort.getRepositoryFileBytesAtRef}. `ok`
+ * carries the exact bytes of a regular file. The other three say why no bytes
+ * were returned, so the caller never mistakes a directory or an oversized file
+ * for an empty one.
+ */
+export type RepositoryFileBytesOutcome =
+  | { outcome: 'ok'; bytes: Buffer }
+  | { outcome: 'not-found' }
+  | { outcome: 'not-a-file' }
+  | { outcome: 'too-large' };
+
 /** Backs {@link ProviderPort.getChangeRequestHeadShaAndAuthor}. */
 export interface ProviderChangeRequestHeadShaAndAuthor {
   headSha: string;
@@ -1012,6 +1024,21 @@ export interface ProviderPort {
     path: string,
     ref: string,
   ): ProviderGovernanceReadOutcome<string>;
+
+  /**
+   * The exact bytes of a repository file at a ref. Reads through the raw media
+   * type, because the base64 `content` in the object form is truncated for
+   * some files above about 1 MB. `path` is the unencoded repository path. The
+   * outcome is classified before any raw request: `not-found`, `not-a-file`
+   * (directory, symlink, submodule), or `too-large` (above 104,857,600 bytes)
+   * are returned with no second request. A failed read throws.
+   */
+  getRepositoryFileBytesAtRef(
+    owner: string,
+    repo: string,
+    path: string,
+    ref: string,
+  ): RepositoryFileBytesOutcome;
 
   /**
    * permissions. `orgs/{org}/teams/{slug}/memberships/{login}` `--jq

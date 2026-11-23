@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -79,6 +80,9 @@ function fakeDeps(
     },
     ghTextAsync: () => {
       throw new Error('ghTextAsync not stubbed for this test');
+    },
+    ghBytesUnbounded: () => {
+      throw new Error('ghBytesUnbounded not stubbed for this test');
     },
     // No-op by default so a test exercising postWorkItemComment's retry
     // path (#2460) never actually sleeps; override per-test to assert on
@@ -7473,5 +7477,231 @@ test('getRepositoryContentAtRef returns null on a genuine 404 through the buffer
       'a'.repeat(40),
     ),
     null,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// getRepositoryFileBytesAtRef (#5341): metadata classification, the size
+// limit, the raw read, and the git blob hash check.
+
+function blobSha(bytes: Buffer): string {
+  return createHash('sha1')
+    .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+    .update(bytes)
+    .digest('hex');
+}
+
+function fileMetadataText(
+  bytes: Buffer,
+  overrides: Record<string, unknown> = {},
+): string {
+  return JSON.stringify({
+    type: 'file',
+    size: bytes.length,
+    sha: blobSha(bytes),
+    ...overrides,
+  });
+}
+
+function missingPathError(): Error {
+  const error = new Error('HTTP 404') as Error & { stderr?: string };
+  error.stderr = 'gh: Not Found (HTTP 404)';
+  return error;
+}
+
+test('getRepositoryFileBytesAtRef returns the exact bytes when the blob hash matches (#5341)', () => {
+  const bytes = Buffer.concat([
+    Buffer.from('  exact\n\nbytes '),
+    Buffer.from([0xff, 0xfe, 0x00]),
+    Buffer.from(' \n'),
+  ]);
+  let rawArgs: readonly string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => fileMetadataText(bytes),
+      ghBytesUnbounded: (args) => {
+        rawArgs = [...args];
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'dir/a.txt', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.ok(rawArgs.includes('Accept: application/vnd.github.raw'));
+});
+
+test('getRepositoryFileBytesAtRef encodes each path segment in both requests (#5341)', () => {
+  const bytes = Buffer.from('x');
+  const calls: string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args[1] ?? '');
+        return fileMetadataText(bytes);
+      },
+      ghBytesUnbounded: (args) => {
+        calls.push(args[1] ?? '');
+        return bytes;
+      },
+    }),
+  );
+  port.getRepositoryFileBytesAtRef('o', 'r', 'a?b#c/d e.txt', 'main');
+  assert.deepEqual(calls, [
+    'repos/o/r/contents/a%3Fb%23c/d%20e.txt?ref=main',
+    'repos/o/r/contents/a%3Fb%23c/d%20e.txt?ref=main',
+  ]);
+});
+
+test('getRepositoryFileBytesAtRef returns not-found for a missing path, with no raw request (#5341)', () => {
+  let rawCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw missingPathError();
+      },
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'missing.txt', 'main'),
+    { outcome: 'not-found' },
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef returns not-a-file for a listing, symlink, or submodule, with no raw request (#5341)', () => {
+  const metadataTexts = [
+    '[]',
+    JSON.stringify({ type: 'symlink', size: 0, sha: 'a'.repeat(40) }),
+    JSON.stringify({ type: 'submodule', size: 0, sha: 'a'.repeat(40) }),
+  ];
+  for (const metadataText of metadataTexts) {
+    let rawCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => metadataText,
+        ghBytesUnbounded: () => {
+          rawCalls += 1;
+          return Buffer.alloc(0);
+        },
+      }),
+    );
+    assert.deepEqual(
+      port.getRepositoryFileBytesAtRef('o', 'r', 'p', 'main'),
+      { outcome: 'not-a-file' },
+      metadataText,
+    );
+    assert.equal(rawCalls, 0, metadataText);
+  }
+});
+
+test('getRepositoryFileBytesAtRef applies the 104,857,600-byte limit exactly (#5341)', () => {
+  const bytes = Buffer.from('limit');
+  let rawCalls = 0;
+  const atLimit = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => fileMetadataText(bytes, { size: 104_857_600 }),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    atLimit.getRepositoryFileBytesAtRef('o', 'r', 'big.bin', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.equal(rawCalls, 1);
+
+  rawCalls = 0;
+  const overLimit = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => fileMetadataText(bytes, { size: 104_857_601 }),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    overLimit.getRepositoryFileBytesAtRef('o', 'r', 'big.bin', 'main'),
+    { outcome: 'too-large' },
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef throws on file metadata without a numeric size or a string sha, with no raw request (#5341)', () => {
+  const badEntries = [
+    JSON.stringify({ type: 'file', sha: 'a'.repeat(40) }),
+    JSON.stringify({ type: 'file', size: '5', sha: 'a'.repeat(40) }),
+    JSON.stringify({ type: 'file', size: 5 }),
+  ];
+  for (const metadataText of badEntries) {
+    let rawCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => metadataText,
+        ghBytesUnbounded: () => {
+          rawCalls += 1;
+          return Buffer.alloc(0);
+        },
+      }),
+    );
+    assert.throws(
+      () => port.getRepositoryFileBytesAtRef('o', 'r', 'f', 'main'),
+      Error,
+      metadataText,
+    );
+    assert.equal(rawCalls, 0, metadataText);
+  }
+});
+
+test('getRepositoryFileBytesAtRef throws when the raw request fails (#5341)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => fileMetadataText(Buffer.from('x')),
+      ghBytesUnbounded: () => {
+        throw missingPathError();
+      },
+    }),
+  );
+  assert.throws(() => port.getRepositoryFileBytesAtRef('o', 'r', 'f', 'main'));
+});
+
+test('getRepositoryFileBytesAtRef throws, naming the path, when the blob hash differs from the metadata sha (#5341)', () => {
+  const stored = Buffer.from('stored bytes');
+  const served = Buffer.from('served bytes');
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => fileMetadataText(stored),
+      ghBytesUnbounded: () => served,
+    }),
+  );
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'dir/served.txt', 'main'),
+    /dir\/served\.txt/,
   );
 });

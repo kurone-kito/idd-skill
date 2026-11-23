@@ -10,10 +10,12 @@
 // built from. `gh` invocation is an implementation detail of this module;
 // domain helpers never see it.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
+  ghBytesUnbounded,
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
   ghTextAsync,
@@ -2452,11 +2454,14 @@ const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
 // 729 KB at the base for tests/pre-merge-readiness.test.mts) can exceed
 // Node's 1 MiB default. 4 MiB covers that envelope with headroom.
 const CONTENTS_READ_MAX_BUFFER = 4 * 1024 * 1024;
+/** The largest file whose exact bytes {@link getRepositoryFileBytesAtRef} reads. */
+const RAW_FILE_BYTES_LIMIT = 104_857_600;
 const DEFAULT_DEPS = {
   ghText,
   ghApiJson,
   resolveViewerLogin: ghExecResolveViewerLogin,
   ghTextAsync,
+  ghBytesUnbounded,
   sleepSync,
   now: Date.now,
 };
@@ -3391,6 +3396,71 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         }
         throw error;
       }
+    },
+    getRepositoryFileBytesAtRef(owner, repo, path, ref) {
+      // Encode each segment, as getRepositoryFileContentAtRef does, so a name
+      // such as `a?b#c` stays in the path instead of starting a query.
+      const encodedPath = path
+        .split('/')
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+      const endpoint = `repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
+      // Metadata first: the object form, with the default media type and no
+      // Accept header. It names the entry type, size, and blob sha.
+      let metadataText;
+      try {
+        metadataText = deps.ghText(['api', endpoint], {
+          ...GH_TEXT_LOOP_OPTIONS,
+          maxBuffer: CONTENTS_READ_MAX_BUFFER,
+        });
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return { outcome: 'not-found' };
+        }
+        throw error;
+      }
+      const metadata = JSON.parse(metadataText);
+      // A JSON array is a directory listing, not a file.
+      if (Array.isArray(metadata)) {
+        return { outcome: 'not-a-file' };
+      }
+      if (typeof metadata !== 'object' || metadata === null) {
+        throw new Error(`contents metadata for ${path} is not an object`);
+      }
+      const entry = metadata;
+      if (entry.type !== 'file') {
+        return { outcome: 'not-a-file' };
+      }
+      if (typeof entry.size !== 'number' || !Number.isFinite(entry.size)) {
+        throw new Error(`file metadata for ${path} has no numeric size`);
+      }
+      if (typeof entry.sha !== 'string') {
+        throw new Error(`file metadata for ${path} has no string sha`);
+      }
+      if (entry.size > RAW_FILE_BYTES_LIMIT) {
+        return { outcome: 'too-large' };
+      }
+      // The raw request is sent only after the size check passes.
+      const bytes = deps.ghBytesUnbounded([
+        'api',
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github.raw',
+      ]);
+      // The git blob hash is SHA-1 over `blob <byte length>`, a NUL byte, and
+      // the content. The metadata sha must match it, or the bytes are not the
+      // stored file. This relies on the contents API reporting the blob hash
+      // as `sha`, which this repository does not verify against the live API.
+      const blobHash = createHash('sha1')
+        .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+        .update(bytes)
+        .digest('hex');
+      if (blobHash !== entry.sha) {
+        throw new Error(
+          `raw contents of ${path} do not match the metadata blob sha`,
+        );
+      }
+      return { outcome: 'ok', bytes };
     },
     getTeamMembershipStateSafe(org, teamSlug, login) {
       return safeGhTextLocal(
