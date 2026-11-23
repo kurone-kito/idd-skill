@@ -1331,16 +1331,39 @@ function readScopeOverrunSyncTargets(
 
 function decodeScopeOverrunBase64(value: string, path: string): string {
   const encoded = value.replace(/\s/gu, '');
-  if (
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
-      encoded,
-    )
-  ) {
+  if (!isStandardBase64(encoded)) {
     throw new Error(
       `scope-overrun audit received malformed base64 for ${path}`,
     );
   }
   return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+/**
+ * Accepts standard base64 whose length is a multiple of four, with `=` padding
+ * only at the end. This is a loop rather than a regular expression: a pattern
+ * with a repeated group overflows V8's stack on multi-megabyte input (#5342).
+ */
+function isStandardBase64(encoded: string): boolean {
+  if (encoded.length % 4 !== 0) {
+    return false;
+  }
+  let body = encoded;
+  if (body.endsWith('==')) {
+    body = body.slice(0, -2);
+  } else if (body.endsWith('=')) {
+    body = body.slice(0, -1);
+  }
+  for (let index = 0; index < body.length; index += 1) {
+    const code = body.charCodeAt(index);
+    const isDigit = code >= 48 && code <= 57;
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    if (!isDigit && !isUpper && !isLower && code !== 43 && code !== 47) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function compareUtf8(left: string, right: string): number {

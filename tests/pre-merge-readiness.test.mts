@@ -1297,6 +1297,20 @@ test('a higher-priority CODEOWNERS file stops the read, so a truncated root list
   assert.equal(report.repositoryFileBlockers, undefined);
 });
 
+test('a 5 MiB base file reaches the scope audit without overflowing the base64 check (#5342)', () => {
+  // The scope audit decodes each changed path's base content. A regular
+  // expression with a repeated group overflows the stack on input this long.
+  const text = 'export const value = 1;\n'.repeat(
+    Math.ceil((5 * 1024 * 1024) / 24),
+  );
+  const content = Buffer.from(text, 'utf8').toString('base64');
+  const { report } = collectScopeOverrunWithBaseEntries(
+    { 'src/big.mts': { type: 'file', content } },
+    ['src/listed.mts', 'src/big.mts'],
+  );
+  assert.equal(report.repositoryFileBlockers, undefined);
+});
+
 test('a sync manifest that is not found keeps the empty set, with no blocker (#5342)', () => {
   const { report, keyedReads } = collectScopeOverrunWithBaseEntries(
     { 'audit/sync-manifest.json': null },
