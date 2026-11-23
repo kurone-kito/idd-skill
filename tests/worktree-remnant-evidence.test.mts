@@ -1283,6 +1283,124 @@ test('condition 5 is unmet when a directory that could count cannot be resolved'
   assert.equal(other.status, 'clear');
 });
 
+/** A record whose read of one field throws, over a copy of a valid record. */
+function throwingRecord(
+  base: WindowsProcessRecord,
+  field: keyof WindowsProcessRecord,
+): WindowsProcessRecord {
+  return Object.defineProperty({ ...base }, field, {
+    enumerable: true,
+    get(): never {
+      throw new Error(`a getter that throws: ${field}`);
+    },
+  });
+}
+
+test('condition 5 treats a record whose getter throws as malformed and keeps scanning', () => {
+  const fields: Array<keyof WindowsProcessRecord> = [
+    'pid',
+    'kind',
+    'bitness',
+    'directory',
+    'reason',
+    'ownerSid',
+  ];
+  for (const field of fields) {
+    // A throwing record before a live match: both are reported.
+    const before = inspectProcessDirectories(
+      winProc([
+        throwingRecord(winRecord(10), field),
+        winRecord(20, { directory: WIN_INSIDE }),
+      ]),
+      [WIN_ROOT],
+    );
+    assert.equal(before.status, 'match', field);
+    assert.deepEqual(before.matches, [{ pid: 20, cwd: WIN_INSIDE }], field);
+    assert.match(before.detail, /^process 20 has its working directory at /);
+    assert.match(
+      before.detail,
+      /1 process\(es\) could not be classified, the first: record 0 could not be read \(reason malformed\)/,
+      field,
+    );
+    // Alone, it is a malformed error and not an exception.
+    const alone = inspectProcessDirectories(
+      winProc([throwingRecord(winRecord(10), field)]),
+      [WIN_ROOT],
+    );
+    assert.equal(alone.status, 'error', field);
+    assert.match(
+      alone.detail,
+      /record 0 could not be read \(reason malformed\)/,
+      field,
+    );
+  }
+  // A record that throws on any read at all, and an element that cannot be
+  // read from the list.
+  const proxy = new Proxy(
+    {},
+    {
+      get(): never {
+        throw new Error('a proxy that throws');
+      },
+    },
+  );
+  const list: unknown[] = [
+    winRecord(10),
+    winRecord(30, { directory: WIN_ROOT }),
+  ];
+  Object.defineProperty(list, 0, {
+    enumerable: true,
+    get(): never {
+      throw new Error('an element that throws');
+    },
+  });
+  for (const records of [
+    [proxy, winRecord(30, { directory: WIN_ROOT })],
+    list,
+  ]) {
+    const result = inspectProcessDirectories(winProc(records), [WIN_ROOT]);
+    assert.equal(result.status, 'match');
+    assert.deepEqual(result.matches, [{ pid: 30, cwd: WIN_ROOT }]);
+    assert.match(
+      result.detail,
+      /record 0 could not be read \(reason malformed\)/,
+    );
+  }
+  // An entry that is not an object keeps its own text.
+  const hole = inspectProcessDirectories(winProc([undefined]), [WIN_ROOT]);
+  assert.equal(hole.status, 'error');
+  assert.match(
+    hole.detail,
+    /record 0 is not a process record \(reason malformed\)/,
+  );
+});
+
+test('condition 5 reads each field of a record once', () => {
+  const reads: Record<string, number> = {};
+  const counted: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(
+    winRecord(40, { directory: WIN_INSIDE }),
+  )) {
+    Object.defineProperty(counted, field, {
+      enumerable: true,
+      get() {
+        reads[field] = (reads[field] ?? 0) + 1;
+        return value;
+      },
+    });
+  }
+  const result = inspectProcessDirectories(winProc([counted]), [WIN_ROOT]);
+  assert.equal(result.status, 'match');
+  assert.deepEqual(reads, {
+    pid: 1,
+    kind: 1,
+    bitness: 1,
+    directory: 1,
+    reason: 1,
+    ownerSid: 1,
+  });
+});
+
 test('condition 5 takes only owner SIDs in the SID form', () => {
   // The canonical form is upper case only, and the pattern enforces it.
   const lowerCurrent = inspectProcessDirectories(
