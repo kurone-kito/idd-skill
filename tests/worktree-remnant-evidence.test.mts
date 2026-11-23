@@ -1235,13 +1235,15 @@ test('condition 5 compares the resolved path of a directory and a root', () => {
     [WIN_ROOT],
   );
   assert.equal(viaDirectory.status, 'match');
-  const unresolved = inspectProcessDirectories(
-    winProc([winRecord(7, { directory: 'C:\\gone\\dir' })], {
-      realpath: () => null,
+  // A directory that resolves to nothing is the next test's concern, and a
+  // directory that resolves to another place is outside every root.
+  const elsewhere = inspectProcessDirectories(
+    winProc([winRecord(7, { directory: 'C:\\alias\\src' })], {
+      realpath: (path) => (path === 'C:\\alias\\src' ? WIN_OUTSIDE : path),
     }),
     [WIN_ROOT],
   );
-  assert.equal(unresolved.status, 'clear');
+  assert.equal(elsewhere.status, 'clear');
 });
 
 test('condition 5 resolves a directory only when the lexical path misses', () => {
@@ -1281,6 +1283,80 @@ test('condition 5 is unmet when a directory that could count cannot be resolved'
     [WIN_ROOT],
   );
   assert.equal(other.status, 'clear');
+});
+
+test('condition 5 is unmet for a live current-user record whose directory cannot be resolved', () => {
+  // The root resolves; every other path resolves to nothing.
+  const rootOnly = (path: string): string | null =>
+    path === WIN_ROOT ? path : null;
+  for (const ownerSid of [USER_SID, null]) {
+    const result = inspectProcessDirectories(
+      winProc([winRecord(9, { ownerSid })], { realpath: rootOnly }),
+      [WIN_ROOT],
+    );
+    assert.equal(result.status, 'error', String(ownerSid));
+    assert.match(result.detail, /process 9 could not be resolved/);
+    assert.match(result.detail, /reason unresolvable.*does not resolve/);
+    assert.deepEqual(result.matches, []);
+  }
+  // Another account's record with the same directory stays ignored.
+  const other = inspectProcessDirectories(
+    winProc([winRecord(9, { ownerSid: OTHER_SID })], { realpath: rootOnly }),
+    [WIN_ROOT],
+  );
+  assert.equal(other.status, 'clear');
+  assert.equal(other.otherUsers, 0);
+  // A lexical match is decided before any resolution, so a resolution that
+  // returns nothing cannot hide it.
+  const lexical = inspectProcessDirectories(
+    winProc([winRecord(9, { directory: WIN_INSIDE })], { realpath: rootOnly }),
+    [WIN_ROOT],
+  );
+  assert.equal(lexical.status, 'match');
+  // A match still wins the status, and the detail names the first error.
+  const both = inspectProcessDirectories(
+    winProc([winRecord(9), winRecord(10, { directory: WIN_INSIDE })], {
+      realpath: rootOnly,
+    }),
+    [WIN_ROOT],
+  );
+  assert.equal(both.status, 'match');
+  assert.match(
+    both.detail,
+    /1 process\(es\) could not be classified, the first: .*process 9 could not be resolved/,
+  );
+  // Only a record's directory fails. A root that resolves to nothing is
+  // compared by its lexical form alone: a directory that resolves to itself
+  // outside it is clear, and one lexically inside it still matches.
+  const nullRootPorts = {
+    realpath: (path: string): string | null =>
+      path === WIN_ROOT ? null : path,
+  };
+  const nullRoot = inspectProcessDirectories(
+    winProc([winRecord(11)], nullRootPorts),
+    [WIN_ROOT],
+  );
+  assert.equal(nullRoot.status, 'clear');
+  const nullRootMatch = inspectProcessDirectories(
+    winProc([winRecord(12, { directory: WIN_INSIDE })], nullRootPorts),
+    [WIN_ROOT],
+  );
+  assert.equal(nullRootMatch.status, 'match');
+  // The condition is unmet through the evidence report as well.
+  const report = newEvidenceReport();
+  const { ports: walk } = virtualWalk({ '/wt': old({ isDirectory: true }) });
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: winProc([winRecord(9)], { realpath: rootOnly }),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt'],
+    [WIN_ROOT],
+    HOUR,
+  );
+  assert.equal(report.conditions[4]?.status, 'unmet');
 });
 
 /** A record whose read of one field throws, over a copy of a valid record. */

@@ -1255,7 +1255,12 @@ against an unrelated branch, and none has an observed incident of its own
       32-bit process, of any owner, fails the condition because its directory
       is not read (the operator hearing of 2026-11-23, issue `#5347`). A
       process whose open is refused (access denied) is a denied record with
-      no bitness, so the denied rule decides it. Another platform fails. A
+      no bitness, so the denied rule decides it. A live record of the current
+      user, or with an unreadable owner, whose directory is not lexically
+      inside the worktree and whose resolution returns nothing also fails the
+      condition, because a drive letter is scoped to a logon session (Linux
+      ignores such a directory; another account's record is ignored on both;
+      preventive, no observed incident yet). Another platform fails. A
       process of another user is not counted. A process that denies the read
       is listed as not inspected and does not refuse; on Windows that covers
       a denied record of the current user, of LocalSystem, or with an

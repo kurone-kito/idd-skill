@@ -592,9 +592,13 @@ function recordShapeProblem(record) {
  * - `error`: an error with the reader's own reason.
  *
  * The lexical path is compared first and the resolved path only on a miss, so a
- * failed resolution cannot hide a lexical match. A resolution that throws is an
- * error for a record that could count, and ignored for another account's
- * record, which can never change the status (reason `unresolvable`). Anything
+ * failed resolution cannot hide a lexical match. A resolution that throws, or
+ * that returns nothing, is an error for a record that could count (the current
+ * user, or an unreadable owner), and ignored for another account's record,
+ * which can never change the status (reason `unresolvable`). Linux ignores a
+ * directory that resolves to nothing; Windows does not, because a drive letter
+ * is scoped to a logon session and can name nothing in this one. A root that
+ * resolves to nothing is still compared by its lexical form alone. Anything
  * outside the reader's documented shape is an error (reason `malformed`), as is
  * a missing or throwing reader (reason `error`) and a record whose fields
  * cannot be read: the ports are injected, so the evaluator does not trust the
@@ -760,7 +764,20 @@ function inspectWindowsProcessRecords(ports, roots) {
         }
         continue;
       }
-      inside = real !== null && insideTargets(real);
+      if (real === null) {
+        // Windows scopes a drive letter (SUBST, a network mapping) to a logon
+        // session, so a process can work inside a root under a letter that
+        // this session maps elsewhere or not at all. A directory that could
+        // count and cannot be placed does not clear the condition, unlike on
+        // Linux. Another account's record can never change the status.
+        if (!other) {
+          errors.push(
+            `the working directory of process ${pid} could not be resolved (reason unresolvable): the path does not resolve`,
+          );
+        }
+        continue;
+      }
+      inside = insideTargets(real);
     }
     if (!inside) continue;
     if (other) {

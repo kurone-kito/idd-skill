@@ -7785,9 +7785,15 @@ that runs it is
      first and then by the resolved form of a directory and of each root. A root
      that is not a full drive or UNC path as written, a directory of the current
      user (or with an unreadable owner) that is not a full path, and a root or
-     such a directory whose resolution throws fail the condition; a resolution
-     that returns nothing is ignored, as on Linux. A match wins the status, and
-     the detail also names the first error. On a platform where the check cannot
+     such a directory whose resolution throws fail the condition. A resolution
+     that returns nothing also fails it (reason `unresolvable`) for the
+     directory of such a record that is not lexically inside a root, unlike on
+     Linux, because Windows scopes a drive letter to a logon session and the
+     directory can name nothing in this one; another account's record stays
+     ignored, and a root whose resolution returns nothing is compared by its
+     lexical form alone (preventive; no observed incident yet). A match wins the
+     status, and the detail also names the first error. On a platform where the
+     check cannot
      run, or where the current user is unknown, the condition fails. Finding no
      process is only the absence of a known use.
   6. The confirmation issue and decision match a trusted record read through
