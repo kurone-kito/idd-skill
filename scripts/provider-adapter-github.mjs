@@ -3429,22 +3429,29 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       if (!Array.isArray(listing)) {
         throw new Error(`directory listing for ${path} is not an array`);
       }
-      // The contents API returns at most 1000 entries for a directory. A
-      // listing that long may have dropped the entry, so fail closed.
-      if (listing.length >= 1000) {
-        throw new Error(
-          `directory listing for ${path} may be truncated at 1000 entries`,
-        );
-      }
       const match = listing.find(
         (item) =>
           typeof item === 'object' && item !== null && item.name === name,
       );
       if (match === undefined) {
+        // The contents API returns at most 1000 entries for a directory. A
+        // listing that long may have dropped the entry, so an absent name is
+        // inconclusive there and fails closed. A listed entry carries its own
+        // type, size, and sha, so it is usable at any length.
+        if (listing.length >= 1000) {
+          throw new Error(
+            `directory listing for ${path} may be truncated at 1000 entries`,
+          );
+        }
         return { outcome: 'not-found' };
       }
       const entry = match;
-      if (entry.type !== 'file') {
+      // GitHub can list a submodule as a file for backward compatibility, and
+      // names it with submodule_git_url. Such an entry is not a file.
+      if (
+        entry.type !== 'file' ||
+        typeof entry.submodule_git_url === 'string'
+      ) {
         return { outcome: 'not-a-file' };
       }
       if (typeof entry.size !== 'number' || !Number.isFinite(entry.size)) {

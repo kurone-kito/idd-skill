@@ -7722,12 +7722,30 @@ test('getRepositoryFileBytesAtRef throws on a file entry without a numeric size 
   }
 });
 
-test('getRepositoryFileBytesAtRef fails closed when the directory listing may be truncated (#5341)', () => {
+test('getRepositoryFileBytesAtRef reads a listed entry from a 1000-entry listing, and fails closed on an absent name (#5341)', () => {
   const entries = Array.from({ length: 1000 }, (_, index) =>
     listingEntry(`f${index}.txt`, Buffer.from(`${index}`)),
   );
   let rawCalls = 0;
-  const port = createGithubProviderAdapter(
+  const present = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText(entries),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.from('1');
+      },
+    }),
+  );
+  assert.deepEqual(
+    present.getRepositoryFileBytesAtRef('o', 'r', 'f1.txt', 'main'),
+    { outcome: 'ok', bytes: Buffer.from('1') },
+  );
+  assert.equal(rawCalls, 1);
+
+  rawCalls = 0;
+  const absent = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
@@ -7739,7 +7757,36 @@ test('getRepositoryFileBytesAtRef fails closed when the directory listing may be
     }),
   );
   assert.throws(() =>
-    port.getRepositoryFileBytesAtRef('o', 'r', 'f1.txt', 'main'),
+    absent.getRepositoryFileBytesAtRef('o', 'r', 'not-listed.txt', 'main'),
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef returns not-a-file for a submodule that GitHub lists as a file (#5341)', () => {
+  let rawCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        listingText([
+          {
+            name: 'vendor',
+            type: 'file',
+            size: 0,
+            sha: 'a'.repeat(40),
+            submodule_git_url: 'https://example.com/vendor.git',
+          },
+        ]),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'vendor', 'main'),
+    { outcome: 'not-a-file' },
   );
   assert.equal(rawCalls, 0);
 });
