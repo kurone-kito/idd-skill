@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import {
   chmodSync,
   linkSync,
@@ -23,6 +25,7 @@ import type {
   TrustedAutoDecideReport,
   TrustedAutoDecideSnapshot,
 } from '../src/scripts/idd-config.mts';
+import type { WindowsProcessRecord } from '../src/scripts/windows-process-cwd.mts';
 import {
   canonicalSubject,
   claimBasisProblem,
@@ -34,6 +37,7 @@ import {
   evidenceBasisProblem,
   inspectProcessDirectories,
   isDecisionIdText,
+  isWithinWin32Root,
   MINIMUM_STALE_AGE_MS,
   newEvidenceReport,
   type ProcPorts,
@@ -678,8 +682,8 @@ test('inspectProcessDirectories: an unreadable /proc fails the condition', () =>
   assert.equal(result.status, 'error');
 });
 
-test('inspectProcessDirectories: a platform without /proc fails the condition', () => {
-  for (const platform of ['darwin', 'win32', 'freebsd'] as const) {
+test('inspectProcessDirectories: a platform with neither /proc nor the Windows reader fails the condition', () => {
+  for (const platform of ['darwin', 'freebsd'] as const) {
     const result = inspectProcessDirectories(
       virtualProc({ '5': '/elsewhere' }, { platform }),
       ['/repo/wt'],
@@ -705,6 +709,803 @@ test('inspectProcessDirectories: the production reader sees this process', {
     inspectProcessDirectories(ports, [realpathSync(process.cwd())]).status,
     'match',
   );
+});
+
+// ---------------------------------------------------------------------------
+// Condition 5 on Windows: classification of the batch reader's records
+// ---------------------------------------------------------------------------
+
+const USER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1001';
+const OTHER_SID = 'S-1-5-21-1000000001-2000000002-3000000003-1002';
+const SYSTEM_SID = 'S-1-5-18';
+const WIN_ROOT = 'C:\\repo\\wt';
+const WIN_INSIDE = 'C:\\repo\\wt\\src';
+const WIN_OUTSIDE = 'C:\\elsewhere\\work';
+
+/** A live 64-bit process of the current user outside the root, by default. */
+function winRecord(
+  pid: number,
+  overrides: Partial<WindowsProcessRecord> = {},
+): WindowsProcessRecord {
+  return {
+    pid,
+    kind: 'live',
+    bitness: 64,
+    ownerSid: USER_SID,
+    directory: WIN_OUTSIDE,
+    reason: null,
+    ...overrides,
+  };
+}
+
+/** A denied record, as the reader writes it: no bitness, no directory. */
+function deniedRecord(
+  pid: number,
+  ownerSid: string | null,
+): WindowsProcessRecord {
+  return winRecord(pid, {
+    kind: 'denied',
+    bitness: null,
+    ownerSid,
+    directory: null,
+  });
+}
+
+/** A denied record that also carries a field the reader never sets on one. */
+function deniedRecordWith(
+  pid: number,
+  overrides: Partial<WindowsProcessRecord>,
+): WindowsProcessRecord {
+  return { ...deniedRecord(pid, USER_SID), ...overrides };
+}
+
+/** A 32-bit record: live, no directory. */
+function wow64Record(pid: number, ownerSid: string | null = USER_SID) {
+  return winRecord(pid, { bitness: 32, ownerSid, directory: null });
+}
+
+function errorRecord(pid: number, reason: string): WindowsProcessRecord {
+  return winRecord(pid, {
+    kind: 'error',
+    bitness: null,
+    ownerSid: null,
+    directory: null,
+    reason,
+  });
+}
+
+function exitedRecord(pid: number): WindowsProcessRecord {
+  return winRecord(pid, {
+    kind: 'exited',
+    bitness: null,
+    ownerSid: null,
+    directory: null,
+  });
+}
+
+/** Ports for `win32`: the Linux members throw, because they are not used. */
+function winProc(
+  records: unknown,
+  extra: Partial<ProcPorts> = {},
+  currentSid: unknown = USER_SID,
+): ProcPorts {
+  const unused = (): never => {
+    throw new Error('the Linux process members are not used on win32');
+  };
+  return {
+    platform: 'win32',
+    listPids: unused,
+    readCwd: unused,
+    ownerUid: unused,
+    currentUid: null,
+    realpath: (path) => path,
+    readWindowsProcesses: () =>
+      ({ currentSid, records }) as ReturnType<
+        NonNullable<ProcPorts['readWindowsProcesses']>
+      >,
+    ...extra,
+  };
+}
+
+test('condition 5 fails and lists a live match from fake records', () => {
+  const result = inspectProcessDirectories(
+    winProc([
+      winRecord(10),
+      winRecord(20, { directory: WIN_INSIDE }),
+      winRecord(30, { directory: WIN_ROOT }),
+    ]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'match');
+  assert.deepEqual(result.matches, [
+    { pid: 20, cwd: WIN_INSIDE },
+    { pid: 30, cwd: WIN_ROOT },
+  ]);
+  assert.match(result.detail, /^process 20 has its working directory at /);
+  assert.match(result.detail, /\(and 1 more\)/);
+  const report = newEvidenceReport();
+  const { ports: walk } = virtualWalk({ '/wt': old({ isDirectory: true }) });
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: winProc([winRecord(20, { directory: WIN_INSIDE })]),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt'],
+    [WIN_ROOT],
+    HOUR,
+  );
+  assert.equal(report.conditions[4]?.status, 'unmet');
+});
+
+test('condition 5 keeps its status for a denied current-user record', () => {
+  const result = inspectProcessDirectories(
+    winProc([deniedRecord(40, USER_SID), winRecord(41)]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'clear');
+  assert.deepEqual(result.notInspected, {
+    count: 1,
+    sample: [{ pid: 40, reason: 'denied' }],
+  });
+  assert.match(result.detail, /1 process\(es\) denied the read/);
+});
+
+test('condition 5 lists a denied LocalSystem record as not inspected', () => {
+  const result = inspectProcessDirectories(
+    winProc([deniedRecord(4, SYSTEM_SID)]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'clear');
+  assert.deepEqual(result.notInspected, {
+    count: 1,
+    sample: [{ pid: 4, reason: 'denied' }],
+  });
+});
+
+test('condition 5 keeps its status for a denied record with unreadable owner', () => {
+  const result = inspectProcessDirectories(winProc([deniedRecord(50, null)]), [
+    WIN_ROOT,
+  ]);
+  assert.equal(result.status, 'clear');
+  assert.equal(result.notInspected.count, 1);
+  assert.deepEqual(result.notInspected.sample, [{ pid: 50, reason: 'denied' }]);
+});
+
+test('condition 5 skips a denied record of another account', () => {
+  const result = inspectProcessDirectories(
+    winProc([deniedRecord(60, OTHER_SID)]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'clear');
+  assert.equal(result.notInspected.count, 0);
+});
+
+test('condition 5 lists denied records up to the cap, with an exact count', () => {
+  const records: WindowsProcessRecord[] = [];
+  for (let pid = 1; pid <= 120; pid += 1) records.push(deniedRecord(pid, null));
+  const result = inspectProcessDirectories(winProc(records), [WIN_ROOT]);
+  assert.equal(result.notInspected.count, 120);
+  assert.equal(result.notInspected.sample.length, 50);
+});
+
+test('condition 5 counts a live record of another account', () => {
+  const inside = inspectProcessDirectories(
+    winProc([winRecord(70, { ownerSid: OTHER_SID, directory: WIN_INSIDE })]),
+    [WIN_ROOT],
+  );
+  assert.equal(inside.status, 'clear');
+  assert.equal(inside.otherUsers, 1);
+  assert.deepEqual(inside.matches, []);
+  assert.match(
+    inside.detail,
+    /1 process\(es\) of other users are there and are not counted/,
+  );
+  const outside = inspectProcessDirectories(
+    winProc([winRecord(71, { ownerSid: OTHER_SID })]),
+    [WIN_ROOT],
+  );
+  assert.equal(outside.otherUsers, 0);
+});
+
+test('condition 5 is unmet for a live record with unreadable owner', () => {
+  const inside = inspectProcessDirectories(
+    winProc([winRecord(80, { ownerSid: null, directory: WIN_INSIDE })]),
+    [WIN_ROOT],
+  );
+  assert.equal(inside.status, 'error');
+  assert.match(inside.detail, /owner of process 80 could not be read/);
+  assert.match(inside.detail, /reason owner-unreadable/);
+  const outside = inspectProcessDirectories(
+    winProc([winRecord(81, { ownerSid: null })]),
+    [WIN_ROOT],
+  );
+  assert.equal(outside.status, 'clear');
+});
+
+test('condition 5 is unmet for a 32-bit process', () => {
+  for (const owner of [USER_SID, OTHER_SID, SYSTEM_SID, null]) {
+    const result = inspectProcessDirectories(
+      winProc([wow64Record(90, owner)]),
+      [WIN_ROOT],
+    );
+    assert.equal(result.status, 'error', String(owner));
+    assert.match(result.detail, /process 90 is a 32-bit process/);
+    assert.match(result.detail, /reason wow64/);
+  }
+});
+
+test('condition 5 is unmet for a 32-bit process outside every root', () => {
+  // The reader gives a 32-bit record no directory, so "outside" holds by
+  // construction: the record cannot be placed in any root, and still fails.
+  const result = inspectProcessDirectories(
+    winProc([winRecord(91), wow64Record(92), winRecord(93)]),
+    [WIN_ROOT, 'C:\\other\\wt'],
+  );
+  assert.equal(result.status, 'error');
+  assert.match(result.detail, /process 92 /);
+  assert.match(result.detail, /reason wow64/);
+  assert.deepEqual(result.matches, []);
+});
+
+test('condition 5 is unmet for an error record', () => {
+  const result = inspectProcessDirectories(
+    winProc([
+      winRecord(100),
+      errorRecord(101, 'ReadProcessMemory failed with Win32 error 299'),
+      errorRecord(102, 'the process has no PEB'),
+    ]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'error');
+  assert.match(result.detail, /process 101 /);
+  assert.match(result.detail, /ReadProcessMemory failed with Win32 error 299/);
+  assert.match(result.detail, /\(and 1 more\)/);
+});
+
+test('condition 5 skips an exited process', () => {
+  const result = inspectProcessDirectories(
+    winProc([exitedRecord(110), exitedRecord(111)]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'clear');
+  assert.equal(result.notInspected.count, 0);
+  assert.equal(result.otherUsers, 0);
+});
+
+test('condition 5 passes with no match and no error', () => {
+  const report = newEvidenceReport();
+  const { ports: walk } = virtualWalk({ '/wt': old({ isDirectory: true }) });
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: winProc([
+        exitedRecord(120),
+        deniedRecord(121, OTHER_SID),
+        deniedRecord(122, USER_SID),
+        winRecord(123),
+        winRecord(124, { ownerSid: OTHER_SID, directory: WIN_INSIDE }),
+      ]),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt'],
+    [WIN_ROOT],
+    HOUR,
+  );
+  assert.equal(report.conditions[4]?.status, 'met');
+  assert.equal(report.processesNotInspected.count, 1);
+});
+
+test('condition 5 names both a match and an error', () => {
+  const result = inspectProcessDirectories(
+    winProc([
+      winRecord(130),
+      errorRecord(131, 'first failure'),
+      winRecord(132, { directory: WIN_INSIDE }),
+      errorRecord(133, 'second failure'),
+      wow64Record(134),
+    ]),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'match');
+  assert.deepEqual(result.matches, [{ pid: 132, cwd: WIN_INSIDE }]);
+  assert.match(result.detail, /process 132 has its working directory at /);
+  assert.match(result.detail, /3 process\(es\) could not be classified/);
+  assert.match(result.detail, /the first: .*process 131 .*first failure/);
+  assert.doesNotMatch(result.detail, /second failure/);
+});
+
+test('condition 5 is unmet when the win32 reader member is absent', () => {
+  const ports = winProc([winRecord(1)]);
+  delete ports.readWindowsProcesses;
+  const result = inspectProcessDirectories(ports, [WIN_ROOT]);
+  assert.equal(result.status, 'error');
+  assert.match(result.detail, /reader is not available \(reason error\)/);
+});
+
+test('condition 5 is unmet when the win32 reader throws', () => {
+  const failing = (error: unknown) =>
+    inspectProcessDirectories(
+      winProc([], {
+        readWindowsProcesses: () => {
+          throw error;
+        },
+      }),
+      [WIN_ROOT],
+    );
+  const timeout = failing(
+    Object.assign(new Error('spawnSync timed out'), {
+      code: 'ETIMEDOUT',
+    }),
+  );
+  assert.equal(timeout.status, 'error');
+  assert.match(timeout.detail, /reader failed \(reason error\): ETIMEDOUT/);
+  // A failed `execFileSync` carries the whole program in its message.
+  const program = `Command failed: powershell.exe -Command ${'x'.repeat(9000)}\nstderr`;
+  const exit = failing(Object.assign(new Error(program), { status: 1 }));
+  assert.equal(exit.status, 'error');
+  assert.match(exit.detail, /reason error\): exit status 1$/);
+  const bare = failing(new Error(program));
+  assert.equal(bare.status, 'error');
+  assert.ok(bare.detail.length < 300, String(bare.detail.length));
+  assert.match(bare.detail, /reason error/);
+  assert.equal(failing('plain text').status, 'error');
+  // A thrown value that cannot be printed still gives the `error` result.
+  const hostile = Object.defineProperty({}, 'code', {
+    get() {
+      throw new Error('a getter that throws');
+    },
+  });
+  for (const value of [Object.create(null), hostile]) {
+    const unprintable = failing(value);
+    assert.equal(unprintable.status, 'error');
+    assert.match(unprintable.detail, /reader failed \(reason error\)/);
+    assert.match(unprintable.detail, /cannot be printed/);
+  }
+});
+
+test('condition 5 is unmet for a malformed reader result', () => {
+  const cases: Array<[string, ProcPorts]> = [
+    ['no current user', winProc([winRecord(1)], {}, '')],
+    ['a current user that is not text', winProc([winRecord(1)], {}, 7)],
+    [
+      'a current user that is not a SID',
+      winProc([winRecord(1)], {}, 'DOMAIN\\user'),
+    ],
+    ['records that are not a list', winProc('records')],
+    ['no records', winProc([])],
+    ['a non-object record', winProc([null])],
+    ['an unknown kind', winProc([{ ...winRecord(1), kind: 'zombie' }])],
+    ['an owner that is empty', winProc([winRecord(1, { ownerSid: '' })])],
+    [
+      'an owner that is not a SID',
+      winProc([winRecord(1, { ownerSid: 'DOMAIN\\user' })]),
+    ],
+    ['a pid that is not positive', winProc([winRecord(0)])],
+    [
+      'a live record with no bitness',
+      winProc([winRecord(1, { bitness: null })]),
+    ],
+    [
+      'a live 64-bit record with no directory',
+      winProc([winRecord(1, { directory: null })]),
+    ],
+    [
+      'a live 64-bit record with a relative directory',
+      winProc([winRecord(1, { directory: 'src\\wt' })]),
+    ],
+  ];
+  for (const [label, ports] of cases) {
+    const result = inspectProcessDirectories(ports, [WIN_ROOT]);
+    assert.equal(result.status, 'error', label);
+    assert.match(result.detail, /reason malformed/, label);
+  }
+  const read = (): never => {
+    throw new Error('the reader must not run');
+  };
+  // A directory of another account that cannot be placed never changes the
+  // status; a record out of its kind's shape is malformed whoever owns it.
+  const other = inspectProcessDirectories(
+    winProc([winRecord(1, { ownerSid: OTHER_SID, directory: 'src\\wt' })]),
+    [WIN_ROOT],
+  );
+  assert.equal(other.status, 'clear');
+  // And a root that cannot be placed stops before the reader runs.
+  const relative = inspectProcessDirectories(
+    winProc([winRecord(1)], { readWindowsProcesses: read }),
+    ['relative\\root'],
+  );
+  assert.equal(relative.status, 'error');
+  assert.match(relative.detail, /reason unresolvable/);
+});
+
+test('condition 5 is unmet for a record that contradicts its kind', () => {
+  const contradictions: Array<[string, WindowsProcessRecord]> = [
+    ['a denied record with a bitness', deniedRecordWith(1, { bitness: 32 })],
+    [
+      'a denied record with a 64-bit bitness',
+      deniedRecordWith(2, { bitness: 64 }),
+    ],
+    [
+      'a denied record with a directory',
+      deniedRecordWith(3, { directory: WIN_INSIDE }),
+    ],
+    [
+      'an exited record with a directory',
+      { ...exitedRecord(4), directory: WIN_INSIDE },
+    ],
+    ['an exited record with a bitness', { ...exitedRecord(5), bitness: 64 }],
+    [
+      'an exited record with an owner',
+      { ...exitedRecord(6), ownerSid: USER_SID },
+    ],
+    [
+      'a 32-bit record with a directory',
+      winRecord(7, { bitness: 32, directory: WIN_INSIDE }),
+    ],
+    ['a live record with a blank directory', winRecord(8, { directory: ' ' })],
+    ['a live record with a reason', winRecord(9, { reason: 'unexpected' })],
+    [
+      'an error record without a reason',
+      { ...errorRecord(10, 'x'), reason: null },
+    ],
+    ['an error record with a blank reason', errorRecord(11, '  ')],
+  ];
+  for (const [label, record] of contradictions) {
+    // An exited record keeps its own owner; the others are tried with each.
+    const owners =
+      record.kind === 'exited'
+        ? [record.ownerSid]
+        : [USER_SID, OTHER_SID, null];
+    for (const ownerSid of owners) {
+      const result = inspectProcessDirectories(
+        winProc([{ ...record, ownerSid }]),
+        [WIN_ROOT],
+      );
+      assert.equal(result.status, 'error', `${label} (owner ${ownerSid})`);
+      assert.match(result.detail, /out of shape/, label);
+      assert.match(result.detail, /reason malformed/, label);
+      assert.equal(result.notInspected.count, 0, label);
+    }
+  }
+});
+
+test('condition 5 is unmet for a root that is not a full Windows path', () => {
+  // The guard runs on the root as written, before `win32.resolve`, which on a
+  // Windows host would anchor a relative root to the current directory.
+  let reads = 0;
+  const counting = winProc([winRecord(1)], {
+    readWindowsProcesses: () => {
+      reads += 1;
+      throw new Error('the reader must not run');
+    },
+  });
+  for (const root of ['relative\\root', 'C:wt', '\\repo\\wt', '', 'wt']) {
+    const result = inspectProcessDirectories(counting, [WIN_ROOT, root]);
+    assert.equal(result.status, 'error', JSON.stringify(root));
+    assert.match(result.detail, /not a full Windows path/, root);
+    assert.match(result.detail, /reason unresolvable/, root);
+  }
+  assert.equal(reads, 0);
+  // A resolved form that is not a full path is refused too.
+  const resolved = inspectProcessDirectories(
+    winProc([winRecord(1)], { realpath: () => 'relative\\real' }),
+    [WIN_ROOT],
+  );
+  assert.equal(resolved.status, 'error');
+  assert.match(resolved.detail, /a resolved root is not a full Windows path/);
+});
+
+test('condition 5 resolves the roots before it reads the processes', () => {
+  let reads = 0;
+  const result = inspectProcessDirectories(
+    winProc([winRecord(1)], {
+      realpath: () => {
+        throw errno('EACCES');
+      },
+      readWindowsProcesses: () => {
+        reads += 1;
+        throw new Error('the reader must not run');
+      },
+    }),
+    [WIN_ROOT],
+  );
+  assert.equal(result.status, 'error');
+  assert.match(result.detail, /a root could not be resolved/);
+  assert.match(result.detail, /reason unresolvable.*EACCES/);
+  assert.equal(reads, 0);
+});
+
+test('condition 5 compares the resolved path of a directory and a root', () => {
+  // A junction or a short name: the root is named one way, the process another.
+  const aliases: Record<string, string> = {
+    'C:\\link\\wt': 'C:\\repo\\wt',
+    'C:\\alias\\src': 'C:\\repo\\wt\\src',
+  };
+  const realpath = (path: string): string | null => aliases[path] ?? path;
+  const viaRoot = inspectProcessDirectories(
+    winProc([winRecord(7, { directory: WIN_INSIDE })], { realpath }),
+    ['C:\\link\\wt'],
+  );
+  assert.equal(viaRoot.status, 'match');
+  const viaDirectory = inspectProcessDirectories(
+    winProc([winRecord(7, { directory: 'C:\\alias\\src' })], { realpath }),
+    [WIN_ROOT],
+  );
+  assert.equal(viaDirectory.status, 'match');
+  const unresolved = inspectProcessDirectories(
+    winProc([winRecord(7, { directory: 'C:\\gone\\dir' })], {
+      realpath: () => null,
+    }),
+    [WIN_ROOT],
+  );
+  assert.equal(unresolved.status, 'clear');
+});
+
+test('condition 5 resolves a directory only when the lexical path misses', () => {
+  const seen: string[] = [];
+  const result = inspectProcessDirectories(
+    winProc([winRecord(8, { directory: WIN_INSIDE })], {
+      realpath: (path) => {
+        seen.push(path);
+        if (path !== WIN_ROOT) throw errno('EACCES');
+        return path;
+      },
+    }),
+    [WIN_ROOT],
+  );
+  // The lexical match stands; the throwing resolution is never asked.
+  assert.equal(result.status, 'match');
+  assert.deepEqual(seen, [WIN_ROOT]);
+});
+
+test('condition 5 is unmet when a directory that could count cannot be resolved', () => {
+  const throwing = (path: string): string | null => {
+    if (path === WIN_ROOT) return path;
+    throw errno('EACCES');
+  };
+  for (const ownerSid of [USER_SID, null]) {
+    const result = inspectProcessDirectories(
+      winProc([winRecord(9, { ownerSid })], { realpath: throwing }),
+      [WIN_ROOT],
+    );
+    assert.equal(result.status, 'error', String(ownerSid));
+    assert.match(result.detail, /process 9 could not be resolved/);
+    assert.match(result.detail, /reason unresolvable.*EACCES/);
+  }
+  // Another account's record can never change the status.
+  const other = inspectProcessDirectories(
+    winProc([winRecord(9, { ownerSid: OTHER_SID })], { realpath: throwing }),
+    [WIN_ROOT],
+  );
+  assert.equal(other.status, 'clear');
+});
+
+test('condition 5 takes only owner SIDs in the SID form', () => {
+  // The canonical form is upper case only, and the pattern enforces it.
+  const lowerCurrent = inspectProcessDirectories(
+    winProc(
+      [winRecord(5, { directory: WIN_INSIDE })],
+      {},
+      USER_SID.toLowerCase(),
+    ),
+    [WIN_ROOT],
+  );
+  assert.equal(lowerCurrent.status, 'error');
+  assert.match(lowerCurrent.detail, /reason malformed/);
+  const lowerOwner = inspectProcessDirectories(
+    winProc([deniedRecord(4, 's-1-5-18')]),
+    [WIN_ROOT],
+  );
+  assert.equal(lowerOwner.status, 'error');
+  assert.match(lowerOwner.detail, /reason malformed/);
+  const system = inspectProcessDirectories(
+    winProc([deniedRecord(4, SYSTEM_SID)]),
+    [WIN_ROOT],
+  );
+  assert.equal(system.notInspected.count, 1);
+});
+
+test('default evidence ports wire the win32 reader', () => {
+  const repository = { owner: 'o', repo: 'r' };
+  const records = { currentSid: USER_SID, records: [winRecord(1)] };
+  let calls = 0;
+  const wired = createDefaultEvidencePorts({
+    repository,
+    platform: 'win32',
+    windowsProcessReader: () => {
+      calls += 1;
+      return records;
+    },
+  }).proc;
+  assert.equal(typeof wired.readWindowsProcesses, 'function');
+  assert.equal(wired.platform, 'win32');
+  assert.equal(wired.readWindowsProcesses?.(), records);
+  assert.equal(calls, 1);
+  // Without an injected reader, the member is still a function; it is not
+  // called here, because it would start PowerShell.
+  const real = createDefaultEvidencePorts({ repository, platform: 'win32' });
+  assert.equal(typeof real.proc.readWindowsProcesses, 'function');
+  const linux = createDefaultEvidencePorts({
+    repository,
+    platform: 'linux',
+    windowsProcessReader: () => records,
+  }).proc;
+  assert.equal(linux.readWindowsProcesses, undefined);
+  assert.equal('readWindowsProcesses' in linux, false);
+});
+
+test('the win32 root comparison ignores letter case', () => {
+  assert.equal(isWithinWin32Root('C:\\Repo\\WT', 'c:\\repo\\wt\\Src'), true);
+  assert.equal(isWithinWin32Root('c:\\repo\\wt', 'C:\\REPO\\WT'), true);
+  assert.equal(isWithinWin32Root('C:\\Repo\\WT', 'C:\\Repo\\wt2\\Src'), false);
+  assert.equal(
+    isWithinWin32Root('\\\\Server\\Share\\WT', '\\\\SERVER\\share\\wt\\src'),
+    true,
+  );
+});
+
+test('the win32 root comparison places drives, separators, prefixes, and escapes', () => {
+  const within = (root: string, target: string) =>
+    isWithinWin32Root(root, target);
+  // Siblings that share a prefix, other drives, and the parent of the root.
+  assert.equal(within(WIN_ROOT, 'C:\\repo\\wt2\\src'), false);
+  assert.equal(within(WIN_ROOT, 'D:\\repo\\wt\\src'), false);
+  assert.equal(within(WIN_ROOT, 'C:\\repo'), false);
+  assert.equal(within(WIN_ROOT, 'C:\\'), false);
+  // Separators and dot segments.
+  assert.equal(within('C:\\repo\\wt\\', WIN_INSIDE), true);
+  assert.equal(within('C:/repo/wt', WIN_INSIDE), true);
+  assert.equal(within(WIN_ROOT, 'C:\\repo\\wt\\src\\..\\lib'), true);
+  assert.equal(within(WIN_ROOT, 'C:\\repo\\wt\\..\\other'), false);
+  assert.equal(within(WIN_ROOT, WIN_ROOT), true);
+  assert.equal(within('C:\\', 'C:\\x'), true);
+  // UNC paths and extended-length prefixes.
+  assert.equal(
+    within('\\\\server\\share\\wt', '\\\\server\\other\\wt\\src'),
+    false,
+  );
+  assert.equal(within(WIN_ROOT, '\\\\?\\C:\\repo\\wt\\src'), true);
+  assert.equal(
+    within('\\\\?\\UNC\\server\\share\\wt', '\\\\server\\share\\wt\\src'),
+    true,
+  );
+  // A path that is not a full drive or UNC path cannot be placed.
+  assert.equal(within(WIN_ROOT, 'src'), false);
+  assert.equal(within(WIN_ROOT, '\\repo\\wt\\src'), false);
+  assert.equal(within(WIN_ROOT, 'C:wt\\src'), false);
+  assert.equal(within('wt', WIN_INSIDE), false);
+});
+
+/**
+ * End a child and everything it started, by process id and never by name, then
+ * wait for it to exit so its directory can be removed.
+ */
+async function endChild(child: ChildProcess): Promise<void> {
+  if (child.pid !== undefined && child.exitCode === null) {
+    try {
+      execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      // The process may already be gone; kill() below is the fallback.
+    }
+  }
+  child.kill();
+  if (child.exitCode === null && child.signalCode === null) {
+    await Promise.race([
+      once(child, 'exit'),
+      new Promise((resolve) => setTimeout(resolve, 10_000).unref()),
+    ]);
+  }
+}
+
+test('condition 5 fails for a live child process of the current user on win32', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  // Everything that must be cleaned up is made inside the `try`, so a failure
+  // while setting up still ends the children and removes the directories. Not
+  // `scratch()`: its cleanup runs after the whole file and would throw while a
+  // child still holds its directory.
+  const dirs: string[] = [];
+  const children: ChildProcess[] = [];
+  try {
+    // `raw` is the name `mkdtemp` gave, which can be an 8.3 short name; `root`
+    // is the form `realpath.native` gives.
+    const raw = mkdtempSync(join(tmpdir(), 'idd-wre-child-'));
+    dirs.push(raw);
+    const root = realpathSync.native(raw);
+    // A junction to the root, made outside it. A process that works in the
+    // junction reports the junction's path, which is lexically outside the
+    // root, so only the resolved path can place it inside.
+    const linkRaw = mkdtempSync(join(tmpdir(), 'idd-wre-link-'));
+    dirs.push(linkRaw);
+    const linkParent = realpathSync.native(linkRaw);
+    const link = join(linkParent, 'alias');
+    symlinkSync(root, link, 'junction');
+    const idle = ['-e', 'setTimeout(() => {}, 60000)'];
+    const options = { stdio: 'ignore', windowsHide: true } as const;
+    const child = spawn(process.execPath, idle, { ...options, cwd: root });
+    children.push(child);
+    const aliased = spawn(process.execPath, idle, { ...options, cwd: link });
+    children.push(aliased);
+    await Promise.all([once(child, 'spawn'), once(aliased, 'spawn')]);
+    const real = createDefaultEvidencePorts({
+      repository: { owner: 'o', repo: 'r' },
+    }).proc;
+    assert.equal(real.platform, 'win32');
+    assert.equal(typeof real.readWindowsProcesses, 'function');
+    // One real read serves every form below, so PowerShell starts once.
+    const read = real.readWindowsProcesses?.();
+    assert.ok(read, 'the real reader returns records');
+    const ports: ProcPorts = { ...real, readWindowsProcesses: () => read };
+    // The root as written, in upper case (the comparison ignores case), and as
+    // `mkdtemp` named it (the resolved form of the root is a target as well, so
+    // a short name matches the long path the child reports).
+    for (const form of [root, root.toUpperCase(), raw]) {
+      const result = inspectProcessDirectories(ports, [form]);
+      assert.equal(result.status, 'match', result.detail);
+      assert.ok(
+        result.matches.some((entry) => entry.pid === child.pid),
+        `a match for pid ${child.pid}: ${result.detail}`,
+      );
+      assert.match(result.detail, /process \d+ has its working directory at /);
+    }
+    // One evaluation in which the direct child is the only match, so its
+    // detail must name it: a missed match cannot pass as an error.
+    const direct: ProcPorts = {
+      ...ports,
+      readWindowsProcesses: () => ({
+        ...read,
+        records: read.records.filter((entry) => entry.pid !== aliased.pid),
+      }),
+    };
+    const only = inspectProcessDirectories(direct, [root]);
+    assert.equal(only.status, 'match', only.detail);
+    assert.deepEqual(
+      only.matches.map((entry) => entry.pid),
+      [child.pid],
+    );
+    assert.match(
+      only.detail,
+      new RegExp(`^process ${child.pid} has its working directory at `),
+    );
+    // The child in the junction matches only through the resolved path: the
+    // directory it reports is not lexically inside the root.
+    const viaLink = inspectProcessDirectories(ports, [root]);
+    assert.ok(
+      viaLink.matches.some(
+        (entry) =>
+          entry.pid === aliased.pid && !isWithinWin32Root(root, entry.cwd),
+      ),
+      `a match for pid ${aliased.pid} through its junction: ${viaLink.detail}`,
+    );
+    // And a root named through the junction resolves to the real directory.
+    const viaRoot = inspectProcessDirectories(ports, [link]);
+    assert.ok(
+      viaRoot.matches.some((entry) => entry.pid === child.pid),
+      `a match for pid ${child.pid} through the junction as a root: ${viaRoot.detail}`,
+    );
+    // Not an assertion: what a real host gives for a root that no process
+    // uses, so the CI log shows whether a real read can come out clear.
+    const clean = inspectProcessDirectories(ports, [join(root, 'unused')]);
+    t.diagnostic(`a root no process uses: ${clean.status}: ${clean.detail}`);
+  } finally {
+    // Every shutdown is awaited even if one fails, so the directories below
+    // are always removed.
+    await Promise.allSettled(children.map((started) => endChild(started)));
+    // The junction's parent first, then the root: neither follows the link.
+    for (const path of [...dirs].reverse()) {
+      try {
+        rmSync(path, { recursive: true, force: true });
+      } catch {
+        // A leftover temporary directory must not fail the test.
+      }
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

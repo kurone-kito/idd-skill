@@ -14,7 +14,8 @@
  * conditions may stand in for that attestation. No condition proves that the
  * other session is gone: an agent harness keeps no working directory between
  * commands, a session can be paused past the stale age or can only poll
- * GitHub, and a same-user process can deny reads of its `/proc` entry. The
+ * GitHub, and a same-user process can deny reads of its working directory (its
+ * `/proc` entry on Linux). The
  * safety of the mode rests on the stale-or-released rule, the quiet window,
  * and durable preservation, and the report says so.
  *
@@ -38,7 +39,7 @@ import {
   statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, win32 } from 'node:path';
 import {
   type ConfirmationIssueInput,
   type ConfirmationIssueRead,
@@ -63,6 +64,10 @@ import {
   type PreserveGuardDeps,
 } from './preserve-destination.mts';
 import { readWindowsAcl, type WindowsAclReader } from './windows-acl.mts';
+import {
+  readWindowsProcessRecords,
+  type WindowsProcessRecords,
+} from './windows-process-cwd.mts';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -81,7 +86,7 @@ const NOT_INSPECTED_SAMPLE = 50;
 
 /** One statement of what the basis is, repeated in every report. */
 export const EVIDENCE_STATEMENT =
-  "The step 2 basis is mechanical evidence, not an attestation. No condition proves that the other session is gone: a harness can keep no working directory between commands, a session can be paused past the stale age or can only poll GitHub, and a same-user process can deny reads of its /proc entry. If the evidence is wrong, a live session's worktree is removed after its changes are preserved.";
+  "The step 2 basis is mechanical evidence, not an attestation. No condition proves that the other session is gone: a harness can keep no working directory between commands, a session can be paused past the stale age or can only poll GitHub, and a same-user process can deny reads of its working directory (its /proc entry on Linux). If the evidence is wrong, a live session's worktree is removed after its changes are preserved.";
 
 /** The risks the run cannot close; the report names them. */
 export const OPEN_RISKS: readonly string[] = [
@@ -127,7 +132,8 @@ export interface WorktreeRemnantEvidenceReport {
   quietWindow: string | null;
   /** How many entries the last quiet-window walk visited. */
   entriesWalked: number | null;
-  /** The processes whose `/proc` entry denied the read. They are not refused. */
+  /** The processes whose working directory could not be read because the read
+   * was denied. They are not refused. */
   processesNotInspected: {
     count: number;
     sample: ProcessNotInspected[];
@@ -469,6 +475,12 @@ export interface ProcPorts {
   currentUid: number | null;
   /** `realpath`, or `null` when the path does not resolve. */
   realpath: (path: string) => string | null;
+  /**
+   * The batch reader of `windows-process-cwd.mts`: the current user's SID and
+   * one record per process. Present only on `win32`, where there is no `/proc`;
+   * it throws when the read fails. The members above are not used there.
+   */
+  readWindowsProcesses?: () => WindowsProcessRecords;
 }
 
 export interface ProcessCwdResult {
@@ -489,13 +501,18 @@ export interface ProcessCwdResult {
  * counted; a process that denies the read (`EACCES`), whose owner is this user
  * or root (a process that forbids inspection shows as root-owned), is listed
  * as not inspected without refusing; and any other read error fails the
- * condition. A platform without `/proc`, or with no current user, fails it
- * too. Finding no process proves only the absence of a known use.
+ * condition. On `win32` the records of the batch reader are classified
+ * instead (see {@link inspectWindowsProcessRecords}). A platform with neither,
+ * or with no current user, fails the condition too. Finding no process proves
+ * only the absence of a known use.
  */
 export function inspectProcessDirectories(
   ports: ProcPorts,
   roots: readonly string[],
 ): ProcessCwdResult {
+  if (ports.platform === 'win32') {
+    return inspectWindowsProcessRecords(ports, roots);
+  }
   const result: ProcessCwdResult = {
     status: 'clear',
     detail: '',
@@ -617,14 +634,379 @@ export function inspectProcessDirectories(
       }`,
     };
   }
-  return {
-    ...result,
-    detail: `no process of the current user has its working directory inside the worktree; ${result.notInspected.count} process(es) denied the read and were not inspected${
-      result.otherUsers > 0
-        ? `; ${result.otherUsers} process(es) of other users are there and are not counted`
-        : ''
-    }`,
+  return { ...result, detail: clearDetail(result) };
+}
+
+/** The detail of a `clear` result, the same sentence on every platform. */
+function clearDetail(result: ProcessCwdResult): string {
+  return `no process of the current user has its working directory inside the worktree; ${result.notInspected.count} process(es) denied the read and were not inspected${
+    result.otherUsers > 0
+      ? `; ${result.otherUsers} process(es) of other users are there and are not counted`
+      : ''
+  }`;
+}
+
+// ---------------------------------------------------------------------------
+// Condition 5 on Windows
+// ---------------------------------------------------------------------------
+
+/** LocalSystem. It stands for root in the Linux rule for a denied read. */
+const LOCAL_SYSTEM_SID = 'S-1-5-18';
+
+/**
+ * A well-formed SID string. The parser of the reader checks `currentSid`
+ * against the same pattern, which `windows-process-cwd.mts` keeps private; the
+ * ports are injected, so the evaluator checks it again, for the current user
+ * and for every owner: a current user that is no SID would make every
+ * current-user process read as another account's.
+ */
+const SID_PATTERN = /^S-1-\d+(?:-\d+)+$/;
+
+/** A drive-absolute path (`C:\`) or a UNC path with a server and a share. */
+const WIN32_QUALIFIED_PATH = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/;
+
+/** The most characters of a reader failure message that the detail keeps. */
+const READER_MESSAGE_LIMIT = 120;
+
+/** The failure text for a thrown value that cannot be turned into text. */
+const UNPRINTABLE_FAILURE = 'a thrown value that cannot be printed';
+
+/** `\\?\C:\x` as `C:\x` and `\\?\UNC\server\share` as `\\server\share`. */
+function stripExtendedPrefix(path: string): string {
+  if (/^\\\\\?\\UNC\\/i.test(path)) return `\\\\${path.slice(8)}`;
+  return path.startsWith('\\\\?\\') ? path.slice(4) : path;
+}
+
+function isQualifiedWin32Path(path: string): boolean {
+  return WIN32_QUALIFIED_PATH.test(stripExtendedPrefix(path));
+}
+
+/**
+ * True when `target` is `root` or lies inside it, compared as Windows paths on
+ * any host: both sides lose an extended-length prefix, are normalized by
+ * `path.win32`, and are compared without regard to letter case, as NTFS does.
+ * A path that is not a full drive or UNC path is outside every root, because
+ * it cannot be placed; a caller that must not miss one rejects it first.
+ * `isWithinRoot` in `preserve-destination.mts` is bound to the host's
+ * `node:path`, so it cannot compare a Windows path on another platform.
+ */
+export function isWithinWin32Root(root: string, target: string): boolean {
+  const base = stripExtendedPrefix(root);
+  const candidate = stripExtendedPrefix(target);
+  if (!isQualifiedWin32Path(base) || !isQualifiedWin32Path(candidate)) {
+    return false;
+  }
+  const rel = win32.relative(
+    win32.resolve(base.toLowerCase()),
+    win32.resolve(candidate.toLowerCase()),
+  );
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith('..\\') && !win32.isAbsolute(rel))
+  );
+}
+
+/**
+ * A short text for a reader failure. An `execFileSync` message can embed the
+ * whole PowerShell program, so the detail takes the error code, the exit
+ * status, or the signal, and only then the first line of the message, cut.
+ */
+function readerFailureText(error: unknown): string {
+  try {
+    const failure = (error ?? {}) as {
+      code?: unknown;
+      status?: unknown;
+      signal?: unknown;
+    };
+    if (typeof failure.code === 'string' && failure.code !== '') {
+      return failure.code;
+    }
+    if (typeof failure.status === 'number') {
+      return `exit status ${failure.status}`;
+    }
+    if (typeof failure.signal === 'string' && failure.signal !== '') {
+      return `signal ${failure.signal}`;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const line = (message.split('\n')[0] ?? '').trim();
+    return line.length > READER_MESSAGE_LIMIT
+      ? `${line.slice(0, READER_MESSAGE_LIMIT)}...`
+      : line;
+  } catch {
+    // A thrown value whose properties or string form throw (a null-prototype
+    // object, a getter that throws) must still give the condition its `error`
+    // result, so the text falls back to a fixed one.
+    return UNPRINTABLE_FAILURE;
+  }
+}
+
+const WINDOWS_RECORD_KINDS: ReadonlySet<string> = new Set([
+  'exited',
+  'denied',
+  'live',
+  'error',
+]);
+
+function isNone(value: unknown): boolean {
+  return value === null || value === undefined;
+}
+
+function isText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Why a record breaks the per-kind shape the reader documents, or `null`. The
+ * invariants of `parseWindowsProcessRecords` that decide how a record is
+ * classified; the injected ports do not have to pass through that parser, so a
+ * record that contradicts its kind (a denied one with a bitness, an exited one
+ * with a directory) is not classified as if it were well formed. The field
+ * types of an `error` record are not checked, because its classification reads
+ * only the reason. `kind` is already known to be one of the four.
+ */
+function recordShapeProblem(record: Record<string, unknown>): string | null {
+  const { kind, bitness, directory, reason } = record;
+  if (kind !== 'error' && !isNone(reason)) {
+    return 'a reason on a record that is not an error';
+  }
+  switch (kind) {
+    case 'exited':
+      return isNone(bitness) && isNone(directory) && isNone(record.ownerSid)
+        ? null
+        : 'an exited record with a bitness, a directory, or an owner';
+    case 'denied':
+      return isNone(bitness) && isNone(directory)
+        ? null
+        : 'a denied record with a bitness or a directory';
+    case 'live':
+      if (bitness === 32) {
+        return isNone(directory) ? null : 'a 32-bit record with a directory';
+      }
+      return bitness === 64 && isText(directory)
+        ? null
+        : 'a live record with no bitness, or a 64-bit one with no directory';
+    default:
+      return isText(reason) ? null : 'an error record with no reason';
+  }
+}
+
+/**
+ * Condition 5 on `win32`, from the records of the batch reader (kurone-kito/
+ * idd-skill#5347, roadmap #5285). The current user is the owner SID equal to
+ * the reader's `currentSid`. Every record is classified once and none stops the
+ * run, so the detail can name both a match and an error. A `live` record of a
+ * 32-bit process is an error for any owner (reason `wow64`), because its
+ * directory is not read and so cannot be placed inside or outside a root; that
+ * rule comes first. Then:
+ *
+ * - `exited`: skipped.
+ * - `denied`, owned by the current user or by LocalSystem, or with an owner
+ *   that could not be read: listed as not inspected (reason `denied`) without
+ *   refusing. Unlike Linux, a failed owner read is listed, not an error. Any
+ *   other owner: skipped.
+ * - `live`, owned by another account: counted when its directory is inside a
+ *   root, never refused.
+ * - `live`, owned by the current user: a match when its directory is inside a
+ *   root, else ignored. With an owner that could not be read: an error (reason
+ *   `owner-unreadable`) when inside a root, else ignored.
+ * - `error`: an error with the reader's own reason.
+ *
+ * The lexical path is compared first and the resolved path only on a miss, so a
+ * failed resolution cannot hide a lexical match. A resolution that throws is an
+ * error for a record that could count, and ignored for another account's
+ * record, which can never change the status (reason `unresolvable`). Anything
+ * outside the reader's documented shape is an error (reason `malformed`), as is
+ * a missing or throwing reader (reason `error`): the ports are injected, so the
+ * evaluator does not trust the parser to have run. A match gives status
+ * `match`, whatever else was found; otherwise any error gives `error`.
+ */
+function inspectWindowsProcessRecords(
+  ports: ProcPorts,
+  roots: readonly string[],
+): ProcessCwdResult {
+  const result: ProcessCwdResult = {
+    status: 'clear',
+    detail: '',
+    matches: [],
+    notInspected: { count: 0, sample: [] },
+    otherUsers: 0,
   };
+  const fail = (detail: string): ProcessCwdResult => ({
+    ...result,
+    status: 'error',
+    detail,
+  });
+  // The roots come first, as on Linux, so a root that cannot be resolved costs
+  // no process read.
+  const targets: string[] = [];
+  try {
+    for (const root of roots) {
+      // Before `win32.resolve`: on a Windows host it would anchor a relative
+      // root to the current directory and make it look like a full path.
+      if (!isQualifiedWin32Path(root)) {
+        return fail(
+          'a root is not a full Windows path (reason unresolvable), so no directory can be compared with it',
+        );
+      }
+      targets.push(win32.resolve(root));
+      const real = ports.realpath(root);
+      if (real !== null) targets.push(real);
+    }
+  } catch (error) {
+    return fail(
+      `a root could not be resolved (reason unresolvable): ${errorCode(error)}`,
+    );
+  }
+  if (!targets.every(isQualifiedWin32Path)) {
+    return fail(
+      'a resolved root is not a full Windows path (reason unresolvable), so no directory can be compared with it',
+    );
+  }
+  const reader = ports.readWindowsProcesses;
+  if (reader === undefined) {
+    return fail('the Windows process reader is not available (reason error)');
+  }
+  let read: WindowsProcessRecords;
+  try {
+    read = reader();
+  } catch (error) {
+    return fail(
+      `the Windows process reader failed (reason error): ${readerFailureText(error)}`,
+    );
+  }
+  const currentSid = read?.currentSid;
+  const records: unknown = read?.records;
+  if (typeof currentSid !== 'string' || !SID_PATTERN.test(currentSid)) {
+    return fail(
+      'the Windows process reader gave no current user SID (reason malformed)',
+    );
+  }
+  if (!Array.isArray(records) || records.length === 0) {
+    return fail(
+      'the Windows process reader gave no process records (reason malformed)',
+    );
+  }
+  const errors: string[] = [];
+  const insideTargets = (path: string): boolean =>
+    targets.some((target) => isWithinWin32Root(target, path));
+
+  for (const [index, entry] of (records as unknown[]).entries()) {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const { pid, kind, bitness, directory, reason } = record;
+    const ownerSid = record.ownerSid ?? null;
+    if (
+      typeof pid !== 'number' ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      typeof kind !== 'string' ||
+      !WINDOWS_RECORD_KINDS.has(kind) ||
+      (ownerSid !== null &&
+        (typeof ownerSid !== 'string' || !SID_PATTERN.test(ownerSid)))
+    ) {
+      errors.push(`record ${index} is not a process record (reason malformed)`);
+      continue;
+    }
+    const shapeProblem = recordShapeProblem(record);
+    if (shapeProblem !== null) {
+      errors.push(
+        `the record of process ${pid} is out of shape: ${shapeProblem} (reason malformed)`,
+      );
+      continue;
+    }
+    const owner = ownerSid as string | null;
+    if (kind === 'exited') continue;
+    if (kind === 'error') {
+      errors.push(
+        `the working directory of process ${pid} could not be read (reason ${reason})`,
+      );
+      continue;
+    }
+    if (kind === 'denied') {
+      if (
+        owner === null ||
+        owner === currentSid ||
+        owner === LOCAL_SYSTEM_SID
+      ) {
+        result.notInspected.count += 1;
+        if (result.notInspected.sample.length < NOT_INSPECTED_SAMPLE) {
+          result.notInspected.sample.push({ pid, reason: 'denied' });
+        }
+      }
+      continue;
+    }
+    // A live record. The 32-bit rule is first, for any owner.
+    if (bitness === 32) {
+      errors.push(
+        `process ${pid} is a 32-bit process on 64-bit Windows, so its working directory is not read and may be inside a root (reason wow64)`,
+      );
+      continue;
+    }
+    const other = owner !== null && owner !== currentSid;
+    // The shape check above leaves a 64-bit record with a text directory.
+    const cwd = directory as string;
+    if (!isQualifiedWin32Path(cwd)) {
+      // A directory that cannot be placed. Another account's never counts.
+      if (!other) {
+        errors.push(
+          `process ${pid} has no usable working directory (reason malformed)`,
+        );
+      }
+      continue;
+    }
+    let inside = insideTargets(cwd);
+    if (!inside) {
+      let real: string | null;
+      try {
+        real = ports.realpath(cwd);
+      } catch (error) {
+        if (!other) {
+          errors.push(
+            `the working directory of process ${pid} could not be resolved (reason unresolvable): ${errorCode(error)}`,
+          );
+        }
+        continue;
+      }
+      inside = real !== null && insideTargets(real);
+    }
+    if (!inside) continue;
+    if (other) {
+      result.otherUsers += 1;
+    } else if (owner === null) {
+      errors.push(
+        `the owner of process ${pid} could not be read (reason owner-unreadable)`,
+      );
+    } else {
+      result.matches.push({ pid, cwd });
+    }
+  }
+
+  const firstError = errors[0];
+  if (result.matches.length > 0) {
+    const first = result.matches[0] as { pid: number; cwd: string };
+    return {
+      ...result,
+      status: 'match',
+      detail: `process ${first.pid} has its working directory at ${first.cwd}${
+        result.matches.length > 1
+          ? ` (and ${result.matches.length - 1} more)`
+          : ''
+      }${
+        firstError === undefined
+          ? ''
+          : `; ${errors.length} process(es) could not be classified, the first: ${firstError}`
+      }`,
+    };
+  }
+  if (firstError !== undefined) {
+    return {
+      ...result,
+      status: 'error',
+      detail: `${firstError}${
+        errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''
+      }`,
+    };
+  }
+  return { ...result, detail: clearDetail(result) };
 }
 
 /**
@@ -915,14 +1297,21 @@ export interface DefaultEvidencePortsOptions {
   platform?: NodeJS.Platform;
   home?: string;
   windowsAclReader?: WindowsAclReader;
+  /** Replaces the batch reader of Windows processes; `win32` only. */
+  windowsProcessReader?: () => WindowsProcessRecords;
 }
 
-/** The production ports: live GitHub reads, the real filesystem, and `/proc`. */
+/**
+ * The production ports: live GitHub reads, the real filesystem, `/proc`, and
+ * on `win32` the batch reader of process records.
+ */
 export function createDefaultEvidencePorts(
   options: DefaultEvidencePortsOptions,
 ): WorktreeRemnantEvidencePorts {
   const platform = options.platform ?? process.platform;
   const windowsAclReader = options.windowsAclReader ?? readWindowsAcl;
+  const windowsProcessReader =
+    options.windowsProcessReader ?? (() => readWindowsProcessRecords());
   return {
     readTrusted: (input) => readTrustedAutoDecideWithConfig(input),
     readConfirmation: (input) => readConfirmationIssue(input),
@@ -946,6 +1335,9 @@ export function createDefaultEvidencePorts(
       ownerUid: (pid) => statSync(`/proc/${pid}`).uid,
       currentUid: process.getuid?.() ?? null,
       realpath: realpathOrNull,
+      ...(platform === 'win32'
+        ? { readWindowsProcesses: windowsProcessReader }
+        : {}),
     },
     nowMs: () => Date.now(),
     guards: {

@@ -394,3 +394,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not (Select-String -Path windows-process-cwd.tap -Pattern '^ok \d+ - real reader sees a child process of the current user$' -Quiet)) { throw 'real reader sees a child process of the current user did not pass' }
           if (-not (Select-String -Path windows-process-cwd.tap -Pattern '^ok \d+ - real reader sees a 32-bit child process$' -Quiet)) { throw 'real reader sees a 32-bit child process did not pass' }
+      # Condition 5 of the worktree remnant evidence on Windows
+      # (kurone-kito/idd-skill#5347) decides from the batch reader's records of
+      # real processes, which only a real Windows process can exercise. Only the
+      # test whose title ends in `on win32` runs: a child of the current user
+      # works in a temporary directory, and the test asserts a match that names
+      # the child's pid, so a missed match cannot pass as an error. The exit
+      # code alone cannot catch a pattern that matches no test, since Node exits
+      # 0 for that, so the exact title must also appear as a passing TAP line,
+      # `--test-timeout` bounds the test, and `timeout-minutes` bounds a native
+      # call that hangs.
+      - name: Run Windows remnant process check test
+        timeout-minutes: 5
+        run: |
+          node --test --test-timeout=60000 --import ./tests/isolate-state.mts --test-reporter=tap --test-name-pattern "condition 5 fails for a live child process of the current user on win32" tests/worktree-remnant-evidence.test.mts | Tee-Object -FilePath worktree-remnant-evidence.tap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Select-String -Path worktree-remnant-evidence.tap -Pattern '^ok \d+ - condition 5 fails for a live child process of the current user on win32$' -Quiet)) { throw 'condition 5 fails for a live child process of the current user on win32 did not pass' }
