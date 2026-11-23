@@ -9181,13 +9181,16 @@ Compare the live base and default for D3.5 with
   CODEOWNERS file is read at the base branch. It tries `.github/CODEOWNERS`,
   `CODEOWNERS`, and `docs/CODEOWNERS` in that order and stops at the first file
   it can read, so it takes up to six requests per collection. In a claim-bound
-  readiness check, a changed file or the sync manifest
-  `audit/sync-manifest.json` above the limit is listed the same way, except a
-  changed sync target whose base `syncPairs` mode is `exact` or `concreted`:
-  the audit skips that path before it reads it, so an oversized target is not
-  listed. In the normal case, a file read takes two requests: the directory
-  listing, which gives the file size, and then the raw request, which is sent
-  only when the listed size is at most the limit. A file above the limit takes
+  readiness check, the changed files and the sync manifest
+  `audit/sync-manifest.json` are read at the merge base. A file above the limit
+  at the merge base is listed the same way, except a changed sync target whose
+  base `syncPairs` mode is `exact` or `concreted`: the audit skips that path
+  before it reads it, so an oversized target is not listed. A file that the PR
+  adds is absent at the merge base, so it becomes a candidate and is not listed,
+  even when its head content is above the limit. In the normal case, a file
+  read takes two requests: the directory listing, which gives the file size,
+  and then the raw request, which is sent only when the listed size is at most
+  the limit. A file above the limit takes
   one request. A file missing at the base takes only the listing request,
   except when the directory listing has 1,000 entries and does not name the
   file: then one more request asks for the path itself, to tell a missing file
