@@ -19,9 +19,9 @@ next-release docs may appear alongside prior-version metadata. This
 occurred in the [PR #4601 review on 2026-10-21](https://github.com/kurone-kito/idd-skill/pull/4601#discussion_r4334064889).
 
 Until the next signed tag is published, use the agent-entry guide at the
-latest published signed tag. The latest is `v0.17.0`:
+latest published signed tag. The latest is `v0.18.0`:
 
-[Agent-entry and verification guide at v0.17.0](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/docs/onboarding/agent-entry-and-verification.md).
+[Agent-entry and verification guide at v0.18.0](https://github.com/kurone-kito/idd-skill/blob/v0.18.0/idd-template/docs/onboarding/agent-entry-and-verification.md).
 
 ## Flag-name and field-name conventions
 

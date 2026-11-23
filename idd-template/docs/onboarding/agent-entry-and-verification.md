@@ -8,7 +8,7 @@ tags: [onboarding, agent-entry]
 # Onboarding Reference — Agent Entry and Verification
 
 Use
-[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/ONBOARDING.md)
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.18.0/idd-template/ONBOARDING.md)
 with this guide. Default-branch links to upcoming releases may 404 until
 a signed tag is published (PR #4601). See
 [tag guidance](../idd-helper-scripts.md#release-links).
@@ -252,7 +252,7 @@ sibling entry file.
 ## Verification details
 
 Use the Step 6 checklist in
-[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/ONBOARDING.md)
+[`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.18.0/idd-template/ONBOARDING.md)
 as the final go/no-go gate. When you need the concrete evidence behind
 those shorter checks, confirm the detailed items below.
 
