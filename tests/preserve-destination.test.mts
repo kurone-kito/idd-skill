@@ -25,6 +25,7 @@ import {
   isWithinRoot,
   type PreserveDirectoryName,
   type PreserveGuardDeps,
+  type WindowsIdentityStats,
 } from '../src/scripts/preserve-destination.mts';
 import type {
   WindowsAclReader,
@@ -821,7 +822,7 @@ test('windows: an unreadable ACL, or one without the current user SID, is refuse
   }
 });
 
-test('windows: an owner other than the current user, or an unreadable one, is refused with no write', () => {
+test('windows: an owner other than the current user is refused with no write', () => {
   const fx = fresh();
   const path = permissiveDirectory(fx);
   for (const owner of [
@@ -829,8 +830,6 @@ test('windows: an owner other than the current user, or an unreadable one, is re
     // An elevated session owns new directories as Administrators.
     'S-1-5-32-544',
     'S-1-5-18',
-    null,
-    'throw',
   ] as const) {
     const acl = windowsAcl();
     acl.setOwner(owner);
@@ -845,6 +844,55 @@ test('windows: an owner other than the current user, or an unreadable one, is re
   matching.setOwner(USER_SID.toLowerCase());
   windowsEnsure(path, matching);
   assert.deepEqual(matching.restricted, [path]);
+});
+
+test('windows: an owner read that throws or names no SID is refused as unverified, not as another owner', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  for (const owner of [null, 'throw', '', '   '] as const) {
+    const acl = windowsAcl();
+    acl.setOwner(owner);
+    assert.throws(
+      () => windowsEnsure(path, acl),
+      /directory ownership or privacy could not be verified/,
+      JSON.stringify(owner),
+    );
+    assert.deepEqual(acl.restricted, [], JSON.stringify(owner));
+  }
+});
+
+test('windows: a directory whose identity has inode 0 is refused as unverified before any ACL read, owner read, or write', () => {
+  const fx = fresh();
+  const path = permissiveDirectory(fx);
+  const acl = windowsAcl();
+  // Every identity read reports inode 0, which a real directory does not do.
+  const readIdentity = (target: string): WindowsIdentityStats => {
+    const stat = lstatSync(target, { bigint: true });
+    return {
+      dev: stat.dev,
+      ino: 0n,
+      isDirectory: () => stat.isDirectory(),
+      isSymbolicLink: () => stat.isSymbolicLink(),
+    };
+  };
+  let aclReads = 0;
+  const countingReader: WindowsAclReader = (directory) => {
+    aclReads += 1;
+    return acl.reader(directory);
+  };
+  // The identity is refused before the privacy inspection, so no ACL read of
+  // any kind happens for this directory.
+  assert.throws(
+    () =>
+      ensurePrivateStateDirectory(path, 'win32', countingReader, {
+        ...acl.tools,
+        readIdentity,
+      }),
+    /directory ownership or privacy could not be verified/,
+  );
+  assert.equal(aclReads, 0);
+  assert.deepEqual(acl.owners, []);
+  assert.deepEqual(acl.restricted, []);
 });
 
 test('windows: a re-read that is still permissive or unreadable is refused', () => {
