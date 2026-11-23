@@ -7837,6 +7837,91 @@ test('getRepositoryFileBytesAtRef reads a listed entry from a 1000-entry listing
   assert.equal(rawCalls, 0);
 });
 
+function truncatedRootFake(
+  pathRequestError: Error | null,
+  pathRequests: string[],
+  rawCalls: { count: number },
+  entries: Record<string, unknown>[],
+) {
+  return fakeDeps({
+    ghText: (args) => {
+      const endpoint = String(args[1]);
+      if (endpoint.startsWith('repos/o/r/contents?ref=')) {
+        return listingText(entries);
+      }
+      pathRequests.push(endpoint);
+      if (pathRequestError !== null) throw pathRequestError;
+      return JSON.stringify(listingEntry('not-listed.txt', Buffer.from('x')));
+    },
+    ghBytesUnbounded: () => {
+      rawCalls.count += 1;
+      return Buffer.from('x');
+    },
+  });
+}
+
+test('getRepositoryFileBytesAtRef reports a name that a 1000-entry listing drops as not-found when its path request is 404 (#5342)', () => {
+  // A long listing can drop the name, so the path request answers for the name
+  // itself. Its 404 proves the file is absent, and no raw request is made.
+  const entries = Array.from({ length: 1000 }, (_, index) =>
+    listingEntry(`f${index}.txt`, Buffer.from(`${index}`)),
+  );
+  const pathRequests: string[] = [];
+  const rawCalls = { count: 0 };
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    truncatedRootFake(missingDirectoryError(), pathRequests, rawCalls, entries),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'not-listed.txt', 'main'),
+    { outcome: 'not-found' },
+  );
+  assert.deepEqual(pathRequests, [
+    'repos/o/r/contents/not-listed.txt?ref=main',
+  ]);
+  assert.equal(rawCalls.count, 0);
+});
+
+test('getRepositoryFileBytesAtRef fails closed on a name a 1000-entry listing drops when its path request finds a file (#5342)', () => {
+  const entries = Array.from({ length: 1000 }, (_, index) =>
+    listingEntry(`f${index}.txt`, Buffer.from(`${index}`)),
+  );
+  const pathRequests: string[] = [];
+  const rawCalls = { count: 0 };
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    truncatedRootFake(null, pathRequests, rawCalls, entries),
+  );
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'not-listed.txt', 'main'),
+    /may be truncated at 1000 entries/u,
+  );
+  assert.equal(pathRequests.length, 1);
+  assert.equal(rawCalls.count, 0);
+});
+
+test('getRepositoryFileBytesAtRef fails closed on a 1000-entry listing when the path request fails for another reason (#5342)', () => {
+  const entries = Array.from({ length: 1000 }, (_, index) =>
+    listingEntry(`f${index}.txt`, Buffer.from(`${index}`)),
+  );
+  const serverError = new Error('HTTP 500') as Error & { stderr?: string };
+  serverError.stderr = 'gh: Server Error (HTTP 500)';
+  const pathRequests: string[] = [];
+  const rawCalls = { count: 0 };
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    truncatedRootFake(serverError, pathRequests, rawCalls, entries),
+  );
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'not-listed.txt', 'main'),
+    /may be truncated at 1000 entries/u,
+  );
+  assert.equal(rawCalls.count, 0);
+});
+
 test('getRepositoryFileBytesAtRef returns not-a-file for a submodule that GitHub lists as a file (#5341)', () => {
   let rawCalls = 0;
   const port = createGithubProviderAdapter(

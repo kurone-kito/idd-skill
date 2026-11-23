@@ -3413,6 +3413,19 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           ? `repos/${owner}/${repo}/contents?ref=${encodeURIComponent(ref)}`
           : `repos/${owner}/${repo}/contents/${encodeSegments(parentSegments)}?ref=${encodeURIComponent(ref)}`;
       const endpoint = `repos/${owner}/${repo}/contents/${encodeSegments(segments)}?ref=${encodeURIComponent(ref)}`;
+      // True only for a 404 from the path request. Any answer that is not a
+      // 404, including a failed request, is inconclusive (#5342).
+      const pathRequestIsNotFound = (requestEndpoint) => {
+        try {
+          deps.ghText(['api', requestEndpoint], {
+            ...GH_TEXT_LOOP_OPTIONS,
+            maxBuffer: CONTENTS_READ_MAX_BUFFER,
+          });
+          return false;
+        } catch (error) {
+          return deriveGhHttpStatus(error) === 404;
+        }
+      };
       let listingText;
       try {
         listingText = deps.ghText(['api', parentEndpoint], {
@@ -3443,11 +3456,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           typeof item === 'object' && item !== null && item.name === name,
       );
       if (match === undefined) {
-        // The contents API returns at most 1000 entries for a directory. A
-        // listing that long may have dropped the entry, so an absent name is
-        // inconclusive there and fails closed. A listed entry carries its own
-        // type, size, and sha, so it is usable at any length.
+        // The contents API returns at most 1000 entries for a directory, so a
+        // listing that long may have dropped the entry. A path request answers
+        // for the name itself, so its 404 proves the file is absent. Any other
+        // answer leaves the absence inconclusive, and that fails closed. A
+        // listed entry carries its own type, size, and sha, so it is usable at
+        // any length (#5342).
         if (listing.length >= 1000) {
+          if (pathRequestIsNotFound(endpoint)) {
+            return { outcome: 'not-found' };
+          }
           throw new Error(
             `directory listing for ${path} may be truncated at 1000 entries`,
           );
