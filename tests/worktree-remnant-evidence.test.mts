@@ -1394,24 +1394,33 @@ async function endChild(child: ChildProcess): Promise<void> {
 test('condition 5 fails for a live child process of the current user on win32', {
   skip: process.platform !== 'win32',
 }, async (t) => {
-  // Not `scratch()`: its cleanup runs after the whole file and would throw
-  // while a child still holds its directory. `raw` is the name `mkdtemp` gave,
-  // which can be an 8.3 short name; `root` is the form `realpath.native` gives.
-  const raw = mkdtempSync(join(tmpdir(), 'idd-wre-child-'));
-  const root = realpathSync.native(raw);
-  // A junction to the root, made outside it. A process that works in the
-  // junction reports the junction's path, which is lexically outside the root,
-  // so only the resolved path can place it inside.
-  const linkParent = realpathSync.native(
-    mkdtempSync(join(tmpdir(), 'idd-wre-link-')),
-  );
-  const link = join(linkParent, 'alias');
-  symlinkSync(root, link, 'junction');
-  const idle = ['-e', 'setTimeout(() => {}, 60000)'];
-  const options = { stdio: 'ignore', windowsHide: true } as const;
-  const child = spawn(process.execPath, idle, { ...options, cwd: root });
-  const aliased = spawn(process.execPath, idle, { ...options, cwd: link });
+  // Everything that must be cleaned up is made inside the `try`, so a failure
+  // while setting up still ends the children and removes the directories. Not
+  // `scratch()`: its cleanup runs after the whole file and would throw while a
+  // child still holds its directory.
+  const dirs: string[] = [];
+  const children: ChildProcess[] = [];
   try {
+    // `raw` is the name `mkdtemp` gave, which can be an 8.3 short name; `root`
+    // is the form `realpath.native` gives.
+    const raw = mkdtempSync(join(tmpdir(), 'idd-wre-child-'));
+    dirs.push(raw);
+    const root = realpathSync.native(raw);
+    // A junction to the root, made outside it. A process that works in the
+    // junction reports the junction's path, which is lexically outside the
+    // root, so only the resolved path can place it inside.
+    const linkParent = realpathSync.native(
+      mkdtempSync(join(tmpdir(), 'idd-wre-link-')),
+    );
+    dirs.push(linkParent);
+    const link = join(linkParent, 'alias');
+    symlinkSync(root, link, 'junction');
+    const idle = ['-e', 'setTimeout(() => {}, 60000)'];
+    const options = { stdio: 'ignore', windowsHide: true } as const;
+    const child = spawn(process.execPath, idle, { ...options, cwd: root });
+    children.push(child);
+    const aliased = spawn(process.execPath, idle, { ...options, cwd: link });
+    children.push(aliased);
     await Promise.all([once(child, 'spawn'), once(aliased, 'spawn')]);
     const real = createDefaultEvidencePorts({
       repository: { owner: 'o', repo: 'r' },
@@ -1434,11 +1443,13 @@ test('condition 5 fails for a live child process of the current user on win32', 
       );
       assert.match(result.detail, /process \d+ has its working directory at /);
     }
-    // The child in the junction matches only through the resolved path.
+    // The child in the junction matches only through the resolved path: the
+    // directory it reports is not lexically inside the root.
     const viaLink = inspectProcessDirectories(ports, [root]);
     assert.ok(
       viaLink.matches.some(
-        (entry) => entry.pid === aliased.pid && entry.cwd !== root,
+        (entry) =>
+          entry.pid === aliased.pid && !isWithinWin32Root(root, entry.cwd),
       ),
       `a match for pid ${aliased.pid} through its junction: ${viaLink.detail}`,
     );
@@ -1453,8 +1464,9 @@ test('condition 5 fails for a live child process of the current user on win32', 
     const clean = inspectProcessDirectories(ports, [join(root, 'unused')]);
     t.diagnostic(`a root no process uses: ${clean.status}: ${clean.detail}`);
   } finally {
-    await Promise.all([endChild(child), endChild(aliased)]);
-    for (const path of [linkParent, root]) {
+    await Promise.all(children.map((started) => endChild(started)));
+    // The junction's parent first, then the root: neither follows the link.
+    for (const path of [...dirs].reverse()) {
       try {
         rmSync(path, { recursive: true, force: true });
       } catch {
