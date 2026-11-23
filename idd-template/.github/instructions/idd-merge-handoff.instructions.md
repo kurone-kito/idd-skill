@@ -23,12 +23,14 @@ gate, the routing below still decides, and `ready: false` holds.
      stop.
 2. Resolve the recorded policy to one enum, `{f25-policy}`; steps 3-6
    use it. First run `git fetch origin {development-branch}`, then
-   `git diff -U0 --no-ext-diff origin/{development-branch} -- .github/idd/config.json`
-   with no pipe. The check passes only when the diff exits 0 and prints
-   either nothing or an `iddVersion`-only change: after the file header
-   (`diff --git`, `index`, `---`, `+++`), exactly one `@@` line, one `-`
-   line, and one `+` line, and nothing else, where each of the `-` and
-   `+` lines matches the PCRE-style pattern
+   `git diff -U0 --no-ext-diff --no-textconv --no-color
+   origin/{development-branch} -- .github/idd/config.json`
+   with no pipe, so that no diff driver, textconv filter, or color
+   setting alters the output. The check passes only when the diff exits 0
+   and prints either nothing or an `iddVersion`-only change: after the
+   file header (`diff --git`, `index`, `---`, `+++`), exactly one `@@`
+   line, one `-` line, and one `+` line, and nothing else, where each of
+   the `-` and `+` lines matches the PCRE-style pattern
    `^[-+]\s*"iddVersion": "\d+\.\d+\.\d+",?$` (that is, each of them
    matches `^\s*"iddVersion": "\d+\.\d+\.\d+",?$` once its leading `-` or
    `+` is removed). An `iddVersion` change grants no merge authority, so
