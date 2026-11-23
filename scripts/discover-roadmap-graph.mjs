@@ -2610,6 +2610,7 @@ export function extractTaskListReferences(body, options = {}) {
   return references;
 }
 export function extractKeywordReferences(body, options = {}) {
+  const work = options.work;
   const references = [];
   const currentRepoRef = normalizeRepoRef(
     options.currentRepoRef
@@ -2663,6 +2664,9 @@ export function extractKeywordReferences(body, options = {}) {
     }
     let verdict = closingDeclarationMemo.get(lineIndex);
     if (verdict === undefined) {
+      if (work) {
+        work.closingChars += closingDeclarationLines[lineIndex]?.length ?? 0;
+      }
       verdict = isStandaloneClosingLine(closingDeclarationLines, lineIndex);
       closingDeclarationMemo.set(lineIndex, verdict);
     }
@@ -2686,11 +2690,17 @@ export function extractKeywordReferences(body, options = {}) {
     let tokenPointer = 0;
     for (let index = 0; index < keywordMatches.length; index += 1) {
       const match = keywordMatches[index];
+      if (work) {
+        work.matches += 1;
+      }
       const matchIndex = match.index ?? 0;
       while (
         tokenPointer + 1 < tokenStarts.length &&
         tokenStarts[tokenPointer + 1] <= matchIndex
       ) {
+        if (work) {
+          work.tokenSteps += 1;
+        }
         tokenPointer += 1;
       }
       const windowStart =
@@ -2701,12 +2711,15 @@ export function extractKeywordReferences(body, options = {}) {
           : 0;
       // #1964: a negated keyword match ("does not close #176") produces no
       // reference at all — see KEYWORD_NEGATION_PATTERN above.
-      if (isNegatedKeywordMatch(maskedLine, matchIndex, windowStart)) {
+      if (isNegatedKeywordMatch(maskedLine, matchIndex, windowStart, work)) {
         continue;
       }
       const segmentStart = matchIndex + match[0].length;
       const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
       const segment = maskedLine.slice(segmentStart, segmentEnd);
+      if (work) {
+        work.segmentChars += segmentEnd - segmentStart;
+      }
       const baseRelationship = classifyKeywordRelationship(match[1]);
       // #3876: prose that contains a closing keyword is not a declaration, so
       // the match is dropped silently, as a negated one is.
@@ -2905,7 +2918,7 @@ function pushDependencyReferences(references, result, relationship, rawLine) {
  * a whole token (never mid-token), so no token this window includes is ever
  * truncated, regardless of how long it is.
  */
-function isNegatedKeywordMatch(line, matchIndex, windowStart) {
+function isNegatedKeywordMatch(line, matchIndex, windowStart, work) {
   // #1970: every KEYWORD_NEGATION_PATTERN alternative requires `\s+`
   // immediately before the match position ($) — a negation term directly
   // followed by whitespace (0 intervening tokens), or an intervening word
@@ -2925,6 +2938,11 @@ function isNegatedKeywordMatch(line, matchIndex, windowStart) {
   // clean two-way split: whitespace before, or definitively not negated.
   if (matchIndex === 0 || !/\s/u.test(line[matchIndex - 1] ?? '')) {
     return false;
+  }
+  // Counted after the short-circuit above, right before the slice, so a
+  // removed short-circuit shows up in the count (#5352).
+  if (work) {
+    work.negationChars += matchIndex - windowStart;
   }
   return KEYWORD_NEGATION_PATTERN.test(line.slice(windowStart, matchIndex));
 }
