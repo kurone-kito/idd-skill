@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -79,6 +80,9 @@ function fakeDeps(
     },
     ghTextAsync: () => {
       throw new Error('ghTextAsync not stubbed for this test');
+    },
+    ghBytesUnbounded: () => {
+      throw new Error('ghBytesUnbounded not stubbed for this test');
     },
     // No-op by default so a test exercising postWorkItemComment's retry
     // path (#2460) never actually sleeps; override per-test to assert on
@@ -7473,5 +7477,349 @@ test('getRepositoryContentAtRef returns null on a genuine 404 through the buffer
       'a'.repeat(40),
     ),
     null,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// getRepositoryFileBytesAtRef (#5341): the entry comes from the parent
+// directory listing, the size limit applies to it, the raw read follows, and
+// the git blob hash must match the listing sha.
+
+function blobSha(bytes: Buffer): string {
+  return createHash('sha1')
+    .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+    .update(bytes)
+    .digest('hex');
+}
+
+function listingEntry(
+  name: string,
+  bytes: Buffer,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    name,
+    type: 'file',
+    size: bytes.length,
+    sha: blobSha(bytes),
+    ...overrides,
+  };
+}
+
+function listingText(entries: Record<string, unknown>[]): string {
+  return JSON.stringify(entries);
+}
+
+function missingDirectoryError(): Error {
+  const error = new Error('HTTP 404') as Error & { stderr?: string };
+  error.stderr = 'gh: Not Found (HTTP 404)';
+  return error;
+}
+
+test('getRepositoryFileBytesAtRef returns the exact bytes when the listing sha matches the blob hash (#5341)', () => {
+  const bytes = Buffer.concat([
+    Buffer.from('  exact\n\nbytes '),
+    Buffer.from([0xff, 0xfe, 0x00]),
+    Buffer.from(' \n'),
+  ]);
+  let rawArgs: readonly string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('a.txt', bytes)]),
+      ghBytesUnbounded: (args) => {
+        rawArgs = [...args];
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'dir/a.txt', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.ok(rawArgs.includes('Accept: application/vnd.github.raw'));
+});
+
+test('getRepositoryFileBytesAtRef lists the parent and reads the path, encoding each segment (#5341)', () => {
+  const bytes = Buffer.from('x');
+  const calls: string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args[1] ?? '');
+        return listingText([listingEntry('d e.txt', bytes)]);
+      },
+      ghBytesUnbounded: (args) => {
+        calls.push(args[1] ?? '');
+        return bytes;
+      },
+    }),
+  );
+  port.getRepositoryFileBytesAtRef('o', 'r', 'a?b#c/d e.txt', 'main');
+  assert.deepEqual(calls, [
+    'repos/o/r/contents/a%3Fb%23c?ref=main',
+    'repos/o/r/contents/a%3Fb%23c/d%20e.txt?ref=main',
+  ]);
+});
+
+test('getRepositoryFileBytesAtRef lists the root directory for a top-level file (#5341)', () => {
+  const bytes = Buffer.from('root');
+  const calls: string[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push(args[1] ?? '');
+        return listingText([listingEntry('top.txt', bytes)]);
+      },
+      ghBytesUnbounded: () => bytes,
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'top.txt', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.equal(calls[0], 'repos/o/r/contents?ref=main');
+});
+
+test('getRepositoryFileBytesAtRef returns not-found when the parent is missing or lacks the name, with no raw request (#5341)', () => {
+  let rawCalls = 0;
+  const missingParent = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        throw missingDirectoryError();
+      },
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.deepEqual(
+    missingParent.getRepositoryFileBytesAtRef(
+      'o',
+      'r',
+      'gone/missing.txt',
+      'main',
+    ),
+    { outcome: 'not-found' },
+  );
+
+  const absentName = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('other.txt', Buffer.from('y'))]),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.deepEqual(
+    absentName.getRepositoryFileBytesAtRef('o', 'r', 'missing.txt', 'main'),
+    { outcome: 'not-found' },
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef returns not-a-file for a directory, symlink, or submodule entry, with no raw request (#5341)', () => {
+  for (const type of ['dir', 'symlink', 'submodule']) {
+    let rawCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () =>
+          listingText([{ name: 'p', type, size: 0, sha: 'a'.repeat(40) }]),
+        ghBytesUnbounded: () => {
+          rawCalls += 1;
+          return Buffer.alloc(0);
+        },
+      }),
+    );
+    assert.deepEqual(
+      port.getRepositoryFileBytesAtRef('o', 'r', 'p', 'main'),
+      { outcome: 'not-a-file' },
+      type,
+    );
+    assert.equal(rawCalls, 0, type);
+  }
+});
+
+test('getRepositoryFileBytesAtRef applies the 104,857,600-byte limit exactly (#5341)', () => {
+  const bytes = Buffer.from('limit');
+  let rawCalls = 0;
+  const atLimit = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        listingText([listingEntry('big.bin', bytes, { size: 104_857_600 })]),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    atLimit.getRepositoryFileBytesAtRef('o', 'r', 'big.bin', 'main'),
+    { outcome: 'ok', bytes },
+  );
+  assert.equal(rawCalls, 1);
+
+  rawCalls = 0;
+  const overLimit = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        listingText([listingEntry('big.bin', bytes, { size: 104_857_601 })]),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return bytes;
+      },
+    }),
+  );
+  assert.deepEqual(
+    overLimit.getRepositoryFileBytesAtRef('o', 'r', 'big.bin', 'main'),
+    { outcome: 'too-large' },
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef throws on a file entry without a numeric size or a string sha, with no raw request (#5341)', () => {
+  const badEntries = [
+    { name: 'f', type: 'file', sha: 'a'.repeat(40) },
+    { name: 'f', type: 'file', size: '5', sha: 'a'.repeat(40) },
+    { name: 'f', type: 'file', size: 5 },
+  ];
+  for (const entry of badEntries) {
+    let rawCalls = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => listingText([entry]),
+        ghBytesUnbounded: () => {
+          rawCalls += 1;
+          return Buffer.alloc(0);
+        },
+      }),
+    );
+    assert.throws(
+      () => port.getRepositoryFileBytesAtRef('o', 'r', 'f', 'main'),
+      Error,
+      JSON.stringify(entry),
+    );
+    assert.equal(rawCalls, 0, JSON.stringify(entry));
+  }
+});
+
+test('getRepositoryFileBytesAtRef reads a listed entry from a 1000-entry listing, and fails closed on an absent name (#5341)', () => {
+  const entries = Array.from({ length: 1000 }, (_, index) =>
+    listingEntry(`f${index}.txt`, Buffer.from(`${index}`)),
+  );
+  let rawCalls = 0;
+  const present = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText(entries),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.from('1');
+      },
+    }),
+  );
+  assert.deepEqual(
+    present.getRepositoryFileBytesAtRef('o', 'r', 'f1.txt', 'main'),
+    { outcome: 'ok', bytes: Buffer.from('1') },
+  );
+  assert.equal(rawCalls, 1);
+
+  rawCalls = 0;
+  const absent = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText(entries),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.throws(() =>
+    absent.getRepositoryFileBytesAtRef('o', 'r', 'not-listed.txt', 'main'),
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef returns not-a-file for a submodule that GitHub lists as a file (#5341)', () => {
+  let rawCalls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () =>
+        listingText([
+          {
+            name: 'vendor',
+            type: 'file',
+            size: 0,
+            sha: 'a'.repeat(40),
+            submodule_git_url: 'https://example.com/vendor.git',
+          },
+        ]),
+      ghBytesUnbounded: () => {
+        rawCalls += 1;
+        return Buffer.alloc(0);
+      },
+    }),
+  );
+  assert.deepEqual(
+    port.getRepositoryFileBytesAtRef('o', 'r', 'vendor', 'main'),
+    { outcome: 'not-a-file' },
+  );
+  assert.equal(rawCalls, 0);
+});
+
+test('getRepositoryFileBytesAtRef throws when the raw request fails (#5341)', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('f.txt', Buffer.from('x'))]),
+      ghBytesUnbounded: () => {
+        throw missingDirectoryError();
+      },
+    }),
+  );
+  assert.throws(() =>
+    port.getRepositoryFileBytesAtRef('o', 'r', 'f.txt', 'main'),
+  );
+});
+
+test('getRepositoryFileBytesAtRef throws, naming the path, when the blob hash differs from the listing sha (#5341)', () => {
+  const stored = Buffer.from('stored bytes');
+  const served = Buffer.from('served bytes');
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('served.txt', stored)]),
+      ghBytesUnbounded: () => served,
+    }),
+  );
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'dir/served.txt', 'main'),
+    /dir\/served\.txt/,
   );
 });

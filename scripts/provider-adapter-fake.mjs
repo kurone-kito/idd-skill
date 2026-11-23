@@ -300,6 +300,12 @@ export function createFakeProviderAdapter(fixture) {
         ? { outcome: 'not-found' }
         : { outcome: 'ok', value };
     },
+    getRepositoryFileBytesAtRef(owner, repo, path, ref) {
+      const key = `${owner}/${repo}/${path}@${ref}`;
+      return (
+        fixture.repositoryFileBytesAtRef?.[key] ?? { outcome: 'not-found' }
+      );
+    },
     getTeamMembershipStateSafe(org, teamSlug, login) {
       const key = `${org}/${teamSlug}/${login}`;
       return fixture.teamMembershipStates?.[key] ?? '';

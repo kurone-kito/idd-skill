@@ -719,6 +719,42 @@ export function ghTextUnbounded(args, options = {}) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+/**
+ * The timeout for a raw contents read. Long enough for a body near the
+ * 100 MiB file limit to finish. Exported so a test can assert it.
+ */
+export const RAW_BYTES_TIMEOUT_MS = 300_000;
+/**
+ * {@link ghTextUnbounded}'s path, but returning the exact bytes of stdout:
+ * no trim, no text decoding. For a raw media type request such as
+ * `Accept: application/vnd.github.raw`. The caller must not pass `--include`,
+ * because headers would then be part of the returned bytes.
+ */
+export function ghBytesUnbounded(args, options = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'gh-exec-bytes-'));
+  const outPath = join(dir, 'stdout');
+  try {
+    const fd = openSync(outPath, 'w');
+    try {
+      const resolvedArgs = withResolvedApiHostname(args);
+      execGhSync(
+        resolvedArgs,
+        {
+          stdio: ['ignore', fd, 'pipe'],
+          timeout: options.timeout ?? RAW_BYTES_TIMEOUT_MS,
+        },
+        loadControlCall(resolvedArgs, options),
+      );
+    } catch (error) {
+      throw tagGhCommandError(error);
+    } finally {
+      closeSync(fd);
+    }
+    return readFileSync(outPath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 /** {@link ghText}, swallowing any failure and returning `''` instead. */
 export function safeGhText(args, options = {}) {
   try {

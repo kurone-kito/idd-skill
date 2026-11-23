@@ -10,10 +10,12 @@
 // built from. `gh` invocation is an implementation detail of this module;
 // domain helpers never see it.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
+  ghBytesUnbounded,
   resolveViewerLogin as ghExecResolveViewerLogin,
   ghText,
   ghTextAsync,
@@ -2452,11 +2454,14 @@ const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
 // 729 KB at the base for tests/pre-merge-readiness.test.mts) can exceed
 // Node's 1 MiB default. 4 MiB covers that envelope with headroom.
 const CONTENTS_READ_MAX_BUFFER = 4 * 1024 * 1024;
+/** The largest file whose exact bytes {@link getRepositoryFileBytesAtRef} reads. */
+const RAW_FILE_BYTES_LIMIT = 104_857_600;
 const DEFAULT_DEPS = {
   ghText,
   ghApiJson,
   resolveViewerLogin: ghExecResolveViewerLogin,
   ghTextAsync,
+  ghBytesUnbounded,
   sleepSync,
   now: Date.now,
 };
@@ -3391,6 +3396,94 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
         }
         throw error;
       }
+    },
+    getRepositoryFileBytesAtRef(owner, repo, path, ref) {
+      // The entry's own type, size, and sha come from the parent directory
+      // listing, not from a request for the path itself. A path request
+      // follows a symlink and returns the target's metadata, and it does not
+      // serve files above 100 MB as JSON. A directory listing names each
+      // entry's type without following it.
+      const segments = path.split('/');
+      const name = segments[segments.length - 1] ?? '';
+      const parentSegments = segments.slice(0, -1);
+      const encodeSegments = (parts) =>
+        parts.map((segment) => encodeURIComponent(segment)).join('/');
+      const parentEndpoint =
+        parentSegments.length === 0
+          ? `repos/${owner}/${repo}/contents?ref=${encodeURIComponent(ref)}`
+          : `repos/${owner}/${repo}/contents/${encodeSegments(parentSegments)}?ref=${encodeURIComponent(ref)}`;
+      const endpoint = `repos/${owner}/${repo}/contents/${encodeSegments(segments)}?ref=${encodeURIComponent(ref)}`;
+      let listingText;
+      try {
+        listingText = deps.ghText(['api', parentEndpoint], {
+          ...GH_TEXT_LOOP_OPTIONS,
+          maxBuffer: CONTENTS_READ_MAX_BUFFER,
+        });
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return { outcome: 'not-found' };
+        }
+        throw error;
+      }
+      const listing = JSON.parse(listingText);
+      if (!Array.isArray(listing)) {
+        throw new Error(`directory listing for ${path} is not an array`);
+      }
+      const match = listing.find(
+        (item) =>
+          typeof item === 'object' && item !== null && item.name === name,
+      );
+      if (match === undefined) {
+        // The contents API returns at most 1000 entries for a directory. A
+        // listing that long may have dropped the entry, so an absent name is
+        // inconclusive there and fails closed. A listed entry carries its own
+        // type, size, and sha, so it is usable at any length.
+        if (listing.length >= 1000) {
+          throw new Error(
+            `directory listing for ${path} may be truncated at 1000 entries`,
+          );
+        }
+        return { outcome: 'not-found' };
+      }
+      const entry = match;
+      // GitHub can list a submodule as a file for backward compatibility, and
+      // names it with submodule_git_url. Such an entry is not a file.
+      if (
+        entry.type !== 'file' ||
+        typeof entry.submodule_git_url === 'string'
+      ) {
+        return { outcome: 'not-a-file' };
+      }
+      if (typeof entry.size !== 'number' || !Number.isFinite(entry.size)) {
+        throw new Error(`file entry for ${path} has no numeric size`);
+      }
+      if (typeof entry.sha !== 'string') {
+        throw new Error(`file entry for ${path} has no string sha`);
+      }
+      if (entry.size > RAW_FILE_BYTES_LIMIT) {
+        return { outcome: 'too-large' };
+      }
+      // The raw request is sent only after the entry and size checks pass.
+      const bytes = deps.ghBytesUnbounded([
+        'api',
+        endpoint,
+        '-H',
+        'Accept: application/vnd.github.raw',
+      ]);
+      // The git blob hash is SHA-1 over `blob <byte length>`, a NUL byte, and
+      // the content. The listing sha must match it, or the bytes are not the
+      // stored file. This relies on the contents API reporting the blob hash
+      // as `sha`, which this repository does not verify against the live API.
+      const blobHash = createHash('sha1')
+        .update(Buffer.from(`blob ${bytes.length}\0`, 'utf8'))
+        .update(bytes)
+        .digest('hex');
+      if (blobHash !== entry.sha) {
+        throw new Error(
+          `raw contents of ${path} do not match the listing blob sha`,
+        );
+      }
+      return { outcome: 'ok', bytes };
     },
     getTeamMembershipStateSafe(org, teamSlug, login) {
       return safeGhTextLocal(
