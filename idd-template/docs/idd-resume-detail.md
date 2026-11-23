@@ -1254,12 +1254,12 @@ against an unrelated branch, and none has an observed incident of its own
       Windows reads one batch of process records, and a live record of a
       32-bit process, of any owner, fails the condition because its directory
       is not read (the operator hearing of 2026-11-23, issue `#5347`). A
-      process that cannot be opened is a denied record with no bitness, so
-      the denied rule decides it. Another platform fails. A process of
-      another user is not counted. A process that denies the read is listed
-      as not inspected and does not refuse; on Windows that covers a denied
-      record of the current user, of LocalSystem, or with an unreadable
-      owner.
+      process whose open is refused (access denied) is a denied record with
+      no bitness, so the denied rule decides it. Another platform fails. A
+      process of another user is not counted. A process that denies the read
+      is listed as not inspected and does not refuse; on Windows that covers
+      a denied record of the current user, of LocalSystem, or with an
+      unreadable owner.
    6. The confirmation issue and decision match a trusted record: open, with
       the confirmation label and without the authoring label, for
       `class=worktreeRemnant`, this issue as `source`, the recovered claim,

@@ -8589,11 +8589,11 @@ primary one); step 1's stale-claim-* or released-claim-* reason with a claim
 ID and a matching lock; no entry under the worktree or its git-admin
 directory changed within the trusted quietWindow; no working directory of a
 process of the current user inside the worktree (read from /proc on Linux and
-from the process records on Windows, where a 32-bit process also fails the
-condition; another platform fails; a denied read is listed, not refused); and
-a confirmation record that matches this
-claim, this path, and the decision. A dry run reports condition 6 (the record)
-as unmet without refusing, so the order is: dry run, record, apply.
+from the process records on Windows, where a live 32-bit process also fails
+the condition; another platform fails; a denied read is listed, not refused);
+and a confirmation record that matches this claim, this path, and the
+decision. A dry run reports condition 6 (the record) as unmet without
+refusing, so the order is: dry run, record, apply.
 Under the clone lock, just before step 3, conditions 1, 4, 5, and 6 are read
 again. Steps 3 and 4 then run with a preserve directory under
 <state>/idd-skill/lwr-preserved/.
