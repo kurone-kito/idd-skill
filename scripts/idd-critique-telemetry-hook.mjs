@@ -503,11 +503,13 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       // no window appears is withdrawn: that check does not see Windows
       // Terminal windows, so it cannot establish their absence. The same
       // measurement found that a detached watchdog spawn opened one window,
-      // titled with its own command line, and that the window stayed open
-      // after the process exited; the detached relay opened none. A window
-      // that does appear is bounded, not prevented, by `killProcessGroup`'s
-      // win32 tree-kill below, which caps the chain's lifetime at
-      // `timeoutMs`.
+      // titled with its own command line, and that the window closed when
+      // that process exited; the detached relay opened none. A detached
+      // parent has no console, so a console program it starts (`cmd.exe`,
+      // `powershell.exe`, `ping`) gets a console of its own, which Windows
+      // Terminal shows as a window. The tree-kill in `killProcessGroup`
+      // below bounds the lifetime of the process chain, not of a terminal
+      // window that the chain has already opened.
       if (platform === 'win32') {
         // Sanitize NODE_OPTIONS out of the relay's OWN environment
         // (kurone-kito/idd-skill#2910 review, Copilot): the relay is
