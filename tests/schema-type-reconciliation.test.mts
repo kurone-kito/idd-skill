@@ -952,6 +952,7 @@ export const preMergeReadinessKeys = [
   'deferFollowUps',
   'staleRequestRecovery',
   'provisionalRead',
+  'repositoryFileBlockers',
   'ready',
   'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];

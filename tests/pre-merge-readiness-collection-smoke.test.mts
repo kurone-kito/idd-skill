@@ -267,6 +267,7 @@ function buildStubGhScript(
     commits?: unknown[];
     failOnClaimComments?: boolean;
     configJson?: string;
+    oversizedCodeowners?: boolean;
     // #3624: the PR body the readiness snapshot returns, and what `gh search
     // issues` answers for the deferred-follow-up check: an array of hits (the
     // default `[]` keeps every earlier scenario clean), a non-zero exit, or a
@@ -496,6 +497,13 @@ ${
     ? `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/contents/.github/idd/config.json`}') out(${JSON.stringify(Buffer.from(options.configJson, 'utf8').toString('base64'))});`
     : ''
 }
+${
+  options.oversizedCodeowners === true
+    ? `if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/.github?ref=`}')) out(${JSON.stringify(JSON.stringify([{ name: 'CODEOWNERS', type: 'file', size: 104857601, sha: 'a'.repeat(40) }]))});`
+    : ''
+}
+// The root directory listing is an empty array, so a root-level path is absent (#5342).
+if (a(0) === 'api' && (a(1) === '${`repos/${REPO_REF}/contents`}' || String(a(1)).startsWith('${`repos/${REPO_REF}/contents?`}'))) out('[]');
 if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/`}')) notFound();
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
@@ -506,6 +514,7 @@ function runPreMergeReadinessSmoke(
   threadResolved: boolean,
   options: {
     configJson?: string;
+    oversizedCodeowners?: boolean;
     closingIssuesReferences?: unknown[];
     prBody?: string;
     searchIssues?: unknown[] | 'rate-limit' | 'non-array';
@@ -521,6 +530,7 @@ function runPreMergeReadinessSmoke(
     'gh',
     buildStubGhScript(threadResolved, {
       configJson: options.configJson,
+      oversizedCodeowners: options.oversizedCodeowners,
       closingIssuesReferences: options.closingIssuesReferences,
       prBody: options.prBody,
       searchIssues: options.searchIssues,
@@ -3271,4 +3281,17 @@ test('collectPreMergeReadiness against a fake provider (kurone-kito/idd-skill#29
   });
   const staleSelfWaiver = report.staleSelfWaiver as { stale: boolean };
   assert.equal(staleSelfWaiver.stale, true);
+});
+
+test('an oversized CODEOWNERS file is a repository-file-too-large blocker and the readiness result is not ready (#5342)', () => {
+  const report = runPreMergeReadinessSmoke(true, { oversizedCodeowners: true });
+  assert.equal(report.ready, false);
+  const blockers = report.repositoryFileBlockers as Array<{
+    path: string;
+    gate: string;
+  }>;
+  assert.deepEqual(
+    blockers.map((blocker) => [blocker.path, blocker.gate]),
+    [['.github/CODEOWNERS', 'repository-file-too-large']],
+  );
 });

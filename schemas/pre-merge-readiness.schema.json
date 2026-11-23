@@ -2232,6 +2232,33 @@
           }
         }
       }
+    },
+    "repositoryFileBlockers": {
+      "description": "Repository files above the raw-read size limit that the readiness audit could not read (#5342). Present only when non-empty.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "gate", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The repository path whose base content is above the raw-read size limit."
+          },
+          "gate": {
+            "type": "string",
+            "enum": ["repository-file-too-large"],
+            "description": "Identifier of the unmet gate for an oversized repository file."
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable explanation of why the file could not be read."
+          }
+        }
+      }
     }
   }
 }
