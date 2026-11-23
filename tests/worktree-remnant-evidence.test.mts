@@ -1052,6 +1052,18 @@ test('condition 5 is unmet when the win32 reader throws', () => {
   assert.ok(bare.detail.length < 300, String(bare.detail.length));
   assert.match(bare.detail, /reason error/);
   assert.equal(failing('plain text').status, 'error');
+  // A thrown value that cannot be printed still gives the `error` result.
+  const hostile = Object.defineProperty({}, 'code', {
+    get() {
+      throw new Error('a getter that throws');
+    },
+  });
+  for (const value of [Object.create(null), hostile]) {
+    const unprintable = failing(value);
+    assert.equal(unprintable.status, 'error');
+    assert.match(unprintable.detail, /reader failed \(reason error\)/);
+    assert.match(unprintable.detail, /cannot be printed/);
+  }
 });
 
 test('condition 5 is unmet for a malformed reader result', () => {

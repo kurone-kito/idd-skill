@@ -466,6 +466,8 @@ const SID_PATTERN = /^S-1-\d+(?:-\d+)+$/;
 const WIN32_QUALIFIED_PATH = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/;
 /** The most characters of a reader failure message that the detail keeps. */
 const READER_MESSAGE_LIMIT = 120;
+/** The failure text for a thrown value that cannot be turned into text. */
+const UNPRINTABLE_FAILURE = 'a thrown value that cannot be printed';
 /** `\\?\C:\x` as `C:\x` and `\\?\UNC\server\share` as `\\server\share`. */
 function stripExtendedPrefix(path) {
   if (/^\\\\\?\\UNC\\/i.test(path)) return `\\\\${path.slice(8)}`;
@@ -504,21 +506,28 @@ export function isWithinWin32Root(root, target) {
  * status, or the signal, and only then the first line of the message, cut.
  */
 function readerFailureText(error) {
-  const failure = error ?? {};
-  if (typeof failure.code === 'string' && failure.code !== '') {
-    return failure.code;
+  try {
+    const failure = error ?? {};
+    if (typeof failure.code === 'string' && failure.code !== '') {
+      return failure.code;
+    }
+    if (typeof failure.status === 'number') {
+      return `exit status ${failure.status}`;
+    }
+    if (typeof failure.signal === 'string' && failure.signal !== '') {
+      return `signal ${failure.signal}`;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const line = (message.split('\n')[0] ?? '').trim();
+    return line.length > READER_MESSAGE_LIMIT
+      ? `${line.slice(0, READER_MESSAGE_LIMIT)}...`
+      : line;
+  } catch {
+    // A thrown value whose properties or string form throw (a null-prototype
+    // object, a getter that throws) must still give the condition its `error`
+    // result, so the text falls back to a fixed one.
+    return UNPRINTABLE_FAILURE;
   }
-  if (typeof failure.status === 'number') {
-    return `exit status ${failure.status}`;
-  }
-  if (typeof failure.signal === 'string' && failure.signal !== '') {
-    return `signal ${failure.signal}`;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  const line = (message.split('\n')[0] ?? '').trim();
-  return line.length > READER_MESSAGE_LIMIT
-    ? `${line.slice(0, READER_MESSAGE_LIMIT)}...`
-    : line;
 }
 const WINDOWS_RECORD_KINDS = new Set(['exited', 'denied', 'live', 'error']);
 function isNone(value) {
