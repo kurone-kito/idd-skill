@@ -11949,6 +11949,46 @@ before the first real release. The command does not read or decide that
 permission; it separately requires the supplied per-release issue to be open
 and unblocked.
 
+### Signing with per-process settings
+
+Use this route when the signing configured on the operator's machine is GPG
+without a terminal, or when the release identity is an SSH signing identity.
+Observed 2026-11-23 on the `v0.18.0` release (issue `#5336`): the configured
+signing was GPG, which fails without a terminal, while the release identity
+was an SSH signing identity. The SSH route needs Git 2.44 or later, as the
+Dry-run and apply subsection above states.
+
+Run the helper with the per-process settings in the block below. The block is
+the dry run. Add `--apply` to the same command to create and push the tag after
+the dry run passes. Replace each angle-bracket placeholder with a real value;
+the brackets are not part of the command.
+
+```sh
+GIT_CONFIG_COUNT=3 \
+GIT_CONFIG_KEY_0=gpg.format GIT_CONFIG_VALUE_0=ssh \
+GIT_CONFIG_KEY_1=user.signingkey GIT_CONFIG_VALUE_1=<absolute-path-to-operator-ssh-public-file> \
+GIT_CONFIG_KEY_2=tag.gpgsign GIT_CONFIG_VALUE_2=true \
+idd-release-tag --operation signed-annotated-tag --version <x.y.z> \
+  --merge-sha <merge-commit-sha> --pr <pull-request-number> --issue <release-issue-number> \
+  --allowed-signers <absolute-path-to-allowed-signers-file>
+```
+
+- The `--allowed-signers` path is required for every signing format and must
+  name an existing regular file. The helper requires the flag even for a GPG
+  tag. Keeping the file outside the repository is advisable.
+- The block changes no repository configuration: the `GIT_CONFIG_COUNT`,
+  `GIT_CONFIG_KEY_<n>`, and `GIT_CONFIG_VALUE_<n>` environment variables reach
+  the helper process only. The dry run is the default.
+- Verify an SSH tag, or a GPG tag, with the matching command below. The GPG
+  command needs the signer's GPG public material imported first.
+
+```sh
+# SSH tag
+git -c gpg.ssh.allowedSignersFile=<allowed-signers-file> verify-tag v<x.y.z>
+# GPG tag
+git verify-tag v<x.y.z>
+```
+
 ### Runtime bounds and refusal names
 
 Every Git command has a two-minute default time bound. If it times out, the
