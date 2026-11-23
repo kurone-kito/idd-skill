@@ -812,12 +812,17 @@ function recordShapeProblem(record: Record<string, unknown>): string | null {
  * - `error`: an error with the reader's own reason.
  *
  * The lexical path is compared first and the resolved path only on a miss, so a
- * failed resolution cannot hide a lexical match. A resolution that throws is an
- * error for a record that could count, and ignored for another account's
- * record, which can never change the status (reason `unresolvable`). Anything
+ * failed resolution cannot hide a lexical match. A resolution that throws, or
+ * that returns nothing, is an error for a record that could count (the current
+ * user, or an unreadable owner), and ignored for another account's record,
+ * which can never change the status (reason `unresolvable`). Linux ignores a
+ * directory that resolves to nothing; Windows does not, because a drive letter
+ * is scoped to a logon session and can name nothing in this one. A root that
+ * resolves to nothing is still compared by its lexical form alone. Anything
  * outside the reader's documented shape is an error (reason `malformed`), as is
- * a missing or throwing reader (reason `error`): the ports are injected, so the
- * evaluator does not trust the parser to have run. A match gives status
+ * a missing or throwing reader (reason `error`) and a record whose fields
+ * cannot be read: the ports are injected, so the evaluator does not trust the
+ * parser to have run, and each field is read once. A match gives status
  * `match`, whatever else was found; otherwise any error gives `error`.
  */
 function inspectWindowsProcessRecords(
@@ -890,10 +895,27 @@ function inspectWindowsProcessRecords(
   const insideTargets = (path: string): boolean =>
     targets.some((target) => isWithinWin32Root(target, path));
 
-  for (const [index, entry] of (records as unknown[]).entries()) {
-    const record = (entry ?? {}) as Record<string, unknown>;
-    const { pid, kind, bitness, directory, reason } = record;
-    const ownerSid = record.ownerSid ?? null;
+  const list = records as unknown[];
+  for (let index = 0; index < list.length; index += 1) {
+    // The ports are injected, so a record is not trusted to be a plain object:
+    // the element and each of its six fields are read once, here, into a plain
+    // snapshot, and a read that throws makes only this record malformed.
+    let record: Record<string, unknown>;
+    try {
+      const entry = (list[index] ?? {}) as Record<string, unknown>;
+      record = {
+        pid: entry.pid,
+        kind: entry.kind,
+        bitness: entry.bitness,
+        directory: entry.directory,
+        reason: entry.reason,
+        ownerSid: entry.ownerSid ?? null,
+      };
+    } catch {
+      errors.push(`record ${index} could not be read (reason malformed)`);
+      continue;
+    }
+    const { pid, kind, bitness, directory, reason, ownerSid } = record;
     if (
       typeof pid !== 'number' ||
       !Number.isSafeInteger(pid) ||
@@ -966,7 +988,20 @@ function inspectWindowsProcessRecords(
         }
         continue;
       }
-      inside = real !== null && insideTargets(real);
+      if (real === null) {
+        // Windows scopes a drive letter (SUBST, a network mapping) to a logon
+        // session, so a process can work inside a root under a letter that
+        // this session maps elsewhere or not at all. A directory that could
+        // count and cannot be placed does not clear the condition, unlike on
+        // Linux. Another account's record can never change the status.
+        if (!other) {
+          errors.push(
+            `the working directory of process ${pid} could not be resolved (reason unresolvable): the path does not resolve`,
+          );
+        }
+        continue;
+      }
+      inside = insideTargets(real);
     }
     if (!inside) continue;
     if (other) {

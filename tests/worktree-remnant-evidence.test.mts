@@ -1235,13 +1235,15 @@ test('condition 5 compares the resolved path of a directory and a root', () => {
     [WIN_ROOT],
   );
   assert.equal(viaDirectory.status, 'match');
-  const unresolved = inspectProcessDirectories(
-    winProc([winRecord(7, { directory: 'C:\\gone\\dir' })], {
-      realpath: () => null,
+  // A directory that resolves to nothing is the next test's concern, and a
+  // directory that resolves to another place is outside every root.
+  const elsewhere = inspectProcessDirectories(
+    winProc([winRecord(7, { directory: 'C:\\alias\\src' })], {
+      realpath: (path) => (path === 'C:\\alias\\src' ? WIN_OUTSIDE : path),
     }),
     [WIN_ROOT],
   );
-  assert.equal(unresolved.status, 'clear');
+  assert.equal(elsewhere.status, 'clear');
 });
 
 test('condition 5 resolves a directory only when the lexical path misses', () => {
@@ -1281,6 +1283,198 @@ test('condition 5 is unmet when a directory that could count cannot be resolved'
     [WIN_ROOT],
   );
   assert.equal(other.status, 'clear');
+});
+
+test('condition 5 is unmet for a live current-user record whose directory cannot be resolved', () => {
+  // The root resolves; every other path resolves to nothing.
+  const rootOnly = (path: string): string | null =>
+    path === WIN_ROOT ? path : null;
+  for (const ownerSid of [USER_SID, null]) {
+    const result = inspectProcessDirectories(
+      winProc([winRecord(9, { ownerSid })], { realpath: rootOnly }),
+      [WIN_ROOT],
+    );
+    assert.equal(result.status, 'error', String(ownerSid));
+    assert.match(result.detail, /process 9 could not be resolved/);
+    assert.match(result.detail, /reason unresolvable.*does not resolve/);
+    assert.deepEqual(result.matches, []);
+  }
+  // Another account's record with the same directory stays ignored.
+  const other = inspectProcessDirectories(
+    winProc([winRecord(9, { ownerSid: OTHER_SID })], { realpath: rootOnly }),
+    [WIN_ROOT],
+  );
+  assert.equal(other.status, 'clear');
+  assert.equal(other.otherUsers, 0);
+  // A lexical match is decided before any resolution, so a resolution that
+  // returns nothing cannot hide it.
+  const lexical = inspectProcessDirectories(
+    winProc([winRecord(9, { directory: WIN_INSIDE })], { realpath: rootOnly }),
+    [WIN_ROOT],
+  );
+  assert.equal(lexical.status, 'match');
+  // A match still wins the status, and the detail names the first error.
+  const both = inspectProcessDirectories(
+    winProc([winRecord(9), winRecord(10, { directory: WIN_INSIDE })], {
+      realpath: rootOnly,
+    }),
+    [WIN_ROOT],
+  );
+  assert.equal(both.status, 'match');
+  assert.match(
+    both.detail,
+    /1 process\(es\) could not be classified, the first: .*process 9 could not be resolved/,
+  );
+  // Only a record's directory fails. A root that resolves to nothing is
+  // compared by its lexical form alone: a directory that resolves to itself
+  // outside it is clear, and one lexically inside it still matches.
+  const nullRootPorts = {
+    realpath: (path: string): string | null =>
+      path === WIN_ROOT ? null : path,
+  };
+  const nullRoot = inspectProcessDirectories(
+    winProc([winRecord(11)], nullRootPorts),
+    [WIN_ROOT],
+  );
+  assert.equal(nullRoot.status, 'clear');
+  const nullRootMatch = inspectProcessDirectories(
+    winProc([winRecord(12, { directory: WIN_INSIDE })], nullRootPorts),
+    [WIN_ROOT],
+  );
+  assert.equal(nullRootMatch.status, 'match');
+  // The condition is unmet through the evidence report as well.
+  const report = newEvidenceReport();
+  const { ports: walk } = virtualWalk({ '/wt': old({ isDirectory: true }) });
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: winProc([winRecord(9)], { realpath: rootOnly }),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt'],
+    [WIN_ROOT],
+    HOUR,
+  );
+  assert.equal(report.conditions[4]?.status, 'unmet');
+});
+
+/** A record whose read of one field throws, over a copy of a valid record. */
+function throwingRecord(
+  base: WindowsProcessRecord,
+  field: keyof WindowsProcessRecord,
+): WindowsProcessRecord {
+  return Object.defineProperty({ ...base }, field, {
+    enumerable: true,
+    get(): never {
+      throw new Error(`a getter that throws: ${field}`);
+    },
+  });
+}
+
+test('condition 5 treats a record whose getter throws as malformed and keeps scanning', () => {
+  const fields: Array<keyof WindowsProcessRecord> = [
+    'pid',
+    'kind',
+    'bitness',
+    'directory',
+    'reason',
+    'ownerSid',
+  ];
+  for (const field of fields) {
+    // A throwing record before a live match: both are reported.
+    const before = inspectProcessDirectories(
+      winProc([
+        throwingRecord(winRecord(10), field),
+        winRecord(20, { directory: WIN_INSIDE }),
+      ]),
+      [WIN_ROOT],
+    );
+    assert.equal(before.status, 'match', field);
+    assert.deepEqual(before.matches, [{ pid: 20, cwd: WIN_INSIDE }], field);
+    assert.match(before.detail, /^process 20 has its working directory at /);
+    assert.match(
+      before.detail,
+      /1 process\(es\) could not be classified, the first: record 0 could not be read \(reason malformed\)/,
+      field,
+    );
+    // Alone, it is a malformed error and not an exception.
+    const alone = inspectProcessDirectories(
+      winProc([throwingRecord(winRecord(10), field)]),
+      [WIN_ROOT],
+    );
+    assert.equal(alone.status, 'error', field);
+    assert.match(
+      alone.detail,
+      /record 0 could not be read \(reason malformed\)/,
+      field,
+    );
+  }
+  // A record that throws on any read at all, and an element that cannot be
+  // read from the list.
+  const proxy = new Proxy(
+    {},
+    {
+      get(): never {
+        throw new Error('a proxy that throws');
+      },
+    },
+  );
+  const list: unknown[] = [
+    winRecord(10),
+    winRecord(30, { directory: WIN_ROOT }),
+  ];
+  Object.defineProperty(list, 0, {
+    enumerable: true,
+    get(): never {
+      throw new Error('an element that throws');
+    },
+  });
+  for (const records of [
+    [proxy, winRecord(30, { directory: WIN_ROOT })],
+    list,
+  ]) {
+    const result = inspectProcessDirectories(winProc(records), [WIN_ROOT]);
+    assert.equal(result.status, 'match');
+    assert.deepEqual(result.matches, [{ pid: 30, cwd: WIN_ROOT }]);
+    assert.match(
+      result.detail,
+      /record 0 could not be read \(reason malformed\)/,
+    );
+  }
+  // An entry that is not an object keeps its own text.
+  const hole = inspectProcessDirectories(winProc([undefined]), [WIN_ROOT]);
+  assert.equal(hole.status, 'error');
+  assert.match(
+    hole.detail,
+    /record 0 is not a process record \(reason malformed\)/,
+  );
+});
+
+test('condition 5 reads each field of a record once', () => {
+  const reads: Record<string, number> = {};
+  const counted: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(
+    winRecord(40, { directory: WIN_INSIDE }),
+  )) {
+    Object.defineProperty(counted, field, {
+      enumerable: true,
+      get() {
+        reads[field] = (reads[field] ?? 0) + 1;
+        return value;
+      },
+    });
+  }
+  const result = inspectProcessDirectories(winProc([counted]), [WIN_ROOT]);
+  assert.equal(result.status, 'match');
+  assert.deepEqual(reads, {
+    pid: 1,
+    kind: 1,
+    bitness: 1,
+    directory: 1,
+    reason: 1,
+    ownerSid: 1,
+  });
 });
 
 test('condition 5 takes only owner SIDs in the SID form', () => {
@@ -1379,6 +1573,9 @@ test('the win32 root comparison places drives, separators, prefixes, and escapes
   assert.equal(within('wt', WIN_INSIDE), false);
 });
 
+/** The longest a `taskkill.exe` call may block, in milliseconds. */
+const TASKKILL_TIMEOUT_MS = 5_000;
+
 /**
  * End a child and everything it started, by process id and never by name, then
  * wait for it to exit so its directory can be removed.
@@ -1386,12 +1583,17 @@ test('the win32 root comparison places drives, separators, prefixes, and escapes
 async function endChild(child: ChildProcess): Promise<void> {
   if (child.pid !== undefined && child.exitCode === null) {
     try {
+      // `execFileSync` blocks the event loop, so only its own `timeout` can
+      // stop a `taskkill.exe` that stalls; without it the exit wait below, the
+      // fallback kill, and the directory removal would never run.
       execFileSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
+        timeout: TASKKILL_TIMEOUT_MS,
       });
     } catch {
-      // The process may already be gone; kill() below is the fallback.
+      // The process may already be gone, or `taskkill.exe` may have timed out
+      // or failed in some other way; kill() below is the fallback.
     }
   }
   child.kill();

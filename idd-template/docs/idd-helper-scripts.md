@@ -7777,17 +7777,24 @@ that runs it is
      unreadable owner inside it fails the condition, and another account's is
      counted and not refused; an error record, a missing or throwing reader, a
      result with no records, a record that is not a process record (an unknown
-     kind, a pid that is not positive, an owner that is not a SID), and a record
-     that contradicts the shape of its kind fail the condition (preventive; no
+     kind, a pid that is not positive, an owner that is not a SID), a record
+     whose fields cannot be read (each field is read once), and a record that
+     contradicts the shape of its kind fail the condition (preventive; no
      observed incident yet: the reader's parser already rejects an unknown kind,
      a pid that is not positive, and a contradiction of the kind). Paths are
      compared as Windows paths with letter case ignored, by the lexical form
      first and then by the resolved form of a directory and of each root. A root
      that is not a full drive or UNC path as written, a directory of the current
      user (or with an unreadable owner) that is not a full path, and a root or
-     such a directory whose resolution throws fail the condition; a resolution
-     that returns nothing is ignored, as on Linux. A match wins the status, and
-     the detail also names the first error. On a platform where the check cannot
+     such a directory whose resolution throws fail the condition. A resolution
+     that returns nothing also fails it (reason `unresolvable`) for the
+     directory of such a record that is not lexically inside a root, unlike on
+     Linux, because Windows scopes a drive letter to a logon session and the
+     directory can name nothing in this one; another account's record stays
+     ignored, and a root whose resolution returns nothing is compared by its
+     lexical form alone (preventive; no observed incident yet). A match wins the
+     status, and the detail also names the first error. On a platform where the
+     check cannot
      run, or where the current user is unknown, the condition fails. Finding no
      process is only the absence of a known use.
   6. The confirmation issue and decision match a trusted record read through
