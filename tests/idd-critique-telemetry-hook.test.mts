@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
-import { test } from 'node:test';
+import { after, before, test } from 'node:test';
 import {
   setTimeout as delay,
   setImmediate as nextTurn,
@@ -511,36 +511,56 @@ async function waitForStubHookExit(
   }
 }
 
-/** Identifies the backup watchdog's own spawn call among every spawnFn
- * invocation in a round (kurone-kito/idd-skill#2892, #2897 CI follow-up):
- * POSIX spawns `sh` directly as `args[0]`; win32 spawns a single
- * shell-wrapped command string as `args[0]` (`shell: true`, required --
- * see spawnWatchdogWindows's own doc comment for why a direct,
- * non-shell-wrapped `powershell.exe` spawn silently no-ops on native
- * Windows), so win32 matches by substring instead of exact equality. */
-function isWatchdogSpawnCall(args: Parameters<typeof spawn>): boolean {
-  return process.platform === 'win32'
-    ? typeof args[0] === 'string' &&
-        args[0].includes('powershell.exe') &&
-        args[0].includes('taskkill')
-    : args[0] === 'sh';
+/** Identifies the win32 backup watchdog's own spawn (kurone-kito/idd-skill#5339):
+ * `process.execPath -e <script> <pid> <delayMs>`, matched by its `taskkill`
+ * call. Host-independent, so the win32-override tests match it on any host. */
+function isWin32NodeWatchdogSpawn(args: Parameters<typeof spawn>): boolean {
+  const argv = args[1];
+  return (
+    args[0] === process.execPath &&
+    Array.isArray(argv) &&
+    argv[0] === '-e' &&
+    String(argv[1]).includes('taskkill')
+  );
 }
 
-/** Extracts the watchdog's own sleep-then-kill script from its captured
- * spawn args, regardless of platform: POSIX passes `['-c', script]` to
- * `sh` (a real argv array); win32 spawns one shell-wrapped command string
- * containing `-Command "<script>"` (`shell: true`), so `args` there is
- * the single captured command string itself, not an argv array. */
-function extractWatchdogScript(args: string[] | string | undefined): string {
-  if (!args) {
-    return '';
+/** Identifies the win32 relay (the primary hook spawn), which also starts with
+ * `process.execPath`. The win32 watchdog starts with `process.execPath` too,
+ * so the relay match excludes it (kurone-kito/idd-skill#5339). */
+function isWin32RelaySpawn(args: Parameters<typeof spawn>): boolean {
+  return args[0] === process.execPath && !isWin32NodeWatchdogSpawn(args);
+}
+
+/** Identifies the backup watchdog's own spawn call among every spawnFn
+ * invocation in a round (kurone-kito/idd-skill#2892, #2897 CI follow-up,
+ * #5339): POSIX spawns `sh` directly as `args[0]` with `['-c', script]`;
+ * win32 spawns `process.execPath` with `['-e', script, pid, delayMs]`. */
+function isWatchdogSpawnCall(args: Parameters<typeof spawn>): boolean {
+  return isWin32NodeWatchdogSpawn(args) || args[0] === 'sh';
+}
+
+/** Extracts the watchdog's script from its captured argv array. On both
+ * platforms the script is `argv[1]`: POSIX `['-c', script]`, win32
+ * `['-e', script, pid, delayMs]`. */
+function extractWatchdogScript(argv: string[] | undefined): string {
+  return argv?.[1] ?? '';
+}
+
+/** The watchdog's delay in whole seconds, from its captured argv: `sleep <n>;`
+ * in the POSIX script, or the delay in milliseconds as the win32 watchdog's
+ * fourth argv entry. */
+function extractWatchdogDelaySeconds(
+  argv: string[] | undefined,
+): number | undefined {
+  if (!argv) {
+    return undefined;
   }
   if (process.platform === 'win32') {
-    const command = args as string;
-    const match = command.match(/-Command "(.*)"$/);
-    return match?.[1] ?? '';
+    const ms = Number(argv[3]);
+    return Number.isFinite(ms) ? ms / 1000 : undefined;
   }
-  return (args as string[])[1] ?? '';
+  const match = /^sleep (\d+);/.exec(argv[1] ?? '');
+  return match ? Number(match[1]) : undefined;
 }
 
 /**
@@ -1305,7 +1325,7 @@ test('invokeCritiqueTelemetryHook win32 relay scrubs a non-canonically-cased res
     // the primary spawn is uniquely identified by process.execPath as
     // args[0] on win32 (the relay itself), unlike the target/taskkill
     // calls this spawnFn also sees.
-    if (args[0] === process.execPath) {
+    if (isWin32RelaySpawn(args)) {
       capturedEnv = (args[2] as { env?: NodeJS.ProcessEnv }).env;
     }
     return child;
@@ -1425,7 +1445,7 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
       // -- `process.execPath` is the one value unique to that call among
       // everything else this spawnFn sees (the watchdog and `taskkill`
       // calls both pass a string as args[0]).
-      if (args[0] === process.execPath) {
+      if (isWin32RelaySpawn(args)) {
         primaryChild = child;
       }
       if (
@@ -1479,25 +1499,18 @@ test('invokeCritiqueTelemetryHook spawns a win32 process-tree kill (taskkill /PI
   }
 });
 
-test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog through a shell hop (cmd.exe -> powershell.exe Start-Sleep + a direct System.Diagnostics.Process taskkill) when platform is overridden to win32', async () => {
-  // The watchdog command is spawned as a single shell-wrapped string, not
-  // a bare `powershell.exe` argv array (kurone-kito/idd-skill#2892, #2897
-  // CI follow-up): a direct spawnFn('powershell.exe', [...], {detached:
-  // true}) was confirmed live on native Windows 11 to exit in ~70-140ms
-  // with code 0 without ever running its script -- see
-  // spawnWatchdogWindows's own doc comment for the full evidence. This
-  // test therefore asserts the shell-wrapped command string and options,
-  // not a bare powershell.exe argv shape.
-  let watchdogCommand: string | undefined;
+test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog as a detached node process with no shell hop (node -e, pid, delay) when platform is overridden to win32', async () => {
+  // The win32 watchdog is `process.execPath -e <script> <pid> <delayMs>`,
+  // spawned directly with `detached: true` and no shell hop. It replaces the
+  // `cmd.exe` -> `powershell.exe` watchdog, which opened a Windows Terminal
+  // window per spawn (kurone-kito/idd-skill#5339). This test asserts the argv
+  // and the options. The real kill and the window count are checked below.
+  let watchdogArgs: string[] | undefined;
   let watchdogOptions: Record<string, unknown> | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
-    if (
-      typeof args[0] === 'string' &&
-      args[0].includes('powershell.exe') &&
-      args[0].includes('taskkill')
-    ) {
-      watchdogCommand = args[0];
-      watchdogOptions = args[1] as unknown as Record<string, unknown>;
+    if (isWin32NodeWatchdogSpawn(args)) {
+      watchdogArgs = args[1] as string[];
+      watchdogOptions = args[2] as unknown as Record<string, unknown>;
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -1514,26 +1527,199 @@ test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog through a shell
     );
     assert.deepEqual(result, { attempted: true, ok: true });
     assert.ok(
-      watchdogCommand,
-      'expected the win32 watchdog (powershell.exe via a shell hop) to have been spawned',
+      watchdogArgs,
+      'expected the win32 watchdog (process.execPath -e) to have been spawned',
+    );
+    assert.equal(watchdogArgs[0], '-e');
+    const script = watchdogArgs[1] ?? '';
+    assert.match(
+      script,
+      /spawn\('taskkill', \['\/PID', process\.argv\[1\], '\/T', '\/F'\]/,
+      `expected the watchdog script to run taskkill /PID <pid> /T /F, got: ${script}`,
     );
     assert.match(
-      watchdogCommand ?? '',
-      /^powershell\.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-Sleep -Seconds 5; \$p = New-Object System\.Diagnostics\.Process; \$p\.StartInfo\.FileName = 'taskkill'; \$p\.StartInfo\.Arguments = '\/PID \d+ \/T \/F'; \$p\.StartInfo\.UseShellExecute = \$false; \$p\.StartInfo\.CreateNoWindow = \$true; \[void\]\$p\.Start\(\); \$p\.WaitForExit\(\)"$/,
-      `expected the win32 watchdog command shape, got: ${watchdogCommand}`,
+      script,
+      /\}, Number\(process\.argv\[2\]\)\);$/,
+      `expected the watchdog script to wait for the delay argument, got: ${script}`,
     );
-    // Also assert the options object, not just the command string (C1
-    // review, kurone-kito/idd-skill#2892): `detached: true` in particular
-    // is load-bearing -- drop it and this watchdog would die together
-    // with the parent the instant `--invoke`'s `process.exit(0)` fires,
-    // silently disabling the entire Windows backup-deadline mechanism
-    // this issue adds, with no argv-only assertion able to catch the
-    // regression. `shell: true` (the #2897 follow-up fix) is equally
-    // load-bearing -- see this test's own header comment.
-    assert.equal(watchdogOptions?.shell, true);
+    assert.match(
+      watchdogArgs[2] ?? '',
+      /^\d+$/,
+      'expected the kill target pid as the second watchdog argument',
+    );
+    assert.equal(
+      watchdogArgs[3],
+      '5000',
+      'expected the delay in milliseconds as the third watchdog argument',
+    );
+    // Options, not just argv (C1 review, kurone-kito/idd-skill#2892):
+    // `detached: true` is load-bearing -- drop it and the watchdog dies with
+    // the parent at `--invoke`'s `process.exit(0)`, silently disabling the
+    // Windows backup deadline. A shell hop is what #5339 removes, so the
+    // watchdog must not set `shell`.
+    assert.notEqual(watchdogOptions?.shell, true);
     assert.equal(watchdogOptions?.detached, true);
     assert.equal(watchdogOptions?.stdio, 'ignore');
     assert.equal(watchdogOptions?.windowsHide, true);
+  } finally {
+    restore();
+  }
+});
+
+/**
+ * Counts the top-level windows of class `CASCADIA_HOSTING_WINDOW_CLASS`,
+ * which Windows Terminal uses for its windows, visible or hidden. `Get-Process`
+ * `MainWindowHandle` does not see those windows, so this uses EnumWindows.
+ * Returns -1 when the count cannot be read.
+ */
+function countCascadiaWindows(): number {
+  const script = [
+    'Add-Type -TypeDefinition \'using System; using System.Text; using System.Runtime.InteropServices; public class IddCascadiaCount { public delegate bool EnumProc(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n); public static int Count(string cls) { int n = 0; EnumWindows(delegate(IntPtr h, IntPtr l) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); if (s.ToString() == cls) n++; return true; }, IntPtr.Zero); return n; } }\'',
+    "[Console]::Out.Write([IddCascadiaCount]::Count('CASCADIA_HOSTING_WINDOW_CLASS'))",
+  ].join('; ');
+  try {
+    const out = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8' },
+    );
+    const count = Number.parseInt(out.trim(), 10);
+    return Number.isNaN(count) ? -1 : count;
+  } catch {
+    return -1;
+  }
+}
+
+// kurone-kito/idd-skill#5339: on a Windows Terminal host, the whole file must
+// leave the number of Windows Terminal windows unchanged. The check is a
+// file-level before/after measurement, so it runs only when WT_SESSION is set
+// and it assumes no other process opens such windows during the run.
+let cascadiaWindowsBefore = -1;
+if (process.platform === 'win32' && process.env.WT_SESSION) {
+  before(() => {
+    cascadiaWindowsBefore = countCascadiaWindows();
+  });
+  after(() => {
+    const cascadiaWindowsAfter = countCascadiaWindows();
+    assert.ok(
+      cascadiaWindowsBefore >= 0 && cascadiaWindowsAfter >= 0,
+      'expected the Windows Terminal window count to be readable',
+    );
+    assert.equal(
+      cascadiaWindowsAfter - cascadiaWindowsBefore,
+      0,
+      `expected no new Windows Terminal window from this file, count went from ${cascadiaWindowsBefore} to ${cascadiaWindowsAfter}`,
+    );
+  });
+}
+
+test('invokeCritiqueTelemetryHook gives the win32 backup watchdog an environment without NODE_OPTIONS, matched case-insensitively (kurone-kito/idd-skill#5339)', async () => {
+  // The watchdog is a `node` process, so an inherited NODE_OPTIONS preload
+  // could stop it at startup. The relay branch strips the same variable for
+  // the same reason. The test sets NODE_OPTIONS for its own duration.
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = '--no-warnings';
+  let watchdogEnv: NodeJS.ProcessEnv | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (isWin32NodeWatchdogSpawn(args)) {
+      watchdogEnv = (args[2] as { env?: NodeJS.ProcessEnv }).env;
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-watchdog-env',
+    'process.exit(0);\n',
+  );
+  try {
+    const result = await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-watchdog-env',
+      samplePayload(),
+      { timeoutMs: 5_000, spawnFn, platform: 'win32' },
+    );
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.ok(
+      watchdogEnv,
+      'expected the win32 watchdog to have been spawned with an explicit environment',
+    );
+    assert.deepEqual(
+      Object.keys(watchdogEnv).filter(
+        (key) => key.toUpperCase() === 'NODE_OPTIONS',
+      ),
+      [],
+      'expected no NODE_OPTIONS key in the watchdog environment',
+    );
+    assert.equal(
+      Object.keys(watchdogEnv).length,
+      Object.keys(process.env).filter(
+        (key) => key.toUpperCase() !== 'NODE_OPTIONS',
+      ).length,
+      'expected every other environment variable to pass through unchanged',
+    );
+  } finally {
+    restore();
+    if (previousNodeOptions === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = previousNodeOptions;
+    }
+  }
+});
+
+test('invokeCritiqueTelemetryHook keeps the win32 backup watchdog running while the hook runs, and ends it once the hook settles (kurone-kito/idd-skill#5339)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  // The watchdog's delay is 10 s, and the hook exits on its own at 2.5 s.
+  // Two checks follow from that. At 1 s, while the hook still runs, the
+  // watchdog must be alive, which catches a watchdog that exits at once. After
+  // the hook settles, the watchdog must be gone well before its own 10 s
+  // delay, which catches a cancel path that never runs. Without the cancel,
+  // the watchdog would still be alive at 7.5 s and the wait would fail.
+  const watchdogs: ReturnType<typeof spawn>[] = [];
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    const child = spawn(...args);
+    if (isWin32NodeWatchdogSpawn(args)) {
+      watchdogs.push(child);
+    }
+    return child;
+  }) as typeof spawn;
+
+  const restore = stubExecutable(
+    'idd-telemetry-hook-watchdog-alive',
+    'setTimeout(() => process.exit(0), 2_500);\n',
+  );
+  try {
+    const invocation = invokeCritiqueTelemetryHook(
+      stayAliveCommand('idd-telemetry-hook-watchdog-alive'),
+      samplePayload(),
+      { timeoutMs: 10_000, spawnFn, platform: 'win32' },
+    );
+    await delay(1_000);
+    const watchdog = watchdogs[0];
+    assert.ok(
+      watchdog?.pid,
+      'expected the win32 watchdog (process.execPath -e) to have been spawned',
+    );
+    assert.equal(
+      watchdog.exitCode,
+      null,
+      'expected the watchdog to still be running 1 second after the hook started',
+    );
+    let alive = true;
+    try {
+      process.kill(watchdog.pid, 0);
+    } catch {
+      alive = false;
+    }
+    assert.ok(alive, 'expected the watchdog process to still exist');
+
+    const result = await invocation;
+    assert.deepEqual(result, { attempted: true, ok: true });
+    assert.equal(
+      await waitUntilProcessGone(watchdog.pid, 5_000),
+      true,
+      'expected the watchdog to be gone soon after the hook settled, not at its own 10 s delay',
+    );
   } finally {
     restore();
   }
@@ -1558,8 +1744,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
   // target on its own and this test would pass whether or not the
   // watchdog itself works. The injected spawnFn below neuters only that
   // direct taskkill call -- matched by args[0] === 'taskkill', which
-  // never matches the watchdog's own shell-wrapped powershell.exe command
-  // string -- so the watchdog is the only thing that can terminate the
+  // never matches the watchdog's own `node -e` spawn -- so the watchdog is the only thing that can terminate the
   // target here.
   const restore = stubExecutable(
     'idd-telemetry-hook-watchdog-real-kill',
@@ -1582,7 +1767,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
         return fake;
       }
       const child = spawn(...args);
-      if (args[0] === process.execPath) {
+      if (isWin32RelaySpawn(args)) {
         hookPid = child.pid;
       }
       return child;
@@ -1596,7 +1781,7 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
     assert.ok(hookPid, 'expected the relay to have a real pid');
     // Poll instead of a single fixed-delay sample (issue #3217): under
     // this repository's documented heavy concurrent-session scheduling
-    // load, a cold `powershell.exe` spawn plus its `taskkill` call can
+    // load, a cold `node` spawn plus its `taskkill` call can
     // take longer than a single fixed wait accounts for, even when the
     // watchdog works correctly. The 20s poll deadline is well inside this
     // job's 15-minute `timeout-minutes`.
@@ -1646,31 +1831,6 @@ function listVisibleWindowPids(): Set<string> {
   );
 }
 
-/**
- * Counts the top-level windows of class `CASCADIA_HOSTING_WINDOW_CLASS`,
- * which Windows Terminal uses for its windows, visible or hidden. Get-Process
- * `MainWindowHandle` does not see those windows, so this uses EnumWindows.
- * Diagnostic only (kurone-kito/idd-skill#5333): the caller prints the delta
- * and asserts nothing on it. Returns -1 when the count cannot be read.
- */
-function countCascadiaWindows(): number {
-  const script = [
-    'Add-Type -TypeDefinition \'using System; using System.Text; using System.Runtime.InteropServices; public class IddCascadiaCount { public delegate bool EnumProc(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr l); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n); public static int Count(string cls) { int n = 0; EnumWindows(delegate(IntPtr h, IntPtr l) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); if (s.ToString() == cls) n++; return true; }, IntPtr.Zero); return n; } }\'',
-    "[Console]::Out.Write([IddCascadiaCount]::Count('CASCADIA_HOSTING_WINDOW_CLASS'))",
-  ].join('; ');
-  try {
-    const out = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      { encoding: 'utf8' },
-    );
-    const count = Number.parseInt(out.trim(), 10);
-    return Number.isNaN(count) ? -1 : count;
-  } catch {
-    return -1;
-  }
-}
-
 test('invokeCritiqueTelemetryHook does not create a visible console window on win32, for a command that exits quickly or one that hangs and is killed (#2892 acceptance criterion, review follow-up)', {
   skip: process.platform !== 'win32',
 }, async () => {
@@ -1690,9 +1850,6 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     'setInterval(() => {}, 1_000);\n',
   );
   try {
-    // Diagnostic only (kurone-kito/idd-skill#5333): the count of Windows
-    // Terminal windows before and after the test is printed, not asserted.
-    const cascadiaBefore = countCascadiaWindows();
     // Half 1: a command that exits quickly on its own. Snapshot window
     // state WHILE it is still running (#2892 review, Copilot) --
     // `invokeCritiqueTelemetryHook` only resolves once the child has
@@ -1727,7 +1884,7 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     let hangPid: number | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       const child = spawn(...args);
-      if (args[0] === process.execPath) {
+      if (isWin32RelaySpawn(args)) {
         hangPid = child.pid;
       }
       return child;
@@ -1752,10 +1909,6 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
     if (hangPid) {
       cleanupProcessTree(hangPid);
     }
-    const cascadiaAfter = countCascadiaWindows();
-    console.log(
-      `# CASCADIA_HOSTING_WINDOW_CLASS count before=${cascadiaBefore} after=${cascadiaAfter} delta=${cascadiaAfter < 0 || cascadiaBefore < 0 ? 'unavailable' : cascadiaAfter - cascadiaBefore}`,
-    );
   } finally {
     // LIFO order: each stubExecutable() call captures PATH/NODE_OPTIONS as
     // they stood immediately before that call, so restoring in creation
@@ -1791,7 +1944,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
       // test above for why `process.execPath` (not the raw command
       // string) now uniquely identifies the primary spawn on win32.
-      if (args[0] === process.execPath) {
+      if (isWin32RelaySpawn(args)) {
         primaryChild = child;
       }
       return child;
@@ -1895,7 +2048,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       // kurone-kito/idd-skill#2910: see the win32 taskkill-on-timeout
       // test above for why `process.execPath` (not the raw command
       // string) now uniquely identifies the primary spawn on win32.
-      if (args[0] === process.execPath) {
+      if (isWin32RelaySpawn(args)) {
         primaryChild = child;
       }
       return child;
@@ -2196,13 +2349,10 @@ test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-fi
   // default) bound. Capture the watchdog's `sleep` argument via a spawnFn
   // spy to prove the sanitized value reached it, rather than waiting out
   // a real default-5s timeout in this test.
-  let watchdogArgs: string[] | string | undefined;
+  let watchdogArgs: string[] | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
     if (isWatchdogSpawnCall(args)) {
-      watchdogArgs =
-        process.platform === 'win32'
-          ? (args[0] as string)
-          : (args[1] as string[]);
+      watchdogArgs = args[1] as string[];
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -2219,13 +2369,10 @@ test('invokeCritiqueTelemetryHook falls back to the default timeout for a non-fi
     );
     assert.deepEqual(result, { attempted: true, ok: true });
     assert.ok(watchdogArgs, 'expected the watchdog to have been spawned');
-    const script = extractWatchdogScript(watchdogArgs);
-    const expectedPattern =
-      process.platform === 'win32' ? /^Start-Sleep -Seconds 5;/ : /^sleep 5;/;
-    assert.match(
-      script,
-      expectedPattern,
-      `expected a NaN timeoutMs to fall back to the default 5s bound, got: ${script}`,
+    assert.equal(
+      extractWatchdogDelaySeconds(watchdogArgs),
+      5,
+      `expected a NaN timeoutMs to fall back to the default 5s bound, got: ${extractWatchdogScript(watchdogArgs)}`,
     );
   } finally {
     restore();
@@ -2240,13 +2387,10 @@ test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 re
   // watchdog's `sleep` argument is always a whole number, rounded *up*
   // (never down, which could fire the backup before the primary JS-level
   // timer it exists to survive past).
-  let watchdogArgs: string[] | string | undefined;
+  let watchdogArgs: string[] | undefined;
   const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
     if (isWatchdogSpawnCall(args)) {
-      watchdogArgs =
-        process.platform === 'win32'
-          ? (args[0] as string)
-          : (args[1] as string[]);
+      watchdogArgs = args[1] as string[];
     }
     return spawn(...args);
   }) as typeof spawn;
@@ -2262,13 +2406,10 @@ test('spawnWatchdog rounds a fractional timeoutMs up to a whole second (#2685 re
       { timeoutMs: 1_500, spawnFn },
     );
     assert.deepEqual(result, { attempted: true, ok: true });
-    const script = extractWatchdogScript(watchdogArgs);
-    const expectedPattern =
-      process.platform === 'win32' ? /^Start-Sleep -Seconds 2;/ : /^sleep 2;/;
-    assert.match(
-      script,
-      expectedPattern,
-      `expected timeoutMs: 1500 to round up to a 2s sleep, got: ${script}`,
+    assert.equal(
+      extractWatchdogDelaySeconds(watchdogArgs),
+      2,
+      `expected timeoutMs: 1500 to round up to a 2s sleep, got: ${extractWatchdogScript(watchdogArgs)}`,
     );
   } finally {
     restore();
