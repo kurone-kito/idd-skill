@@ -1119,8 +1119,11 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
 function collectScopeOverrunWithBaseEntries(
   baseEntries: Readonly<Record<string, unknown>>,
   changedFiles: readonly string[],
-  // Paths whose raw read reports too-large, as a file above the limit (#5342).
-  tooLarge: readonly string[] = [],
+  // Per-path raw-route results that replace the keyed fixtures: an outcome, or
+  // an error the read throws (#5342).
+  rawOverrides: Readonly<
+    Record<string, RepositoryFileBytesOutcome | Error>
+  > = {},
 ) {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
   try {
@@ -1148,8 +1151,10 @@ function collectScopeOverrunWithBaseEntries(
         return baseEntries[path];
       },
       getRepositoryFileBytesAtRef: (owner, repo, path, ref) => {
-        if (tooLarge.includes(path)) {
-          return { outcome: 'too-large' };
+        if (Object.hasOwn(rawOverrides, path)) {
+          const override = rawOverrides[path];
+          if (override instanceof Error) throw override;
+          return override;
         }
         if (!Object.hasOwn(baseEntries, path)) {
           return rawRouteOutcomeFromContents(
@@ -1244,7 +1249,7 @@ test('an oversized changed path is a repository-file-too-large blocker through t
   const { report } = collectScopeOverrunWithBaseEntries(
     {},
     ['src/listed.mts', 'src/big.mts'],
-    ['src/big.mts'],
+    { 'src/big.mts': { outcome: 'too-large' } },
   );
   assert.equal(report.ready, false);
   assert.deepEqual(
@@ -1260,7 +1265,7 @@ test('an oversized sync manifest is a repository-file-too-large blocker through 
   const { report } = collectScopeOverrunWithBaseEntries(
     {},
     ['src/listed.mts'],
-    ['audit/sync-manifest.json'],
+    { 'audit/sync-manifest.json': { outcome: 'too-large' } },
   );
   assert.equal(report.ready, false);
   assert.deepEqual(
@@ -1270,6 +1275,26 @@ test('an oversized sync manifest is a repository-file-too-large blocker through 
     ]),
     [['audit/sync-manifest.json', 'repository-file-too-large']],
   );
+});
+
+test('a higher-priority CODEOWNERS file stops the read, so a truncated root listing cannot abort readiness (#5342)', () => {
+  // The root CODEOWNERS read would throw on a truncated listing. Once
+  // .github/CODEOWNERS is read, that lower-priority read must not happen.
+  const { report } = collectScopeOverrunWithBaseEntries(
+    {
+      '.github/CODEOWNERS': {
+        type: 'file',
+        content: Buffer.from('* @org/root\n').toString('base64'),
+      },
+    },
+    ['src/listed.mts'],
+    {
+      CODEOWNERS: new Error(
+        'directory listing for CODEOWNERS may be truncated at 1000 entries',
+      ),
+    },
+  );
+  assert.equal(report.repositoryFileBlockers, undefined);
 });
 
 test('a sync manifest that is not found keeps the empty set, with no blocker (#5342)', () => {
@@ -1292,7 +1317,7 @@ test('a too-large file read twice is one blocker, not one per read (#5342)', () 
   const { report } = collectScopeOverrunWithBaseEntries(
     {},
     ['src/listed.mts', 'audit/sync-manifest.json'],
-    ['audit/sync-manifest.json'],
+    { 'audit/sync-manifest.json': { outcome: 'too-large' } },
   );
   assert.deepEqual(
     report.repositoryFileBlockers?.map((blocker) => [

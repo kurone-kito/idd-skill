@@ -3303,19 +3303,22 @@ export function remoteNamesRepo(url, owner, repo, host = 'github.com') {
   );
 }
 function fetchCodeownersText(port, owner, repo, ref, repositoryFileBlockers) {
-  const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(
-    (path) => {
-      const read = port.getRepositoryFileBytesAtRef(owner, repo, path, ref);
-      if (read.outcome === 'ok') {
-        // An empty file is `ok` with empty content, which stops selection.
-        return { content: read.bytes.toString('base64') };
-      }
-      if (read.outcome === 'too-large') {
-        recordRepositoryFileBlocker(repositoryFileBlockers, path);
-      }
-      return null;
-    },
-  );
+  // Candidates are read in priority order, and the read stops at the first
+  // `ok` file, including an empty one. A lower-priority location is never read
+  // once a higher one is selected, so its listing cannot abort readiness
+  // (#5342).
+  const payloads = [];
+  for (const path of ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']) {
+    const read = port.getRepositoryFileBytesAtRef(owner, repo, path, ref);
+    if (read.outcome === 'ok') {
+      payloads.push({ content: read.bytes.toString('base64') });
+      break;
+    }
+    if (read.outcome === 'too-large') {
+      recordRepositoryFileBlocker(repositoryFileBlockers, path);
+    }
+    payloads.push(null);
+  }
   return selectCodeownersText(payloads);
 }
 /**
