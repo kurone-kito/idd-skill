@@ -521,6 +521,44 @@ function readerFailureText(error) {
     : line;
 }
 const WINDOWS_RECORD_KINDS = new Set(['exited', 'denied', 'live', 'error']);
+function isNone(value) {
+  return value === null || value === undefined;
+}
+function isText(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+/**
+ * Why a record breaks the per-kind shape the reader documents, or `null`. The
+ * same invariants as `parseWindowsProcessRecords`, which the injected ports do
+ * not have to pass through, so a record that contradicts its kind (a denied one
+ * with a bitness, an exited one with a directory) is not classified as if it
+ * were well formed. `kind` is already known to be one of the four.
+ */
+function recordShapeProblem(record) {
+  const { kind, bitness, directory, reason } = record;
+  if (kind !== 'error' && !isNone(reason)) {
+    return 'a reason on a record that is not an error';
+  }
+  switch (kind) {
+    case 'exited':
+      return isNone(bitness) && isNone(directory) && isNone(record.ownerSid)
+        ? null
+        : 'an exited record with a bitness, a directory, or an owner';
+    case 'denied':
+      return isNone(bitness) && isNone(directory)
+        ? null
+        : 'a denied record with a bitness or a directory';
+    case 'live':
+      if (bitness === 32) {
+        return isNone(directory) ? null : 'a 32-bit record with a directory';
+      }
+      return bitness === 64 && isText(directory)
+        ? null
+        : 'a live record with no bitness, or a 64-bit one with no directory';
+    default:
+      return isText(reason) ? null : 'an error record with no reason';
+  }
+}
 /**
  * Condition 5 on `win32`, from the records of the batch reader (kurone-kito/
  * idd-skill#5347, roadmap #5285). The current user is the owner SID equal to
@@ -626,15 +664,18 @@ function inspectWindowsProcessRecords(ports, roots) {
       errors.push(`record ${index} is not a process record (reason malformed)`);
       continue;
     }
+    const shapeProblem = recordShapeProblem(record);
+    if (shapeProblem !== null) {
+      errors.push(
+        `the record of process ${pid} is out of shape: ${shapeProblem} (reason malformed)`,
+      );
+      continue;
+    }
     const owner = ownerSid;
     if (kind === 'exited') continue;
     if (kind === 'error') {
       errors.push(
-        `the working directory of process ${pid} could not be read (reason ${
-          typeof reason === 'string' && reason.trim() !== ''
-            ? reason
-            : 'unknown'
-        })`,
+        `the working directory of process ${pid} could not be read (reason ${reason})`,
       );
       continue;
     }
@@ -659,12 +700,10 @@ function inspectWindowsProcessRecords(ports, roots) {
       continue;
     }
     const other = owner !== null && owner !== currentSid;
-    if (
-      bitness !== 64 ||
-      typeof directory !== 'string' ||
-      !isQualifiedWin32Path(directory)
-    ) {
-      // A record that cannot be placed. Another account's never counts.
+    // The shape check above leaves a 64-bit record with a text directory.
+    const cwd = directory;
+    if (!isQualifiedWin32Path(cwd)) {
+      // A directory that cannot be placed. Another account's never counts.
       if (!other) {
         errors.push(
           `process ${pid} has no usable working directory (reason malformed)`,
@@ -672,11 +711,11 @@ function inspectWindowsProcessRecords(ports, roots) {
       }
       continue;
     }
-    let inside = insideTargets(directory);
+    let inside = insideTargets(cwd);
     if (!inside) {
       let real;
       try {
-        real = ports.realpath(directory);
+        real = ports.realpath(cwd);
       } catch (error) {
         if (!other) {
           errors.push(
@@ -695,7 +734,7 @@ function inspectWindowsProcessRecords(ports, roots) {
         `the owner of process ${pid} could not be read (reason owner-unreadable)`,
       );
     } else {
-      result.matches.push({ pid, cwd: directory });
+      result.matches.push({ pid, cwd });
     }
   }
   const firstError = errors[0];

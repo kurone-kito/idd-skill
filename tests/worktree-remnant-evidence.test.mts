@@ -751,6 +751,14 @@ function deniedRecord(
   });
 }
 
+/** A denied record that also carries a field the reader never sets on one. */
+function deniedRecordWith(
+  pid: number,
+  overrides: Partial<WindowsProcessRecord>,
+): WindowsProcessRecord {
+  return { ...deniedRecord(pid, USER_SID), ...overrides };
+}
+
 /** A 32-bit record: live, no directory. */
 function wow64Record(pid: number, ownerSid: string | null = USER_SID) {
   return winRecord(pid, { bitness: 32, ownerSid, directory: null });
@@ -1083,9 +1091,10 @@ test('condition 5 is unmet for a malformed reader result', () => {
   const read = (): never => {
     throw new Error('the reader must not run');
   };
-  // A record of another account that cannot be placed never changes the status.
+  // A directory of another account that cannot be placed never changes the
+  // status; a record out of its kind's shape is malformed whoever owns it.
   const other = inspectProcessDirectories(
-    winProc([winRecord(1, { ownerSid: OTHER_SID, directory: null })]),
+    winProc([winRecord(1, { ownerSid: OTHER_SID, directory: 'src\\wt' })]),
     [WIN_ROOT],
   );
   assert.equal(other.status, 'clear');
@@ -1096,6 +1105,57 @@ test('condition 5 is unmet for a malformed reader result', () => {
   );
   assert.equal(relative.status, 'error');
   assert.match(relative.detail, /reason unresolvable/);
+});
+
+test('condition 5 is unmet for a record that contradicts its kind', () => {
+  const contradictions: Array<[string, WindowsProcessRecord]> = [
+    ['a denied record with a bitness', deniedRecordWith(1, { bitness: 32 })],
+    [
+      'a denied record with a 64-bit bitness',
+      deniedRecordWith(2, { bitness: 64 }),
+    ],
+    [
+      'a denied record with a directory',
+      deniedRecordWith(3, { directory: WIN_INSIDE }),
+    ],
+    [
+      'an exited record with a directory',
+      { ...exitedRecord(4), directory: WIN_INSIDE },
+    ],
+    ['an exited record with a bitness', { ...exitedRecord(5), bitness: 64 }],
+    [
+      'an exited record with an owner',
+      { ...exitedRecord(6), ownerSid: USER_SID },
+    ],
+    [
+      'a 32-bit record with a directory',
+      winRecord(7, { bitness: 32, directory: WIN_INSIDE }),
+    ],
+    ['a live record with a blank directory', winRecord(8, { directory: ' ' })],
+    ['a live record with a reason', winRecord(9, { reason: 'unexpected' })],
+    [
+      'an error record without a reason',
+      { ...errorRecord(10, 'x'), reason: null },
+    ],
+    ['an error record with a blank reason', errorRecord(11, '  ')],
+  ];
+  for (const [label, record] of contradictions) {
+    // An exited record keeps its own owner; the others are tried with each.
+    const owners =
+      record.kind === 'exited'
+        ? [record.ownerSid]
+        : [USER_SID, OTHER_SID, null];
+    for (const ownerSid of owners) {
+      const result = inspectProcessDirectories(
+        winProc([{ ...record, ownerSid }]),
+        [WIN_ROOT],
+      );
+      assert.equal(result.status, 'error', `${label} (owner ${ownerSid})`);
+      assert.match(result.detail, /out of shape/, label);
+      assert.match(result.detail, /reason malformed/, label);
+      assert.equal(result.notInspected.count, 0, label);
+    }
+  }
 });
 
 test('condition 5 resolves the roots before it reads the processes', () => {
