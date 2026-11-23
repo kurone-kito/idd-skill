@@ -496,6 +496,8 @@ ${
     ? `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/contents/.github/idd/config.json`}') out(${JSON.stringify(Buffer.from(options.configJson, 'utf8').toString('base64'))});`
     : ''
 }
+// The root directory listing is an empty array, so a root-level path is absent (#5342).
+if (a(0) === 'api' && (a(1) === '${`repos/${REPO_REF}/contents`}' || String(a(1)).startsWith('${`repos/${REPO_REF}/contents?`}'))) out('[]');
 if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/`}')) notFound();
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);

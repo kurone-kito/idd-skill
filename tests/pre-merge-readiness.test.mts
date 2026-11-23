@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
 // #2919: the real workflow-file-path constant, imported here (a test file,
 // no import-cycle constraint applies) to pin protocol-helpers.mts's own
 // independently-declared `ADVISORY_CONVERGENCE_WORKFLOW_FILE_PATH` literal
@@ -112,6 +111,7 @@ import type {
   ProviderComment,
   ProviderPort,
   ProviderReviewClauseNode,
+  RepositoryFileBytesOutcome,
 } from '../src/scripts/provider-port.mts';
 import { buildVerifiedClaimLineage } from '../src/scripts/provisional-claim-lineage.mts';
 import {
@@ -334,9 +334,32 @@ test('scope-overrun merge base refuses a target repository that the checkout ori
   }
 });
 
+/**
+ * Maps a contents-API fixture value to the raw-route outcome (#5342). The
+ * fakes below still describe their fixtures in the object form: a listing
+ * array, a directory or submodule entry, or an object with content.
+ */
+function rawRouteOutcomeFromContents(
+  value: unknown,
+): RepositoryFileBytesOutcome {
+  if (value === null || value === undefined) return { outcome: 'not-found' };
+  if (Array.isArray(value)) return { outcome: 'not-a-file' };
+  const entry = value as { type?: unknown; content?: unknown };
+  if (entry.type !== undefined && entry.type !== 'file') {
+    return { outcome: 'not-a-file' };
+  }
+  return {
+    outcome: 'ok',
+    bytes: Buffer.from(String(entry.content ?? ''), 'base64'),
+  };
+}
+
 test('scope-overrun base reads treat a directory or submodule entry as absent, and fail closed on the sync manifest', () => {
   const portWith = (value: unknown) =>
-    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
+    ({
+      getRepositoryContentAtRef: () => value,
+      getRepositoryFileBytesAtRef: () => rawRouteOutcomeFromContents(value),
+    }) as unknown as ProviderPort;
   assert.deepEqual(
     readRepositoryContentAtRef(
       portWith([{ type: 'file' }]),
@@ -897,6 +920,7 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
           : comments;
       },
       getRepositoryContentAtRef: () => null,
+      getRepositoryFileBytesAtRef: () => ({ outcome: 'not-found' }),
     };
     const report = collectPreMergeReadiness(
       [
@@ -962,6 +986,15 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
         }
         return base.getRepositoryContentAtRef(owner, repo, path, ref);
       },
+      getRepositoryFileBytesAtRef: (owner, repo, path, ref) => {
+        encodedPaths.push(path);
+        if (path === 'audit/sync-manifest.json' || path.includes('odd')) {
+          scopeBaseRefs.push(ref);
+        }
+        return rawRouteOutcomeFromContents(
+          base.getRepositoryContentAtRef(owner, repo, path, ref),
+        );
+      },
     };
     const report = collectPreMergeReadiness(
       [
@@ -1001,7 +1034,7 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       true,
     );
     assert.equal(report.ready, false);
-    assert.ok(encodedPaths.includes('src/odd%3F%23.mts'));
+    assert.ok(encodedPaths.includes('src/odd?#.mts'));
     assert.deepEqual(scopeBaseRefs, ['b'.repeat(40), 'b'.repeat(40)]);
 
     const validPort: ProviderPort = {
@@ -1111,6 +1144,15 @@ function collectScopeOverrunWithBaseEntries(
         }
         keyedReads.push({ path, ref });
         return baseEntries[path];
+      },
+      getRepositoryFileBytesAtRef: (owner, repo, path, ref) => {
+        if (!Object.hasOwn(baseEntries, path)) {
+          return rawRouteOutcomeFromContents(
+            base.getRepositoryContentAtRef(owner, repo, path, ref),
+          );
+        }
+        keyedReads.push({ path, ref });
+        return rawRouteOutcomeFromContents(baseEntries[path]);
       },
     };
     const report = collectPreMergeReadiness(
@@ -22734,30 +22776,45 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
 // #5149: the base-file read, the scope-overrun candidate count, and the
 // closing-set expectation for a split PR.
 
-test('a base contents entry with encoding "none" is absent for a source path and fails closed for the sync manifest', () => {
-  const portWith = (value: unknown) =>
-    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
-  const oversized = { type: 'file', encoding: 'none', content: '' };
+test('a base file above the raw-read limit is too-large, for a source path and for the sync manifest (#5342)', () => {
+  const portWith = (outcome: RepositoryFileBytesOutcome) =>
+    ({ getRepositoryFileBytesAtRef: () => outcome }) as unknown as ProviderPort;
   assert.deepEqual(
     readRepositoryContentAtRef(
-      portWith(oversized),
+      portWith({ outcome: 'too-large' }),
       'o',
       'r',
       'src/big.mts',
       'b',
     ),
-    { outcome: 'not-found' },
+    { outcome: 'too-large' },
   );
-  assert.throws(
-    () =>
-      readRepositoryContentAtRef(
-        portWith(oversized),
-        'o',
-        'r',
-        'audit/sync-manifest.json',
-        'b',
-      ),
-    /base sync manifest/u,
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith({ outcome: 'too-large' }),
+      'o',
+      'r',
+      'audit/sync-manifest.json',
+      'b',
+    ),
+    { outcome: 'too-large' },
+  );
+});
+
+test('a base file read through the raw route returns its bytes as base64 (#5342)', () => {
+  const portWith = (bytes: Buffer) =>
+    ({
+      getRepositoryFileBytesAtRef: () => ({ outcome: 'ok', bytes }),
+    }) as unknown as ProviderPort;
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith(Buffer.from('a')),
+      'o',
+      'r',
+      'src/a.mts',
+      'b',
+    ),
+    { outcome: 'ok', value: 'YQ==' },
   );
 });
 

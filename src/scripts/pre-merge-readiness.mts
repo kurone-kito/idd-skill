@@ -572,13 +572,37 @@ export type PreMergeReadinessReport = Omit<
    * ordinary claim has it.
    */
   provisionalRead?: ProvisionalReadReport;
+  /** Repository files above the raw-read limit (#5342); present only when non-empty. */
+  repositoryFileBlockers?: RepositoryFileBlocker[];
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
 
 type ScopeOverrunBaseFileRead =
   | { outcome: 'ok'; value: string }
-  | { outcome: 'not-found' };
+  | { outcome: 'not-found' }
+  | { outcome: 'too-large' };
+
+/**
+ * A repository file the readiness audit could not read because it is above the
+ * raw-read size limit (#5342). It makes the readiness result not ready.
+ */
+export interface RepositoryFileBlocker {
+  path: string;
+  gate: 'repository-file-too-large';
+  detail: string;
+}
+
+function recordRepositoryFileBlocker(
+  sink: RepositoryFileBlocker[] | undefined,
+  path: string,
+): void {
+  sink?.push({
+    path,
+    gate: 'repository-file-too-large',
+    detail: `repository file ${JSON.stringify(path)} is above the 104,857,600-byte limit, so its base content cannot be read`,
+  });
+}
 
 /** Live post-push evidence needed to classify one claim-bound overrun. */
 export interface ScopeOverrunReadinessInput {
@@ -596,6 +620,8 @@ export interface ScopeOverrunReadinessInput {
   policyConfig: unknown;
   readCurrentBranch(): string;
   readBaseFile(path: string, ref: string): ScopeOverrunBaseFileRead;
+  /** Receives a blocker for each repository file too large to read (#5342). */
+  repositoryFileBlockers?: RepositoryFileBlocker[];
 }
 
 /**
@@ -666,12 +692,18 @@ export function resolveScopeOverrunReadiness(
   const syncTargets = readScopeOverrunSyncTargets(
     input.readBaseFile,
     mergeBaseSha,
+    (path) => recordRepositoryFileBlocker(input.repositoryFileBlockers, path),
   );
   const candidateFiles: string[] = [];
   for (const path of changedFiles) {
     if (syncTargets.has(path)) continue;
     const base = input.readBaseFile(path, mergeBaseSha);
     if (base.outcome === 'not-found') {
+      candidateFiles.push(path);
+      continue;
+    }
+    if (base.outcome === 'too-large') {
+      recordRepositoryFileBlocker(input.repositoryFileBlockers, path);
       candidateFiles.push(path);
       continue;
     }
@@ -1213,60 +1245,36 @@ export function readRepositoryContentAtRef(
   path: string,
   ref: string,
 ): ScopeOverrunBaseFileRead {
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  const result = port.getRepositoryContentAtRef(owner, repo, encodedPath, ref);
-  if (result === null) return { outcome: 'not-found' };
-  // #5149: the contents API answers `encoding: "none"` with empty content for
-  // a file over its API limit, so the base content is unknown. Treat it as
-  // absent at the base, so the changed path counts as a candidate. The sync
-  // manifest is the one file whose content must be read, so it fails closed.
-  if (
-    typeof result === 'object' &&
-    result !== null &&
-    (result as { encoding?: unknown }).encoding === 'none'
-  ) {
-    if (path === 'audit/sync-manifest.json') {
-      throw new Error(
-        'scope-overrun audit cannot read the base sync manifest: its contents entry is over the API limit',
-      );
-    }
-    return { outcome: 'not-found' };
-  }
-  // A directory listing or a submodule/symlink entry has no file content.
-  // Treat it as absent at the base, so the changed path becomes a candidate
-  // instead of aborting readiness. The sync manifest stays fail-closed.
-  if (
-    path !== 'audit/sync-manifest.json' &&
-    (Array.isArray(result) ||
-      (typeof result === 'object' &&
-        result !== null &&
-        typeof (result as { type?: unknown }).type === 'string' &&
-        (result as { type: string }).type !== 'file'))
-  ) {
-    return { outcome: 'not-found' };
-  }
-  if (
-    typeof result !== 'object' ||
-    result === null ||
-    Array.isArray(result) ||
-    typeof (result as { content?: unknown }).content !== 'string'
-  ) {
+  // The raw route returns the exact bytes for every file up to the limit. The
+  // base content is kept as base64, as the callers decode it (#5342).
+  const read = port.getRepositoryFileBytesAtRef(owner, repo, path, ref);
+  // A directory, submodule, or symlink has no file content at the base, so it
+  // is absent there and its changed path becomes a candidate.
+  if (read.outcome === 'not-a-file' && path === 'audit/sync-manifest.json') {
     throw new Error(
       `scope-overrun audit received malformed repository content for ${JSON.stringify(path)}`,
     );
   }
-  return {
-    outcome: 'ok',
-    value: (result as { content: string }).content,
-  };
+  if (read.outcome === 'not-found' || read.outcome === 'not-a-file') {
+    return { outcome: 'not-found' };
+  }
+  if (read.outcome === 'too-large') {
+    return { outcome: 'too-large' };
+  }
+  return { outcome: 'ok', value: read.bytes.toString('base64') };
 }
 
 function readScopeOverrunSyncTargets(
   readBaseFile: ScopeOverrunReadinessInput['readBaseFile'],
   ref: string,
+  onTooLarge: (path: string) => void,
 ): Set<string> {
   const read = readBaseFile('audit/sync-manifest.json', ref);
   if (read.outcome === 'not-found') return new Set();
+  if (read.outcome === 'too-large') {
+    onTooLarge('audit/sync-manifest.json');
+    return new Set();
+  }
   let manifest: unknown;
   try {
     manifest = JSON.parse(
@@ -1779,7 +1787,14 @@ export function collectPreMergeReadiness(
   } catch (error) {
     throw changedFilesReadError(error);
   }
-  const codeownersText = fetchCodeownersText(port, owner, repo, baseRefName);
+  const repositoryFileBlockers: RepositoryFileBlocker[] = [];
+  const codeownersText = fetchCodeownersText(
+    port,
+    owner,
+    repo,
+    baseRefName,
+    repositoryFileBlockers,
+  );
   const {
     eligible: eligibleCodeownerUserLogins,
     unreadable: eligibleCodeownerUserLoginsUnreadable,
@@ -1883,6 +1898,7 @@ export function collectPreMergeReadiness(
           port.getChangeRequestHeadRef(args.prNumber as number),
         readBaseFile: (path, ref) =>
           readRepositoryContentAtRef(port, owner, repo, path, ref),
+        repositoryFileBlockers,
       });
     }
   }
@@ -2813,7 +2829,7 @@ export function collectPreMergeReadiness(
     scopeOverrun === undefined || scopeOverrun === null
       ? null
       : publishScopeOverrun(scopeOverrun);
-  const reportSummary =
+  const reportSummaryBase =
     publishedScopeOverrun !== null &&
     publishedScopeOverrun.report.status !== 'valid'
       ? {
@@ -2828,6 +2844,22 @@ export function collectPreMergeReadiness(
           ],
         }
       : summary;
+  // A repository file above the raw-read limit cannot be audited, so the
+  // readiness result is not ready with one blocker per file (#5342).
+  const reportSummary =
+    repositoryFileBlockers.length === 0
+      ? reportSummaryBase
+      : {
+          ...reportSummaryBase,
+          ready: false,
+          blockers: [
+            ...(reportSummaryBase.blockers as Array<Record<string, unknown>>),
+            ...repositoryFileBlockers.map((blocker) => ({
+              gate: blocker.gate,
+              detail: blocker.detail,
+            })),
+          ],
+        };
 
   // #4163: name the E6 helper command when it would record exactly the missing
   // bot items (see dispositionNoticeCommandHint). The hint is the only field
@@ -2858,6 +2890,7 @@ export function collectPreMergeReadiness(
           }),
         }),
     ...(provisionalRead === undefined ? {} : { provisionalRead }),
+    ...(repositoryFileBlockers.length === 0 ? {} : { repositoryFileBlockers }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
       ? {
           dispositionEvidence: {
@@ -3985,9 +4018,20 @@ function fetchCodeownersText(
   owner: string,
   repo: string,
   ref: string,
+  repositoryFileBlockers: RepositoryFileBlocker[],
 ): string {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(
-    (path) => port.getRepositoryContentAtRef(owner, repo, path, ref),
+    (path) => {
+      const read = port.getRepositoryFileBytesAtRef(owner, repo, path, ref);
+      if (read.outcome === 'ok') {
+        // An empty file is `ok` with empty content, which stops selection.
+        return { content: read.bytes.toString('base64') };
+      }
+      if (read.outcome === 'too-large') {
+        recordRepositoryFileBlocker(repositoryFileBlockers, path);
+      }
+      return null;
+    },
   );
   return selectCodeownersText(payloads);
 }
