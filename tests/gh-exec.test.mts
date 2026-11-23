@@ -36,6 +36,7 @@ import {
   resolveGhOwnerRepo,
   resolveViewerLogin,
   safeGhText,
+  setGithubApiLoadControlForTests,
   viewerLoginFailureIsGraphqlEligible,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
@@ -4927,7 +4928,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(fixturePath)}));
   }
 });
 
-test('raw request carries no include flag with telemetry on (#5341)', () => {
+test('raw request carries no include flag with telemetry and load control on (#5341)', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-gh-exec-test-'));
   const argsFile = join(tempRoot, 'args.json');
   const telemetryPath = join(tempRoot, 'telemetry.jsonl');
@@ -4937,6 +4938,13 @@ fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(
 process.stdout.write('raw-body');
 `);
   try {
+    // This file pins load control off in its before hook, so this test turns
+    // it on explicitly: the raw request then goes through the load-control
+    // gate with telemetry on, which is the combination the adapter uses.
+    setGithubApiLoadControlForTests({
+      policy: { enabled: true, maxConcurrent: 1, maxWaitMs: 5_000 },
+      identity: { host: 'github.com', credentialMaterial: 'credential-raw' },
+    });
     setGithubApiTelemetryPolicyForTests({
       enabled: true,
       maxRecords: 20,
@@ -4951,8 +4959,12 @@ process.stdout.write('raw-body');
     assert.equal(bytes.toString('utf8'), 'raw-body');
     const argv = JSON.parse(readFileSync(argsFile, 'utf8')) as string[];
     assert.equal(argv.includes('--include'), false);
+    assert.ok(argv.includes('Accept: application/vnd.github.raw'));
   } finally {
     restore();
+    setGithubApiLoadControlForTests({
+      policy: { enabled: false, maxConcurrent: 1, maxWaitMs: 0 },
+    });
     setGithubApiTelemetryPolicyForTests(null);
     resetGithubApiTelemetryPolicyCacheForTests();
     rmSync(tempRoot, { recursive: true, force: true });
