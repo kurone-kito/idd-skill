@@ -4,6 +4,8 @@ import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -1941,6 +1943,150 @@ test('invokeCritiqueTelemetryHook does not create a visible console window on wi
   }
 });
 
+/** Directory holding one `<stub name>.pid` record per fallback-test stub
+ * (see `recordingStubBody`). Created on first use; the file-level `after`
+ * hook below asserts that no recorded stub survives, then removes it. */
+let stubPidDirectory: string | undefined;
+
+function stubPidFile(name: string): string {
+  if (stubPidDirectory === undefined) {
+    stubPidDirectory = mkdtempSync(join(tmpdir(), 'idd-hook-stub-pids-'));
+  }
+  return join(stubPidDirectory, `${name}.pid`);
+}
+
+/** Stub body that records its own pid in `pidFile` as it starts, then keeps
+ * running until it is killed. The fallback tests read the pid back so they
+ * can end the stub directly, rather than through the relay's pid, which is
+ * already dead by the time the cleanup runs. */
+function recordingStubBody(pidFile: string): string {
+  return (
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid) + '\\n');\n` +
+    'setInterval(() => {}, 1000);\n'
+  );
+}
+
+/** Reads a stub's pid record. The stub writes the pid with a trailing newline,
+ * so a torn or partial read (for example "1234" of "12345") does not parse. */
+function readStubPid(pidFile: string): number | undefined {
+  try {
+    const content = readFileSync(pidFile, 'utf8');
+    return /^[1-9]\d*\n$/u.test(content) ? Number(content.trim()) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Waits up to `timeoutMs` for a stub to write its pid file. A stub that
+ * never starts fails the test, since nothing was proven about it. */
+async function waitForStubPid(
+  pidFile: string,
+  timeoutMs: number,
+): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const pid = readStubPid(pidFile);
+    if (pid !== undefined) {
+      return pid;
+    }
+    await delay(50);
+  }
+  assert.fail(
+    `stub did not write its pid file ${pidFile} within ${timeoutMs} ms`,
+  );
+}
+
+/** Ends a stub that a fallback test started, by its recorded pid. It acts only
+ * while `recordedStubIsRunning` still confirms that pid is that stub, since a
+ * pid can be reused. On POSIX the stub shares the relay's process group, so
+ * `cleanupProcessTree` may already have ended it; the check comes first, and
+ * the direct SIGKILL is the fallback when the group kill did not reach it. */
+function endRecordedStub(pid: number, name: string): void {
+  if (!recordedStubIsRunning(pid, name)) {
+    return;
+  }
+  if (process.platform === 'win32') {
+    cleanupProcessTree(pid);
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Whether `pid` is alive and still running the stub `name`. The pid alone is
+ * not proof, because a pid can be reused after its stub exits. So the
+ * executable path (win32) or the stub body path in the command line (POSIX)
+ * must match as well. */
+function recordedStubIsRunning(pid: number, name: string): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform === 'win32') {
+    const lookup = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ExecutablePath`,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    return (
+      lookup.status === 0 &&
+      lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`)
+    );
+  }
+  const lookup = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], {
+    encoding: 'utf8',
+  });
+  return lookup.status === 0 && lookup.stdout.includes(`${name}.body.js`);
+}
+
+/** Polls until the recorded stub is gone, since a POSIX SIGKILL is delivered
+ * asynchronously. Returns false if it is still running at the deadline. */
+async function waitUntilRecordedStubGone(
+  pid: number,
+  name: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (recordedStubIsRunning(pid, name)) {
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    await delay(100);
+  }
+  return true;
+}
+
+after(async () => {
+  const directory = stubPidDirectory;
+  if (directory === undefined) {
+    return;
+  }
+  stubPidDirectory = undefined;
+  try {
+    for (const entry of readdirSync(directory)) {
+      const name: string = entry.replace(/\.pid$/u, '');
+      const pid = readStubPid(join(directory, entry));
+      if (pid === undefined) {
+        continue;
+      }
+      assert.ok(
+        await waitUntilRecordedStubGone(pid, name, 5_000),
+        `stub ${name} (pid ${pid}) is still running after its fallback test`,
+      );
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when the win32 taskkill spawn itself throws synchronously', async () => {
   // Covers killProcessGroup's win32 last-resort path (C1 review,
   // kurone-kito/idd-skill#2892): when killProcessTreeWindows's own
@@ -1949,12 +2095,14 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
   // `child.kill('SIGKILL')` on the immediate wrapper -- the pre-fix
   // Windows behavior, kept only as a last resort -- rather than attempting
   // nothing at all.
+  const stubName = 'idd-telemetry-hook-hang-win32-throw';
   const restore = stubExecutable(
-    'idd-telemetry-hook-hang-win32-throw',
-    'setInterval(() => {}, 1000);\n',
+    stubName,
+    recordingStubBody(stubPidFile(stubName)),
   );
   try {
     let primaryChild: ReturnType<typeof spawn> | undefined;
+    let stubPid: number | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       if (args[0] === 'taskkill') {
         throw new Error('synthetic taskkill spawn failure');
@@ -1973,8 +2121,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       const result = await invokeCritiqueTelemetryHook(
         stayAliveCommand('idd-telemetry-hook-hang-win32-throw'),
         samplePayload(),
-        { timeoutMs: 500, spawnFn, platform: 'win32' },
+        // Long enough that the relay has spawned its stub before the kill.
+        { timeoutMs: 2_000, spawnFn, platform: 'win32' },
       );
+      stubPid = await waitForStubPid(stubPidFile(stubName), 5_000);
       assert.deepEqual(result, { attempted: true, ok: false });
       assert.ok(
         primaryChild,
@@ -2015,6 +2165,11 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       if (typeof pid === 'number' && pid > 0) {
         cleanupProcessTree(pid);
       }
+      // The stub is the process that outlives the relay here, so end it by
+      // its own recorded pid. The relay's pid is no longer a valid handle.
+      if (stubPid !== undefined) {
+        endRecordedStub(stubPid, stubName);
+      }
     }
   } finally {
     restore();
@@ -2040,12 +2195,14 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
   // by the time this test emits on it, so this does not hit the
   // listener-less-emitter reporting quirk the watchdog `'error'`-listener
   // test above documents and deliberately avoids.
+  const stubName = 'idd-telemetry-hook-hang-win32-async-throw';
   const restore = stubExecutable(
-    'idd-telemetry-hook-hang-win32-async-throw',
-    'setInterval(() => {}, 1000);\n',
+    stubName,
+    recordingStubBody(stubPidFile(stubName)),
   );
   try {
     let primaryChild: ReturnType<typeof spawn> | undefined;
+    let stubPid: number | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       if (args[0] === 'taskkill') {
         const fakeKiller = new EventEmitter() as unknown as ReturnType<
@@ -2077,8 +2234,10 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       const result = await invokeCritiqueTelemetryHook(
         stayAliveCommand('idd-telemetry-hook-hang-win32-async-throw'),
         samplePayload(),
-        { timeoutMs: 500, spawnFn, platform: 'win32' },
+        // Long enough that the relay has spawned its stub before the kill.
+        { timeoutMs: 2_000, spawnFn, platform: 'win32' },
       );
+      stubPid = await waitForStubPid(stubPidFile(stubName), 5_000);
       assert.deepEqual(result, { attempted: true, ok: false });
       assert.ok(
         primaryChild,
@@ -2103,6 +2262,11 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       const pid = primaryChild?.pid;
       if (typeof pid === 'number' && pid > 0) {
         cleanupProcessTree(pid);
+      }
+      // As in the synchronous-throw test above: end the stub by its own
+      // recorded pid, since the relay's pid is no longer a valid handle.
+      if (stubPid !== undefined) {
+        endRecordedStub(stubPid, stubName);
       }
     }
   } finally {
