@@ -2106,6 +2106,537 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
   }
 });
 
+// --- win32 descendant kill on a failed tree kill (kurone-kito/idd-skill#5362) ---
+//
+// When the `taskkill /T /F` tree kill cannot be started (a synchronous throw,
+// or an asynchronous 'error' event), the fallback used to end only the relay,
+// and the hook's descendants kept running. A timeout now collects the relay's
+// descendants while the relay is still alive, and the fallback ends them,
+// deepest first, before it ends the relay. The fake-collector tests inject
+// platform 'win32', so that branch runs on any host. The real-process tests
+// need a real Windows process tree, so they run on win32 only.
+
+type InvokeOptions = NonNullable<
+  Parameters<typeof invokeCritiqueTelemetryHook>[2]
+>;
+type RelayChild = ReturnType<typeof spawn>;
+type RelayState = { relay?: RelayChild };
+type DescendantPids = { relay: number; hook: number; child: number };
+
+/** Stub hook that records its own pid in `pidPath`, then stays alive, so a
+ * test can end it directly. */
+function recordingStayAliveStub(name: string, pidPath: string): () => void {
+  return stubExecutable(
+    name,
+    `require('fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));\nsetInterval(() => {}, 1000);\n`,
+  );
+}
+
+/** Stub hook for the real-process tests. It starts a long-lived `ping` (a
+ * non-Node process, so the stub's own preload is not re-entered by the
+ * child). It records the relay's pid, its own pid, and the child's pid in
+ * `pidPath`, then stays alive. The relay is found as the parent of the
+ * stub's own parent: on win32 the hook runs under a `cmd.exe` wrapper, and
+ * that wrapper runs under the relay. */
+function descendantStub(name: string, pidPath: string): () => void {
+  return stubExecutable(
+    name,
+    [
+      "const { spawn, execFileSync } = require('node:child_process');",
+      "const child = spawn('ping', ['-n', '60', '127.0.0.1'], { stdio: 'ignore', windowsHide: true });",
+      'const wrapperPid = process.ppid;',
+      "const relayPid = Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', \"(Get-CimInstance Win32_Process -Filter 'ProcessId=\" + wrapperPid + \"').ParentProcessId\"], { encoding: 'utf8', windowsHide: true }).trim());",
+      `require('fs').writeFileSync(${JSON.stringify(pidPath)}, JSON.stringify({ relay: relayPid, hook: process.pid, child: child.pid }));`,
+      'setInterval(() => {}, 1000);',
+      '',
+    ].join('\n'),
+  );
+}
+
+/** Waits for a recording stub to write its pid, so the stub is running before
+ * the timeout fires. */
+async function awaitRecordedPid(pidPath: string): Promise<number> {
+  return Number(await waitForNonEmptyFile(pidPath, 20_000));
+}
+
+async function readDescendantPids(pidPath: string): Promise<DescendantPids> {
+  const pids = JSON.parse(
+    await waitForNonEmptyFile(pidPath, 20_000),
+  ) as DescendantPids;
+  assert.ok(
+    isPositivePid(pids.relay) &&
+      isPositivePid(pids.hook) &&
+      isPositivePid(pids.child),
+    `expected the stub to record the relay's, its own, and its child's pids, got ${JSON.stringify(pids)}`,
+  );
+  return pids;
+}
+
+function isPositivePid(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort end of a leftover process, for a test's own `finally` block.
+ * Does nothing when the pid is not running. */
+function reapPid(pid: number | undefined): void {
+  if (typeof pid !== 'number' || pid <= 0 || !isProcessRunning(pid)) {
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Already gone; ignore.
+  }
+}
+
+function reapRecordedPid(pidPath: string): void {
+  try {
+    reapPid(Number(readFileSync(pidPath, 'utf8')));
+  } catch {
+    // The stub never recorded its pid; nothing to reap.
+  }
+}
+
+async function assertEnded(pid: number, label: string): Promise<void> {
+  // waitUntilProcessGone reports an invalid pid as gone, so reject one first.
+  assert.ok(isPositivePid(pid), `expected a real pid for ${label}, got ${pid}`);
+  assert.ok(
+    await waitUntilProcessGone(pid, 10_000),
+    `expected ${label} (pid ${pid}) to have been ended within 10 seconds`,
+  );
+}
+
+/**
+ * `spawnFn` for the win32 descendant tests. The relay spawn is real and is kept
+ * in `state.relay`. A `taskkill` aimed at that relay is answered by
+ * `answerRelayTaskkill` instead of being run. Every other spawn is real, except
+ * the win32 backup watchdog, which is refused (see the comment in the body).
+ */
+function relayTaskkillSpawnFn(
+  state: RelayState,
+  answerRelayTaskkill: (relay: RelayChild) => RelayChild,
+): typeof spawn {
+  return ((...args: Parameters<typeof spawn>) => {
+    // The backup watchdog is refused here. Left running, it tree-kills the
+    // relay on its own deadline, which can end the descendants before the
+    // fallback under test runs, so the test would pass without the fix. It
+    // is also not available in the case this fix is for: its own spawn needs
+    // the same `taskkill`, so it cannot run when `taskkill` cannot be started.
+    if (isWin32NodeWatchdogSpawn(args)) {
+      throw new Error('synthetic watchdog spawn failure');
+    }
+    const taskkillArgs =
+      args[0] === 'taskkill' ? (args[1] as string[]) : undefined;
+    if (state.relay && taskkillArgs?.[1] === String(state.relay.pid)) {
+      return answerRelayTaskkill(state.relay);
+    }
+    const child = spawn(...args);
+    if (isWin32RelaySpawn(args)) {
+      state.relay = child;
+    }
+    return child;
+  }) as typeof spawn;
+}
+
+/**
+ * A stand-in for the `taskkill` child that reports its failure asynchronously,
+ * through its own 'error' event, as a real failed spawn does. `beforeError`
+ * runs first and may end the relay and wait for it. `afterError` runs right
+ * after the 'error' event is emitted, which is after the production fallback
+ * listener has run, so a test can tell when the fallback has finished.
+ */
+function asyncFailingKiller(
+  beforeError: () => Promise<void>,
+  afterError: () => void,
+): RelayChild {
+  const killer = new EventEmitter() as unknown as RelayChild;
+  (killer as unknown as { unref: () => void }).unref = () => {};
+  void beforeError().then(() => {
+    killer.emit(
+      'error',
+      new Error('synthetic asynchronous taskkill spawn failure'),
+    );
+    afterError();
+  });
+  return killer;
+}
+
+/**
+ * Runs one win32 timeout whose `taskkill` spawn throws, with an injected
+ * collector and kill, against a stub hook that records its own pid. The
+ * stub's pid is awaited before the timeout fires, so the stub is running then.
+ * Asserts that the relay was ended, and returns the result, the relay pid, and
+ * every pid that was passed to `killPid`.
+ */
+async function runFakeCollectorTimeout(
+  stubName: string,
+  collectDescendants: InvokeOptions['collectDescendants'],
+  killPid?: (pid: number) => void,
+): Promise<{
+  result: { attempted: boolean; ok: boolean };
+  relayPid: number;
+  killed: number[];
+}> {
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-fake-collector-')),
+    'hook.pid',
+  );
+  const restore = recordingStayAliveStub(stubName, pidPath);
+  const state: RelayState = {};
+  const killed: number[] = [];
+  try {
+    const spawnFn = relayTaskkillSpawnFn(state, () => {
+      throw new Error('synthetic taskkill spawn failure');
+    });
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(stubName),
+      samplePayload(),
+      {
+        timeoutMs: 8_000,
+        spawnFn,
+        platform: 'win32',
+        collectDescendants,
+        killPid: (pid) => {
+          killed.push(pid);
+          killPid?.(pid);
+        },
+      },
+    );
+    await awaitRecordedPid(pidPath);
+    const result = await pending;
+    const relayPid = state.relay?.pid as number;
+    assert.ok(relayPid, 'expected the win32 relay to have been spawned');
+    await assertEnded(relayPid, 'the relay');
+    return { result, relayPid, killed };
+  } finally {
+    reapRecordedPid(pidPath);
+    reapPid(state.relay?.pid);
+    restore();
+  }
+}
+
+test('invokeCritiqueTelemetryHook ends the win32 relay and its real hook descendants when the taskkill spawn throws (kurone-kito/idd-skill#5362)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-real-throw-')),
+    'pids.json',
+  );
+  const name = 'idd-telemetry-hook-real-descendants-throw';
+  const restore = descendantStub(name, pidPath);
+  const state: RelayState = {};
+  let descendants: DescendantPids | undefined;
+  try {
+    const spawnFn = relayTaskkillSpawnFn(state, () => {
+      throw new Error('synthetic taskkill spawn failure');
+    });
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      { timeoutMs: 20_000, spawnFn, platform: 'win32' },
+    );
+    // The hook records the relay's pid, its own pid, and its child's pid before
+    // the timeout fires. The lookup of the relay pid takes about a second.
+    descendants = await readDescendantPids(pidPath);
+    const result = await pending;
+    assert.deepEqual(result, { attempted: true, ok: false });
+    const relayPid = state.relay?.pid as number;
+    assert.ok(relayPid, 'expected the win32 relay to have been spawned');
+    assert.equal(
+      descendants.relay,
+      relayPid,
+      'expected the hook command to run under the relay, through its cmd.exe wrapper',
+    );
+    await assertEnded(relayPid, 'the relay');
+    await assertEnded(descendants.hook, 'the hook command');
+    await assertEnded(descendants.child, 'the hook command child process');
+  } finally {
+    reapPid(state.relay?.pid);
+    reapPid(descendants?.child);
+    reapPid(descendants?.hook);
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook ends the win32 relay and its real hook descendants when the taskkill spawn reports an asynchronous error (kurone-kito/idd-skill#5362)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-real-async-')),
+    'pids.json',
+  );
+  const name = 'idd-telemetry-hook-real-descendants-async';
+  const restore = descendantStub(name, pidPath);
+  const state: RelayState = {};
+  let descendants: DescendantPids | undefined;
+  try {
+    const spawnFn = relayTaskkillSpawnFn(state, () =>
+      asyncFailingKiller(
+        async () => {},
+        () => {},
+      ),
+    );
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      { timeoutMs: 20_000, spawnFn, platform: 'win32' },
+    );
+    descendants = await readDescendantPids(pidPath);
+    const result = await pending;
+    assert.deepEqual(result, { attempted: true, ok: false });
+    const relayPid = state.relay?.pid as number;
+    assert.ok(relayPid, 'expected the win32 relay to have been spawned');
+    assert.equal(
+      descendants.relay,
+      relayPid,
+      'expected the hook command to run under the relay, through its cmd.exe wrapper',
+    );
+    await assertEnded(relayPid, 'the relay');
+    await assertEnded(descendants.hook, 'the hook command');
+    await assertEnded(descendants.child, 'the hook command child process');
+  } finally {
+    reapPid(state.relay?.pid);
+    reapPid(descendants?.child);
+    reapPid(descendants?.hook);
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook never passes a collected pid to killPid when its parent is neither the relay nor a collected descendant (kurone-kito/idd-skill#5362)', async () => {
+  const { result, killed } = await runFakeCollectorTimeout(
+    'idd-telemetry-hook-descendants-unknown-parent',
+    (relayPid) => [
+      { pid: 900011, parentPid: relayPid },
+      // Its parent is neither the relay nor a collected descendant.
+      { pid: 900012, parentPid: 900099 },
+      // Reachable only through the rejected record above.
+      { pid: 900013, parentPid: 900012 },
+    ],
+  );
+  assert.deepEqual(result, { attempted: true, ok: false });
+  assert.deepEqual(killed, [900011]);
+});
+
+test('invokeCritiqueTelemetryHook keeps ending the remaining descendants and the relay when killPid throws for one pid (kurone-kito/idd-skill#5362)', async () => {
+  const { result, killed } = await runFakeCollectorTimeout(
+    'idd-telemetry-hook-descendants-kill-throws',
+    (relayPid) => [
+      { pid: 900021, parentPid: relayPid },
+      { pid: 900022, parentPid: 900021 },
+    ],
+    (pid) => {
+      if (pid === 900022) {
+        throw new Error('synthetic refused kill');
+      }
+    },
+  );
+  assert.deepEqual(result, { attempted: true, ok: false });
+  // Deepest first, and the refused kill does not stop the one after it.
+  assert.deepEqual(killed, [900022, 900021]);
+});
+
+test('invokeCritiqueTelemetryHook still ends the relay, and kills nothing else, when the descendant collector throws (kurone-kito/idd-skill#5362)', async () => {
+  const { result, killed } = await runFakeCollectorTimeout(
+    'idd-telemetry-hook-descendants-collector-throws',
+    () => {
+      throw new Error('synthetic collector failure');
+    },
+  );
+  assert.deepEqual(result, { attempted: true, ok: false });
+  assert.deepEqual(killed, []);
+});
+
+test('invokeCritiqueTelemetryHook treats a null descendant list as unknown and still ends the relay (kurone-kito/idd-skill#5362)', async () => {
+  const { result, killed } = await runFakeCollectorTimeout(
+    'idd-telemetry-hook-descendants-collector-null',
+    () => null,
+  );
+  assert.deepEqual(result, { attempted: true, ok: false });
+  assert.deepEqual(killed, []);
+});
+
+test('invokeCritiqueTelemetryHook ends no descendant when the relay has already exited by the time its taskkill failure is reported (kurone-kito/idd-skill#5362)', async () => {
+  const name = 'idd-telemetry-hook-descendants-relay-exited';
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-relay-exited-')),
+    'hook.pid',
+  );
+  const restore = recordingStayAliveStub(name, pidPath);
+  // A process the test started and the collector reports as a descendant. The
+  // test ends it itself in `finally`; the code under test must not.
+  const otherProcess = spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000);'],
+    { stdio: 'ignore', windowsHide: true },
+  );
+  const state: RelayState = {};
+  const killed: number[] = [];
+  let fallbackRan = false;
+  try {
+    const spawnFn = relayTaskkillSpawnFn(state, (relay) =>
+      asyncFailingKiller(
+        // End the relay, then wait until it has really exited. A synchronous
+        // throw cannot wait for an event, so the failure is reported
+        // asynchronously here.
+        async () => {
+          relay.kill('SIGKILL');
+          await new Promise<void>((resolve) => {
+            relay.once('exit', () => resolve());
+          });
+        },
+        () => {
+          fallbackRan = true;
+        },
+      ),
+    );
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      {
+        timeoutMs: 8_000,
+        spawnFn,
+        platform: 'win32',
+        collectDescendants: (relayPid) => [
+          { pid: otherProcess.pid as number, parentPid: relayPid },
+        ],
+        killPid: (pid) => {
+          killed.push(pid);
+        },
+      },
+    );
+    await awaitRecordedPid(pidPath);
+    const result = await pending;
+    assert.deepEqual(result, { attempted: true, ok: false });
+    // The invocation settles before the fallback runs, so wait for the
+    // fallback before asserting that it ended nothing.
+    for (let i = 0; i < 200 && !fallbackRan; i += 1) {
+      await delay(50);
+    }
+    assert.ok(
+      fallbackRan,
+      'expected the asynchronous taskkill failure to reach the fallback',
+    );
+    assert.deepEqual(
+      killed,
+      [],
+      'expected no descendant to be ended once the relay had exited',
+    );
+    assert.ok(
+      isProcessRunning(otherProcess.pid as number),
+      'expected the collected process to still be running',
+    );
+  } finally {
+    otherProcess.kill('SIGKILL');
+    reapRecordedPid(pidPath);
+    reapPid(state.relay?.pid);
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook leaves a process that is not a descendant of the win32 relay running (kurone-kito/idd-skill#5362)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-bystander-')),
+    'hook.pid',
+  );
+  const name = 'idd-telemetry-hook-descendants-bystander';
+  const restore = recordingStayAliveStub(name, pidPath);
+  // Started by this test, not by the relay, so it is not in the relay's tree.
+  const bystander = spawn('ping', ['-n', '60', '127.0.0.1'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  const state: RelayState = {};
+  try {
+    const spawnFn = relayTaskkillSpawnFn(state, () => {
+      throw new Error('synthetic taskkill spawn failure');
+    });
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      { timeoutMs: 8_000, spawnFn, platform: 'win32' },
+    );
+    await awaitRecordedPid(pidPath);
+    const result = await pending;
+    assert.deepEqual(result, { attempted: true, ok: false });
+    const relayPid = state.relay?.pid as number;
+    assert.ok(relayPid, 'expected the win32 relay to have been spawned');
+    await assertEnded(relayPid, 'the relay');
+    assert.ok(
+      isProcessRunning(bystander.pid as number),
+      'expected the process outside the relay tree to still be running',
+    );
+  } finally {
+    bystander.kill('SIGKILL');
+    reapRecordedPid(pidPath);
+    reapPid(state.relay?.pid);
+    restore();
+  }
+});
+
+test('invokeCritiqueTelemetryHook makes no extra kill when the win32 taskkill tree kill succeeds (kurone-kito/idd-skill#5362)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const pidPath = join(
+    makeTempDir(join(tmpdir(), 'idd-critique-telemetry-hook-tree-kill-ok-')),
+    'hook.pid',
+  );
+  const name = 'idd-telemetry-hook-descendants-tree-kill-ok';
+  const restore = recordingStayAliveStub(name, pidPath);
+  const state: RelayState = {};
+  const killed: number[] = [];
+  try {
+    // The real spawn is used throughout, so the real `taskkill /T /F` runs.
+    // The backup watchdog is refused, as in relayTaskkillSpawnFn above.
+    const spawnFn = ((...args: Parameters<typeof spawn>) => {
+      if (isWin32NodeWatchdogSpawn(args)) {
+        throw new Error('synthetic watchdog spawn failure');
+      }
+      const child = spawn(...args);
+      if (isWin32RelaySpawn(args)) {
+        state.relay = child;
+      }
+      return child;
+    }) as typeof spawn;
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      {
+        timeoutMs: 8_000,
+        spawnFn,
+        platform: 'win32',
+        collectDescendants: (relayPid) => [
+          { pid: 900041, parentPid: relayPid },
+        ],
+        killPid: (pid) => {
+          killed.push(pid);
+        },
+      },
+    );
+    await awaitRecordedPid(pidPath);
+    const result = await pending;
+    assert.deepEqual(result, { attempted: true, ok: false });
+    const relayPid = state.relay?.pid as number;
+    assert.ok(relayPid, 'expected the win32 relay to have been spawned');
+    await assertEnded(relayPid, 'the relay');
+    assert.deepEqual(killed, []);
+  } finally {
+    reapPid(state.relay?.pid);
+    reapRecordedPid(pidPath);
+    restore();
+  }
+});
+
 test('invokeCritiqueTelemetryHook disarms the watchdog once the hook exits well before timeoutMs (#2685 review, Codex)', async () => {
   // Regression fixture for the PID-reuse race: a hook that settles quickly
   // used to leave its watchdog asleep for the rest of timeoutMs, so a
