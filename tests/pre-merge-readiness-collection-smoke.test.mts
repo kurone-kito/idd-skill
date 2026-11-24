@@ -529,6 +529,9 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/rules/branches/${BASE_REF}`
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/branches/${BASE_REF}/protection`}') out('{}');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/reviews`}') out(${JSON.stringify(ndjson(reviews))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}/requested_reviewers`}') out('{"users":[]}');
+// The scope-overrun audit reads the PR head branch here, from the production
+// adapter's "repos/<o>/<r>/pulls/<n> --jq .head.ref" call (issue #5379 review).
+if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/pulls/${PR_NUMBER}`}') out('issue/${CLAIM_ISSUE}-smoke-branch\\n');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/timeline`}') out('');
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/comments`}') out(${JSON.stringify(ndjson(prComments))});
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') {
