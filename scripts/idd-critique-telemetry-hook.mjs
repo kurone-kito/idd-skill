@@ -1016,6 +1016,24 @@ function endRelayTreeWindows(
  * is ended, since the listed pids may have been reused. A failed listing counts
  * as unknown, so only the relay is ended. Never rejects.
  */
+/**
+ * Runs the injected collector under the same bound as the default listing
+ * (kurone-kito/idd-skill#5362). An override that throws, rejects, or does not
+ * settle in time counts as unknown (`null`), and a late result is ignored, so
+ * an injected collector can never keep the relay from being ended.
+ */
+function collectWithDeadline(collectDescendants, relayPid) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), WIN32_PROCESS_LIST_TIMEOUT_MS);
+  });
+  const collected = Promise.resolve()
+    .then(() => collectDescendants(relayPid))
+    .catch(() => null);
+  return Promise.race([collected, deadline]).finally(() => {
+    clearTimeout(timer);
+  });
+}
 async function endRelayAfterFailedTreeKill(
   child,
   relayPid,
@@ -1026,12 +1044,9 @@ async function endRelayAfterFailedTreeKill(
     if (!isRelayAlive(child) || !isProcessRunning(relayPid)) {
       return;
     }
-    let records = null;
-    try {
-      records = await collectDescendants(relayPid);
-    } catch {
-      // Unknown: keep nothing, so only the relay is ended.
-    }
+    // Unknown (a throw, a rejection, or no answer within the deadline): keep
+    // nothing, so only the relay is ended.
+    const records = await collectWithDeadline(collectDescendants, relayPid);
     const plan = planRelayDescendants(relayPid, records);
     if (!isRelayAlive(child) || !isProcessRunning(relayPid)) {
       return;

@@ -2322,7 +2322,7 @@ async function runFakeCollectorTimeout(
       stayAliveCommand(stubName),
       samplePayload(),
       {
-        timeoutMs: 500,
+        timeoutMs: 3_000,
         spawnFn,
         platform: 'win32',
         collectDescendants,
@@ -2713,6 +2713,15 @@ test('invokeCritiqueTelemetryHook makes no listing and no kill when the win32 ta
     reapPid(state.relay?.pid);
     restore();
   }
+});
+
+test('invokeCritiqueTelemetryHook still ends the relay when an injected collector never settles (kurone-kito/idd-skill#5362)', async () => {
+  const { result, killed } = await runFakeCollectorTimeout(
+    'idd-critique-telemetry-hook-never-settles.mjs',
+    () => new Promise(() => {}),
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(killed, []);
 });
 
 test('invokeCritiqueTelemetryHook ends nothing when the relay exits while the win32 descendant listing runs (kurone-kito/idd-skill#5362)', async () => {
