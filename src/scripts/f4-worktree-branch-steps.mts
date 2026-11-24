@@ -35,6 +35,8 @@ import {
   type PreservationParent,
   type PreserveDestinationResult,
 } from './preserve-destination.mts';
+import type { WindowsProcessRecords } from './windows-process-cwd.mts';
+import { isWithinWin32Root } from './worktree-remnant-evidence.mts';
 
 export type { DirectoryPrivacy, LstatKind };
 export { isWithinRoot };
@@ -107,6 +109,8 @@ export type HoldCode =
   | 'branch-tip-mismatch'
   | 'local-branch-unmerged-commits'
   | 'worktree-remove-refused'
+  | 'worktree-holder'
+  | 'worktree-unknown'
   | 'delete-setting-unreadable'
   | 'remote-delete-unreadable'
   | RemoteDeleteHold;
@@ -208,6 +212,13 @@ export interface F4WorktreeBranchDeps {
   readonly withCloneLock: <T>(
     run: () => T,
   ) => { acquired: false } | { acquired: true; value: T };
+  /** The host platform. The holder check (#5363) runs only on `win32`. */
+  readonly platform: NodeJS.Platform;
+  /**
+   * The batch process reader of the holder check. It is called only on
+   * `win32`, and a throw stops the run as worktree-unknown, never as a failure.
+   */
+  readonly readWindowsProcesses: () => WindowsProcessRecords;
 }
 
 const PLAN_ORDER: readonly string[] = [
@@ -316,6 +327,10 @@ export const NEXT_ACTIONS: Readonly<
     'Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion; keep any node_modules/ destination named in the detail.',
   'worktree-remove-refused':
     'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it and keeps any node_modules/ destination named in the detail. A rerun reads the proof again and posts nothing.',
+  'worktree-holder':
+    'Hold. A process has its working directory inside the worktree, so git worktree remove would fail. Nothing was changed. The operator ends that process or moves its working directory outside the worktree, then reruns steps 4 to 6. The helper never ends a process.',
+  'worktree-unknown':
+    'Hold. The process check could not finish, so the helper cannot show that no process holds the worktree. Nothing was changed. The operator reads the detail, fixes the named cause (the process reader returned no result or no records, a 64-bit process with no directory, or a path that realpath cannot resolve), then reruns steps 4 to 6.',
   'delete-setting-unreadable':
     'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
   'remote-delete-unreadable':
@@ -1580,6 +1595,212 @@ function runPlan(
   return runStep6(input, deps, proof, branch, steps, finish, holdAt, failAt);
 }
 
+/** LocalSystem. Its denied records are listed as not inspected, not refused. */
+const LOCAL_SYSTEM_SID = 'S-1-5-18';
+
+/** The most characters of a reader's error reason that the detail keeps. */
+const READER_REASON_LIMIT = 120;
+
+/** What the holder check found: the stop it reaches, and the records it did not inspect. */
+interface HolderCheck {
+  readonly hold: Hold | null;
+  /** Denied records listed without being inspected, as `pid` text. */
+  readonly notInspected: readonly string[];
+}
+
+/**
+ * The realpath of `path` for the holder check, or null when it cannot be
+ * placed: realpath throws or returns nothing, or it returns a path that is not
+ * drive- or UNC-qualified. `isWithinWin32Root` reads such a path as outside
+ * every root, so it is rejected here rather than taken as a non-holder.
+ */
+function holderRealpath(
+  deps: F4WorktreeBranchDeps,
+  path: string,
+): string | null {
+  try {
+    const resolved = deps.realpath(path);
+    return typeof resolved === 'string' && isWithinWin32Root(resolved, resolved)
+      ? resolved
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sort the records of one reader result into holders, unknowns, and denied
+ * records not inspected. A throw in the scan becomes an unknown, so a
+ * malformed result never reads as a clean one.
+ */
+function scanHolderRecords(
+  deps: F4WorktreeBranchDeps,
+  worktreeReal: string,
+  read: WindowsProcessRecords,
+  holders: string[],
+  unknown: string[],
+  notInspected: string[],
+): void {
+  try {
+    const { currentSid, records } = read;
+    if (!Array.isArray(records) || records.length === 0) {
+      // A complete read always includes the reader's own process, so an empty
+      // list means the enumeration failed, and it cannot show that nothing holds
+      // the worktree.
+      unknown.push('the process reader returned no process records');
+    }
+    if (typeof currentSid !== 'string' || currentSid === '') {
+      unknown.push('the process reader printed no current user SID');
+    }
+    for (const record of records) {
+      const { pid, kind, ownerSid, directory, reason, bitness } = record;
+      switch (kind) {
+        case 'exited':
+          break;
+        case 'denied':
+          // Owned by the current user, by LocalSystem, or by an owner that
+          // cannot be read: listed, not inspected. Another account is skipped.
+          if (
+            typeof ownerSid !== 'string' ||
+            ownerSid === currentSid ||
+            ownerSid === LOCAL_SYSTEM_SID
+          ) {
+            notInspected.push(
+              `pid ${pid} (owner ${typeof ownerSid === 'string' ? ownerSid : 'unreadable'})`,
+            );
+          }
+          break;
+        case 'live': {
+          // A live record is a holder whatever its owner, so its directory must
+          // be placed. The reader does not read the directory of a 32-bit
+          // process: such a process is listed as not inspected and does not stop
+          // the check (operator decision on issue #5363, 2026-11-24, because
+          // persistent 32-bit services would otherwise block every win32 cleanup).
+          // A 64-bit live record without a directory stays unknown.
+          if (typeof directory !== 'string') {
+            if (bitness === 32) {
+              notInspected.push(
+                `pid ${pid} (live 32-bit process; directory not read)`,
+              );
+            } else {
+              unknown.push(
+                `pid ${pid} is live with no directory, so its location cannot be checked`,
+              );
+            }
+            break;
+          }
+          const real = holderRealpath(deps, directory);
+          if (real === null) {
+            unknown.push(
+              `the directory of pid ${pid} cannot be resolved with realpath`,
+            );
+          } else if (isWithinWin32Root(worktreeReal, real)) {
+            holders.push(`pid ${pid} at ${directory}`);
+          }
+          break;
+        }
+        case 'error': {
+          const text =
+            typeof reason === 'string' && reason !== ''
+              ? `: ${reason.slice(0, READER_REASON_LIMIT)}`
+              : '';
+          unknown.push(`pid ${pid} could not be read${text}`);
+          break;
+        }
+        default:
+          unknown.push(`pid ${pid} has an unrecognized record kind`);
+      }
+    }
+  } catch {
+    unknown.push('the process reader returned an unreadable result');
+  }
+}
+
+/**
+ * The win32 holder check (kurone-kito/idd-skill#5363), run before the first
+ * mutation of step 4. A process whose directory lies inside the worktree would
+ * make `git worktree remove` fail after the primary had been fast-forwarded, so
+ * the run stops first. It only reads, in both modes, and it makes no reader
+ * call off win32.
+ *
+ * A live record inside the worktree is a holder, whatever its owner. A denied
+ * record owned by the current user, by LocalSystem, or by an unreadable owner
+ * is listed as not inspected and does not stop the run; a denied record of any
+ * other owner is skipped. An exited record is skipped. Anything the check
+ * cannot place is unknown and stops the run: a reader that throws, an error
+ * record, a live record with no directory, a path that realpath cannot resolve,
+ * and a record of an unrecognized kind. A holder wins over an unknown, and the
+ * detail reports both.
+ */
+function checkWorktreeHolders(
+  deps: F4WorktreeBranchDeps,
+  worktree: string,
+): HolderCheck {
+  if (deps.platform !== 'win32') {
+    return { hold: null, notInspected: [] };
+  }
+  const holders: string[] = [];
+  const unknown: string[] = [];
+  const notInspected: string[] = [];
+  const worktreeReal = holderRealpath(deps, worktree);
+  if (worktreeReal === null) {
+    // No reader call: the worktree cannot be placed, so no record could be.
+    unknown.push('the worktree path cannot be resolved with realpath');
+  } else {
+    let read: WindowsProcessRecords | null = null;
+    try {
+      read = deps.readWindowsProcesses() ?? null;
+      if (read === null) {
+        unknown.push('the process reader returned no result');
+      }
+    } catch {
+      unknown.push('the process reader failed');
+    }
+    if (read !== null) {
+      scanHolderRecords(
+        deps,
+        worktreeReal,
+        read,
+        holders,
+        unknown,
+        notInspected,
+      );
+    }
+  }
+  const parts: string[] = [];
+  if (holders.length > 0) {
+    parts.push(
+      `process(es) with a directory inside the worktree: ${holders.join('; ')}`,
+    );
+  }
+  if (unknown.length > 0) {
+    parts.push(`the holder check cannot finish: ${unknown.join('; ')}`);
+  }
+  if (parts.length === 0) {
+    return { hold: null, notInspected };
+  }
+  // A stop keeps the list of processes not inspected, so the operator sees
+  // every process the check could not place (for example a 32-bit service).
+  const note = notInspectedDetail(notInspected);
+  if (note !== null) {
+    parts.push(note);
+  }
+  return {
+    hold: {
+      code: holders.length > 0 ? 'worktree-holder' : 'worktree-unknown',
+      detail: parts.join('. '),
+    },
+    notInspected,
+  };
+}
+
+/** The step detail that lists the processes not inspected, or null. */
+function notInspectedDetail(notInspected: readonly string[]): string | null {
+  return notInspected.length === 0
+    ? null
+    : `the holder check did not inspect ${notInspected.length} process(es): ${notInspected.join('; ')}`;
+}
+
 /**
  * Steps 4 and 5. In a dry run, step 4 reports `would-run` and step 5 runs the
  * read-only inspection; in apply mode both mutate. Returns the hold or error
@@ -1596,15 +1817,22 @@ function runStep4And5(
   steps: F4StepRecord[],
   apply: boolean,
 ): { hold: Hold | null; error: FlowError | null; at: StepName } {
-  // Step 4, primary fast-forward.
+  // Step 4, primary fast-forward. The holder check (#5363) runs after the
+  // proof checks and before the first mutation, which is the fast-forward. A
+  // dry run runs it at the same point, so both modes stop the same way.
   if (!apply) {
+    const holders = checkWorktreeHolders(deps, worktree);
+    if (holders.hold !== null) {
+      return { hold: holders.hold, error: null, at: 'step-4' };
+    }
     const target = readDevelopmentTarget(deps, primary, proof.pr);
     if (target.base === null) {
       return { hold: target.hold, error: null, at: 'step-4' };
     }
+    const note = notInspectedDetail(holders.notInspected);
     steps.push(
       stepRecord('step-4', 'would-run', {
-        detail: `fetch, then fast-forward ${target.base} from origin`,
+        detail: `fetch, then fast-forward ${target.base} from origin${note === null ? '' : `; ${note}`}`,
       }),
     );
   } else {
@@ -1625,11 +1853,19 @@ function runStep4And5(
         at: 'step-4',
       };
     }
+    const holders = checkWorktreeHolders(deps, worktree);
+    if (holders.hold !== null) {
+      return { hold: holders.hold, error: null, at: 'step-4' };
+    }
     const step4 = runPrimaryFastForward(deps, primary, proof.pr);
     if (step4.hold !== null || step4.error !== null) {
       return { ...step4, at: 'step-4' };
     }
-    steps.push(stepRecord('step-4', 'done'));
+    steps.push(
+      stepRecord('step-4', 'done', {
+        detail: notInspectedDetail(holders.notInspected),
+      }),
+    );
   }
 
   // Step 5, inspection then removal.
