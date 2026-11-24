@@ -4235,13 +4235,20 @@ export function createGithubProviderAdapter(
       if (entry.size > RAW_FILE_BYTES_LIMIT) {
         return { outcome: 'too-large' };
       }
-      // The raw request is sent only after the entry and size checks pass.
-      const bytes = deps.ghBytesUnbounded([
-        'api',
-        endpoint,
-        '-H',
-        'Accept: application/vnd.github.raw',
-      ]);
+      // The raw request is sent only after the entry and size checks pass. A
+      // failure names the unencoded path, since the bare gh error names only
+      // the encoded endpoint, and keeps the original error as its cause.
+      let bytes: Buffer;
+      try {
+        bytes = deps.ghBytesUnbounded([
+          'api',
+          endpoint,
+          '-H',
+          'Accept: application/vnd.github.raw',
+        ]);
+      } catch (error) {
+        throw new Error(`raw read of ${path} failed`, { cause: error });
+      }
       // The git blob hash is SHA-1 over `blob <byte length>`, a NUL byte, and
       // the content. The listing sha must match it, or the bytes are not the
       // stored file. This relies on the contents API reporting the blob hash
