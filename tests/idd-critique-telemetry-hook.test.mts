@@ -2322,7 +2322,7 @@ async function runFakeCollectorTimeout(
       stayAliveCommand(stubName),
       samplePayload(),
       {
-        timeoutMs: 8_000,
+        timeoutMs: 500,
         spawnFn,
         platform: 'win32',
         collectDescendants,
@@ -2524,7 +2524,7 @@ test('invokeCritiqueTelemetryHook ends no descendant when the relay has already 
       stayAliveCommand(name),
       samplePayload(),
       {
-        timeoutMs: 8_000,
+        timeoutMs: 3_000,
         spawnFn,
         platform: 'win32',
         collectDescendants: (relayPid) => {
@@ -2592,7 +2592,7 @@ test('invokeCritiqueTelemetryHook leaves a process that is not a descendant of t
     const pending = invokeCritiqueTelemetryHook(
       stayAliveCommand(name),
       samplePayload(),
-      { timeoutMs: 8_000, spawnFn, platform: 'win32' },
+      { timeoutMs: 3_000, spawnFn, platform: 'win32' },
     );
     await awaitRecordedPid(pidPath);
     const result = await pending;
@@ -2640,7 +2640,7 @@ test('invokeCritiqueTelemetryHook makes no extra kill when the win32 taskkill tr
       stayAliveCommand(name),
       samplePayload(),
       {
-        timeoutMs: 8_000,
+        timeoutMs: 3_000,
         spawnFn,
         platform: 'win32',
         collectDescendants: (relayPid) => [
@@ -2687,7 +2687,7 @@ test('invokeCritiqueTelemetryHook makes no listing and no kill when the win32 ta
       stayAliveCommand(name),
       samplePayload(),
       {
-        timeoutMs: 8_000,
+        timeoutMs: 3_000,
         spawnFn,
         platform: 'win32',
         collectDescendants: () => {
@@ -2734,7 +2734,7 @@ test('invokeCritiqueTelemetryHook ends nothing when the relay exits while the wi
       stayAliveCommand(name),
       samplePayload(),
       {
-        timeoutMs: 8_000,
+        timeoutMs: 3_000,
         spawnFn,
         platform: 'win32',
         collectDescendants: async (relayPid) => {
