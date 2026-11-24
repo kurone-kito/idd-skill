@@ -1272,8 +1272,11 @@ function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Only ESRCH proves that the process is gone. Any other error, such as
+    // EPERM on win32, means it may still run, so the fallback keeps going and
+    // still ends the relay (fail closed; kurone-kito/idd-skill#5362).
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 
