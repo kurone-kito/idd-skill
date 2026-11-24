@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,7 +25,9 @@ import {
   normalizeReview,
   normalizeThread,
 } from '../src/scripts/pre-merge-readiness.mts';
+import { resolveCodeownersForFiles } from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { createGithubProviderAdapter } from '../src/scripts/provider-adapter-github.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -248,6 +257,68 @@ function ndjson(items: unknown[]): string {
 // `ready`/blockers assertions.
 const REVIEWS_AND_HEAD_COMMIT_COMMITTED_DATE = '2026-07-31T23:00:00Z';
 
+/** A repository file the stub serves: its listing entry and raw bytes. */
+type RepositoryFixtureFile = {
+  path: string;
+  file: string;
+  sha: string;
+  size: number;
+};
+
+/**
+ * JavaScript for the stub's repository-file routes (#5379). A directory
+ * listing is built from the served files, and a raw request returns the
+ * file's bytes read from disk. The bytes go out through `writeSync`, so a
+ * 100 MB body is written in full before the stub exits. A path that is not
+ * served answers 404, the same as the catch-all below.
+ */
+function buildRepositoryFileRoutes(files: RepositoryFixtureFile[]): string {
+  const base = `repos/${REPO_REF}/contents`;
+  return [
+    `const REPOSITORY_FILES = ${JSON.stringify(files)};`,
+    'function writeAllStdout(buffer) {',
+    "  const fs = require('node:fs');",
+    '  let offset = 0;',
+    '  while (offset < buffer.length) {',
+    '    offset += fs.writeSync(1, buffer, offset, buffer.length - offset);',
+    '  }',
+    '}',
+    'function listingOf(dir) {',
+    "  const prefix = dir === '' ? '' : dir + '/';",
+    '  const found = new Map();',
+    "  let exists = dir === '';",
+    '  for (const file of REPOSITORY_FILES) {',
+    '    if (!file.path.startsWith(prefix)) continue;',
+    '    exists = true;',
+    '    const rest = file.path.slice(prefix.length);',
+    "    const slash = rest.indexOf('/');",
+    '    if (slash === -1) {',
+    "      found.set(rest, { name: rest, path: file.path, type: 'file', size: file.size, sha: file.sha });",
+    '    } else {',
+    '      const sub = rest.slice(0, slash);',
+    "      if (!found.has(sub)) found.set(sub, { name: sub, path: prefix + sub, type: 'dir', size: 0, sha: '0'.repeat(40) });",
+    '    }',
+    '  }',
+    '  return exists ? [...found.values()] : null;',
+    '}',
+    `if (a(0) === 'api' && String(a(1)).startsWith(${JSON.stringify(base)})) {`,
+    "  const endpointPath = String(a(1)).split('?')[0];",
+    `  const rest = endpointPath.slice(${JSON.stringify(base)}.length);`,
+    "  const wanted = rest === '' ? '' : rest.slice(1).split('/').map((s) => decodeURIComponent(s)).join('/');",
+    "  if (a(3) === 'Accept: application/vnd.github.raw') {",
+    '    const hit = REPOSITORY_FILES.find((file) => file.path === wanted);',
+    '    if (hit === undefined) notFound();',
+    "    writeAllStdout(require('node:fs').readFileSync(hit.file));",
+    '    process.exit(0);',
+    '  }',
+    '  const entries = listingOf(wanted);',
+    '  if (entries === null) notFound();',
+    '  out(JSON.stringify(entries));',
+    '}',
+    `if (a(0) === 'api' && String(a(1)).startsWith(${JSON.stringify(`repos/${REPO_REF}/collaborators/`)}) && String(a(1)).endsWith('/permission')) out(JSON.stringify({ permission: 'write', role_name: 'write' }));`,
+  ].join('\n');
+}
+
 /**
  * Build a stub `gh` Node script answering every call
  * `collectPreMergeReadiness` makes for the fixed OWNER/REPO/PR_NUMBER/
@@ -274,6 +345,13 @@ function buildStubGhScript(
     // JSON object printed with exit 0.
     prBody?: string;
     searchIssues?: unknown[] | 'rate-limit' | 'non-array';
+    // #5379: the large-file readiness runs (see `runLargeFileReadiness`).
+    // `changedFiles` and `reviewerLogins` default to the fixtures above.
+    changedFiles?: string[];
+    reviewerLogins?: string[];
+    claimIssue?: { title: string; body: string };
+    repositoryFiles?: RepositoryFixtureFile[];
+    invocationLogPath?: string;
   } = {},
 ): string {
   const prView = {
@@ -318,14 +396,13 @@ function buildStubGhScript(
     },
   };
   const searchIssues = options.searchIssues ?? [];
-  const reviews = [
-    {
-      state: 'APPROVED',
-      user: { login: 'reviewer-user' },
-      submitted_at: '2026-07-31T12:00:00Z',
-      commit_id: prView.headRefOid,
-    },
-  ];
+  const reviewerLogins = options.reviewerLogins ?? ['reviewer-user'];
+  const reviews = reviewerLogins.map((login) => ({
+    state: 'APPROVED',
+    user: { login },
+    submitted_at: '2026-07-31T12:00:00Z',
+    commit_id: prView.headRefOid,
+  }));
   const prComments = [
     {
       id: 1,
@@ -344,7 +421,9 @@ function buildStubGhScript(
       user: { login: 'claimant-user' },
     },
   ];
-  const changedFiles = [{ filename: 'src/scripts/example.mts' }];
+  const changedFiles = (
+    options.changedFiles ?? ['src/scripts/example.mts']
+  ).map((filename) => ({ filename }));
   const reviewThreadsPayload = {
     data: {
       repository: {
@@ -387,15 +466,13 @@ function buildStubGhScript(
         pullRequest: {
           reviews: {
             pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                commit: { oid: prView.headRefOid },
-                submittedAt: '2026-07-31T12:00:00Z',
-                author: { login: 'reviewer-user', __typename: 'User' },
-                comments: { totalCount: 0 },
-                body: '',
-              },
-            ],
+            nodes: reviewerLogins.map((login) => ({
+              commit: { oid: prView.headRefOid },
+              submittedAt: '2026-07-31T12:00:00Z',
+              author: { login, __typename: 'User' },
+              comments: { totalCount: 0 },
+              body: '',
+            })),
           },
           commits: {
             nodes: [
@@ -421,6 +498,11 @@ function buildStubGhScript(
   // arg-shape drift on those two specific calls alone would not turn red.
   return `const args = process.argv.slice(2);
 const a = (i) => args[i];
+${
+  options.invocationLogPath === undefined
+    ? ''
+    : `require('node:fs').appendFileSync(${JSON.stringify(options.invocationLogPath)}, JSON.stringify(args) + '\\n');`
+}
 function out(text) { process.stdout.write(text); process.exit(0); }
 function notFound() { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }
 
@@ -501,6 +583,16 @@ ${
   options.oversizedCodeowners === true
     ? `if (a(0) === 'api' && String(a(1)).startsWith('${`repos/${REPO_REF}/contents/.github?ref=`}')) out(${JSON.stringify(JSON.stringify([{ name: 'CODEOWNERS', type: 'file', size: 104857601, sha: 'a'.repeat(40) }]))});`
     : ''
+}
+${
+  options.claimIssue === undefined
+    ? ''
+    : `if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}`}') out(${JSON.stringify(JSON.stringify({ number: CLAIM_ISSUE, title: options.claimIssue.title, body: options.claimIssue.body, state: 'open', labels: [] }))});`
+}
+${
+  options.repositoryFiles === undefined
+    ? ''
+    : buildRepositoryFileRoutes(options.repositoryFiles)
 }
 // The root directory listing is an empty array, so a root-level path is absent (#5342).
 if (a(0) === 'api' && (a(1) === '${`repos/${REPO_REF}/contents`}' || String(a(1)).startsWith('${`repos/${REPO_REF}/contents?`}'))) out('[]');
@@ -3294,4 +3386,453 @@ test('an oversized CODEOWNERS file is a repository-file-too-large blocker and th
     blockers.map((blocker) => [blocker.path, blocker.gate]),
     [['.github/CODEOWNERS', 'repository-file-too-large']],
   );
+});
+
+// ---------------------------------------------------------------------------
+// Large repository-file reads through the production adapter (#5379).
+//
+// The fake-port tests above skip the adapter's listing request and its raw
+// body decoding, and the adapter tests call `getRepositoryFileBytesAtRef`
+// directly without running the collector. The tests below run
+// `collectPreMergeReadiness` in-process with the production GitHub adapter and
+// a stub `gh` on PATH. The collector's `createPort` seam wraps that adapter so
+// each read it returns is recorded, and the stub logs every argv, so request
+// order is observed rather than inferred.
+//
+// Two seams are injected, as the CLI does not inject them: the scope-overrun
+// merge base is a fixed SHA, because the stub has no git checkout for
+// `git merge-base`, and the activation is null, which is what the CLI gets
+// from a working directory that names no repository. Every file read still
+// goes through the production adapter and the stub.
+// ---------------------------------------------------------------------------
+
+const MIB = 1024 * 1024;
+const MERGE_BASE_SHA = 'b'.repeat(40);
+const CODEOWNERS_RULE = '* @reviewer-user @second-owner';
+const RAW_ACCEPT = 'Accept: application/vnd.github.raw';
+
+type LargeFixture = { path: string; bytes: Buffer };
+
+type RecordedRead = {
+  path: string;
+  ref: string;
+  outcome: string;
+  bytes: Buffer | null;
+};
+
+function isWhitespaceByte(byte: number | undefined): boolean {
+  return byte === 0x20 || byte === 0x0a || byte === 0x0d || byte === 0x09;
+}
+
+function assertWhitespaceBracketed(bytes: Buffer, label: string): void {
+  assert.ok(
+    isWhitespaceByte(bytes[0]) && isWhitespaceByte(bytes[bytes.length - 1]),
+    `${label} must begin and end with whitespace`,
+  );
+}
+
+function gitBlobSha(bytes: Buffer): string {
+  return createHash('sha1')
+    .update(`blob ${bytes.length}\0`)
+    .update(bytes)
+    .digest('hex');
+}
+
+/**
+ * Exactly `totalBytes` bytes of CODEOWNERS-safe text: a newline, then filler
+ * comment lines and blank lines, then `closingLine` and a newline. The closing
+ * line is the last content, so a truncated read loses it.
+ */
+function textFixture(totalBytes: number, closingLine: string): Buffer {
+  const bytes = Buffer.alloc(totalBytes, 0x0a);
+  const closing = Buffer.from(`${closingLine}\n`, 'utf8');
+  const bodyEnd = totalBytes - closing.length;
+  const filler = Buffer.from(`# ${'filler '.repeat(8)}\n`, 'utf8');
+  for (
+    let offset = 1;
+    offset + filler.length <= bodyEnd;
+    offset += filler.length
+  ) {
+    filler.copy(bytes, offset);
+  }
+  closing.copy(bytes, bodyEnd);
+  assertWhitespaceBracketed(bytes, 'text fixture');
+  return bytes;
+}
+
+/** A sync manifest padded with spaces to exactly `totalBytes`; still JSON. */
+function syncManifestFixture(totalBytes: number): Buffer {
+  const bytes = Buffer.alloc(totalBytes, 0x20);
+  const json = Buffer.from(JSON.stringify({ syncPairs: [] }), 'utf8');
+  bytes[0] = 0x0a;
+  json.copy(bytes, 1);
+  bytes[totalBytes - 1] = 0x0a;
+  assertWhitespaceBracketed(bytes, 'sync manifest fixture');
+  return bytes;
+}
+
+function claimIssueBody(candidates: readonly string[]): string {
+  return [
+    'Implement the claimed change.',
+    '',
+    '## Candidate files',
+    '',
+    ...candidates.map((path) => `- \`${path}\``),
+    '',
+    '## Acceptance Criteria',
+    '',
+    '- Keep the work reviewable.',
+    '',
+    '<!-- idd-skill-effort: M -->',
+  ].join('\n');
+}
+
+function runLargeFileReadiness(run: {
+  claimBound: boolean;
+  fixtures: readonly LargeFixture[];
+  changedFiles: readonly string[];
+  reviewerLogins?: readonly string[];
+}): {
+  report: Record<string, unknown>;
+  reads: RecordedRead[];
+  requests: string[][];
+} {
+  const root = mkdtempSync(join(tmpdir(), 'idd-readiness-large-files-'));
+  try {
+    const repositoryFiles = run.fixtures.map((fixture, index) => {
+      const file = join(root, `fixture-${index}.bin`);
+      writeFileSync(file, fixture.bytes);
+      return {
+        path: fixture.path,
+        file,
+        sha: gitBlobSha(fixture.bytes),
+        size: fixture.bytes.length,
+      };
+    });
+    const invocationLogPath = join(root, 'gh-invocations.jsonl');
+    const restore = stubExecutable(
+      'gh',
+      buildStubGhScript(true, {
+        closingIssuesReferences: run.claimBound
+          ? [{ number: CLAIM_ISSUE }]
+          : [],
+        changedFiles: [...run.changedFiles],
+        reviewerLogins: run.reviewerLogins
+          ? [...run.reviewerLogins]
+          : undefined,
+        claimIssue: run.claimBound
+          ? {
+              title: 'feat: read large repository files',
+              body: claimIssueBody(run.changedFiles),
+            }
+          : undefined,
+        repositoryFiles,
+        invocationLogPath,
+      }),
+    );
+    try {
+      const reads: RecordedRead[] = [];
+      const createPort = (owner: string, repo: string) => {
+        const port = createGithubProviderAdapter(owner, repo);
+        const readRaw = port.getRepositoryFileBytesAtRef.bind(port);
+        port.getRepositoryFileBytesAtRef = (readOwner, readRepo, path, ref) => {
+          const outcome = readRaw(readOwner, readRepo, path, ref);
+          reads.push({
+            path,
+            ref,
+            outcome: outcome.outcome,
+            bytes: outcome.outcome === 'ok' ? outcome.bytes : null,
+          });
+          return outcome;
+        };
+        return port;
+      };
+      const argv = [
+        '--pr',
+        String(PR_NUMBER),
+        '--owner',
+        OWNER,
+        '--repo',
+        REPO,
+        '--now',
+        '2026-08-01T00:00:00Z',
+      ];
+      if (run.claimBound) {
+        argv.push('--claim-issue', String(CLAIM_ISSUE), '--claim-id', 'c1');
+      } else {
+        argv.push('--claimless');
+      }
+      const report = collectPreMergeReadiness(
+        argv,
+        createPort,
+        undefined,
+        () => null,
+        () => MERGE_BASE_SHA,
+      );
+      const requests = readFileSync(invocationLogPath, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as string[]);
+      return {
+        report: report as unknown as Record<string, unknown>,
+        reads,
+        requests,
+      };
+    } finally {
+      restore();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function readOf(
+  reads: readonly RecordedRead[],
+  path: string,
+  ref: string,
+): RecordedRead {
+  const matches = reads.filter(
+    (read) => read.path === path && read.ref === ref,
+  );
+  assert.equal(
+    matches.length,
+    1,
+    `expected one read of ${path} at ${ref}, saw ${matches.length}`,
+  );
+  const [read] = matches;
+  assert.ok(read, `read of ${path} at ${ref}`);
+  return read;
+}
+
+/** The decoded bytes the collector received equal the whole fixture. */
+function assertReadMatchesFixture(read: RecordedRead, fixture: Buffer): void {
+  const label = `${read.path} at ${read.ref}`;
+  assert.equal(read.outcome, 'ok', `${label}: read outcome`);
+  assert.ok(read.bytes !== null, `${label}: no decoded bytes`);
+  assert.equal(read.bytes.length, fixture.length, `${label}: decoded length`);
+  assert.equal(
+    Buffer.compare(read.bytes, fixture),
+    0,
+    `${label}: decoded bytes differ from the fixture`,
+  );
+}
+
+function endpointsFor(
+  path: string,
+  ref: string,
+): { listing: string; raw: string } {
+  // The fixture paths are plain ASCII, so the endpoints need no encoding.
+  const base = `repos/${REPO_REF}/contents`;
+  const parent = path.split('/').slice(0, -1).join('/');
+  return {
+    listing:
+      parent === '' ? `${base}?ref=${ref}` : `${base}/${parent}?ref=${ref}`,
+    raw: `${base}/${path}?ref=${ref}`,
+  };
+}
+
+/** The parent listing request for `path` is logged before its raw request. */
+function assertListingPrecedesRaw(
+  requests: readonly string[][],
+  path: string,
+  ref: string,
+): void {
+  const { listing, raw } = endpointsFor(path, ref);
+  const listingIndex = requests.findIndex(
+    (args) => args.length === 2 && args[0] === 'api' && args[1] === listing,
+  );
+  const rawIndex = requests.findIndex(
+    (args) => args[0] === 'api' && args[1] === raw && args[3] === RAW_ACCEPT,
+  );
+  assert.notEqual(rawIndex, -1, `no raw request for ${path} at ${ref}`);
+  assert.notEqual(listingIndex, -1, `no listing request ${listing}`);
+  assert.ok(
+    listingIndex < rawIndex,
+    `listing ${listing} (log line ${listingIndex}) must precede raw ${raw} (log line ${rawIndex})`,
+  );
+}
+
+/** Checks every raw request in the log against its parent listing. */
+function countRawRequestsAfterListings(requests: readonly string[][]): number {
+  const prefix = `repos/${REPO_REF}/contents/`;
+  let checked = 0;
+  for (const args of requests) {
+    if (args[0] !== 'api' || args[3] !== RAW_ACCEPT) continue;
+    const [rawPath = '', ref = ''] = (args[1] ?? '')
+      .slice(prefix.length)
+      .split('?ref=');
+    assertListingPrecedesRaw(requests, rawPath, ref);
+    checked += 1;
+  }
+  return checked;
+}
+
+test('readiness base read returns a 5 MiB changed path in full', () => {
+  const path = 'src/large-base.txt';
+  const fixture = textFixture(5 * MIB, '# end of base file');
+  const run = runLargeFileReadiness({
+    claimBound: true,
+    fixtures: [{ path, bytes: fixture }],
+    changedFiles: [path],
+  });
+  assertReadMatchesFixture(readOf(run.reads, path, MERGE_BASE_SHA), fixture);
+  assertListingPrecedesRaw(run.requests, path, MERGE_BASE_SHA);
+});
+
+test('readiness base file read returns 5 MiB in full', () => {
+  // The sync manifest is read at the merge base in every scope-overrun run, so
+  // it is a base file read that needs no changed path.
+  const path = 'audit/sync-manifest.json';
+  const fixture = syncManifestFixture(5 * MIB);
+  const run = runLargeFileReadiness({
+    claimBound: true,
+    fixtures: [{ path, bytes: fixture }],
+    changedFiles: ['src/scripts/example.mts'],
+  });
+  assertReadMatchesFixture(readOf(run.reads, path, MERGE_BASE_SHA), fixture);
+  assertListingPrecedesRaw(run.requests, path, MERGE_BASE_SHA);
+});
+
+test('readiness CODEOWNERS read returns 5 MiB in full with derived logins', () => {
+  const path = '.github/CODEOWNERS';
+  const fixture = textFixture(5 * MIB, CODEOWNERS_RULE);
+  const changedFiles = ['src/scripts/example.mts'];
+  const run = runLargeFileReadiness({
+    claimBound: false,
+    fixtures: [{ path, bytes: fixture }],
+    changedFiles,
+    reviewerLogins: ['reviewer-user', 'second-owner', 'outsider-user'],
+  });
+  const read = readOf(run.reads, path, 'main');
+  assertReadMatchesFixture(read, fixture);
+  assert.equal(
+    read.bytes?.toString('utf8'),
+    fixture.toString('utf8'),
+    'CODEOWNERS text',
+  );
+  assertListingPrecedesRaw(run.requests, path, 'main');
+
+  // The logins the fixture text produces, from the same resolver readiness
+  // runs over the full text. The closing rule is the only source of owners.
+  const producedByText = [
+    ...resolveCodeownersForFiles(fixture.toString('utf8'), changedFiles)
+      .codeownerUserLogins,
+  ]
+    .map(String)
+    .sort();
+  assert.deepEqual(producedByText, ['reviewer-user', 'second-owner']);
+
+  // The readiness result names the CODEOWNERS logins in
+  // `codeownerSelfApproval.directCodeownerUserLogins`, and flags the reviewers
+  // whose write access makes them eligible codeowners (`isCodeowner`).
+  const reviewerStates = run.report.reviewerStates as {
+    codeownerSelfApproval: { directCodeownerUserLogins: string[] };
+    latestByAuthor: Array<{ login: string; isCodeowner: boolean }>;
+  };
+  assert.deepEqual(
+    [...reviewerStates.codeownerSelfApproval.directCodeownerUserLogins].sort(),
+    producedByText,
+  );
+  const reportedLogins = reviewerStates.latestByAuthor
+    .filter((entry) => entry.isCodeowner)
+    .map((entry) => entry.login)
+    .sort();
+  assert.deepEqual(reportedLogins, producedByText);
+});
+
+test('readiness reads of a 50 MiB file are complete', () => {
+  const path = '.github/CODEOWNERS';
+  const fixture = textFixture(50 * MIB, CODEOWNERS_RULE);
+  const run = runLargeFileReadiness({
+    claimBound: true,
+    fixtures: [{ path, bytes: fixture }],
+    changedFiles: [path],
+  });
+  assertReadMatchesFixture(readOf(run.reads, path, MERGE_BASE_SHA), fixture);
+  assertReadMatchesFixture(readOf(run.reads, path, 'main'), fixture);
+  assertListingPrecedesRaw(run.requests, path, MERGE_BASE_SHA);
+  assertListingPrecedesRaw(run.requests, path, 'main');
+});
+
+test('readiness base read returns a file at exactly the limit', () => {
+  // RAW_FILE_BYTES_LIMIT is 104_857_600. A listing size equal to it is still
+  // read raw, and only a larger size is reported too-large.
+  const path = 'src/exact-limit.txt';
+  const fixture = textFixture(104_857_600, '# end of base file');
+  const run = runLargeFileReadiness({
+    claimBound: true,
+    fixtures: [{ path, bytes: fixture }],
+    changedFiles: [path],
+  });
+  assertReadMatchesFixture(readOf(run.reads, path, MERGE_BASE_SHA), fixture);
+  assertListingPrecedesRaw(run.requests, path, MERGE_BASE_SHA);
+});
+
+/** Each named read has its parent listing logged before its raw request. */
+function assertReadsFollowListings(
+  run: { requests: string[][] },
+  reads: ReadonlyArray<{ path: string; ref: string }>,
+): void {
+  for (const read of reads) {
+    assertListingPrecedesRaw(run.requests, read.path, read.ref);
+  }
+  assert.ok(
+    countRawRequestsAfterListings(run.requests) >= reads.length,
+    'every raw request in the run follows its parent listing',
+  );
+}
+
+test('readiness sends the listing request before the raw request', () => {
+  // Every read the criteria above name, each in the run that makes it. Each
+  // block holds only its own fixture, so one large buffer is alive at a time.
+  {
+    const path = 'src/large-base.txt';
+    const run = runLargeFileReadiness({
+      claimBound: true,
+      fixtures: [{ path, bytes: textFixture(5 * MIB, '# end of base file') }],
+      changedFiles: [path],
+    });
+    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
+  }
+  {
+    const path = 'audit/sync-manifest.json';
+    const run = runLargeFileReadiness({
+      claimBound: true,
+      fixtures: [{ path, bytes: syncManifestFixture(5 * MIB) }],
+      changedFiles: ['src/scripts/example.mts'],
+    });
+    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
+  }
+  {
+    const path = '.github/CODEOWNERS';
+    const run = runLargeFileReadiness({
+      claimBound: false,
+      fixtures: [{ path, bytes: textFixture(5 * MIB, CODEOWNERS_RULE) }],
+      changedFiles: ['src/scripts/example.mts'],
+    });
+    assertReadsFollowListings(run, [{ path, ref: 'main' }]);
+  }
+  {
+    const path = '.github/CODEOWNERS';
+    const run = runLargeFileReadiness({
+      claimBound: true,
+      fixtures: [{ path, bytes: textFixture(50 * MIB, CODEOWNERS_RULE) }],
+      changedFiles: [path],
+    });
+    assertReadsFollowListings(run, [
+      { path, ref: MERGE_BASE_SHA },
+      { path, ref: 'main' },
+    ]);
+  }
+  {
+    const path = 'src/exact-limit.txt';
+    const run = runLargeFileReadiness({
+      claimBound: true,
+      fixtures: [
+        { path, bytes: textFixture(104_857_600, '# end of base file') },
+      ],
+      changedFiles: [path],
+    });
+    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
+  }
 });
