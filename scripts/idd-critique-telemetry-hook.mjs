@@ -95,6 +95,22 @@ const PAYLOAD_DELIVERY_TIMEOUT_MS = 1_000;
  */
 const WATCHDOG_ARMED_TIMEOUT_MS = 3_000;
 /**
+ * Bound on the win32 PowerShell process listing that finds a timed-out
+ * relay's descendants (kurone-kito/idd-skill#5362, see
+ * {@link collectWin32RelayDescendants}). The listing runs asynchronously, and
+ * a timeout whose tree kill failed settles only after it, so the bound keeps a
+ * hung PowerShell from delaying that result indefinitely.
+ */
+const WIN32_PROCESS_LIST_TIMEOUT_MS = 5_000;
+/**
+ * How long a win32 timeout waits for its `taskkill` tree kill to report that
+ * it started (kurone-kito/idd-skill#5362, see {@link endRelayTreeWindows}). A
+ * 'spawn' event within this bound means taskkill is running, and an 'error'
+ * event means it could not start. With neither within the bound, the kill
+ * counts as started.
+ */
+const WIN32_TASKKILL_START_WAIT_MS = 1_000;
+/**
  * Environment-variable name used to hand the real target `command`
  * string to the win32 relay script (see {@link WIN32_RELAY_SCRIPT})
  * rather than passing it as an argv element. The relay is spawned with
@@ -467,6 +483,9 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       ? Math.min(requestedTimeoutMs, MAX_INVOKE_TIMEOUT_MS)
       : DEFAULT_INVOKE_TIMEOUT_MS;
   const platform = options?.platform ?? process.platform;
+  const collectDescendants =
+    options?.collectDescendants ?? collectWin32RelayDescendants;
+  const killPid = options?.killPid ?? killProcessByPid;
   let delivered = false;
   const notifyDelivered = () => {
     if (delivered) {
@@ -477,6 +496,10 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
   };
   return new Promise((resolve) => {
     let settled = false;
+    // kurone-kito/idd-skill#5362: set when the timeout fires. On win32 the
+    // timeout settles only after its kill has finished, so a relay exit in that
+    // window must still resolve `ok: false`.
+    let timedOut = false;
     const settle = (ok) => {
       if (settled) {
         return;
@@ -696,6 +719,15 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
       notifyWatchdogArmed();
     }
     const timer = setTimeout(() => {
+      timedOut = true;
+      if (platform === 'win32') {
+        // kurone-kito/idd-skill#5362: settles once the win32 kill has finished,
+        // which takes a bounded moment when the descendant fallback runs.
+        endRelayTreeWindows(child, spawnFn, collectDescendants, killPid, () =>
+          settle(false),
+        );
+        return;
+      }
       killProcessGroup(child, spawnFn, platform);
       settle(false);
     }, timeoutMs);
@@ -738,7 +770,9 @@ export function invokeCritiqueTelemetryHook(command, payload, options) {
     child.on('exit', (code) => {
       clearTimeout(timer);
       cancelWatchdog(watchdog, spawnFn, platform);
-      settle(code === 0);
+      // A relay that exits 0 while a timed-out win32 kill is still finishing
+      // must not turn the timeout into `ok: true` (kurone-kito/idd-skill#5362).
+      settle(!timedOut && code === 0);
     });
     child.stdin?.on('error', () => {
       // Asynchronous EPIPE (child exited before reading stdin) or similar --
@@ -901,6 +935,306 @@ function killProcessTreeWindows(child, spawnFn) {
     return true;
   } catch {
     return false;
+  }
+}
+/**
+ * win32 timeout kill (kurone-kito/idd-skill#5362). Ends the relay's whole tree
+ * with `taskkill /T /F`, the same call as {@link killProcessTreeWindows}, and
+ * takes no process listing before it. When that tree kill cannot be started,
+ * because the spawn throws or reports an 'error' event, the relay's hook
+ * descendants are ended by {@link endRelayAfterFailedTreeKill} before the relay
+ * itself. A 'spawn' event, or no event within
+ * {@link WIN32_TASKKILL_START_WAIT_MS}, counts as started, so the fallback does
+ * not run. `done` runs exactly once, when this kill has finished. Never throws.
+ */
+function endRelayTreeWindows(
+  child,
+  spawnFn,
+  collectDescendants,
+  killPid,
+  done,
+) {
+  let finished = false;
+  const finish = () => {
+    if (!finished) {
+      finished = true;
+      done();
+    }
+  };
+  let fallbackStarted = false;
+  const fallback = () => {
+    if (!fallbackStarted) {
+      fallbackStarted = true;
+      void endRelayAfterFailedTreeKill(
+        child,
+        child.pid,
+        collectDescendants,
+        killPid,
+      ).then(finish, finish);
+    }
+  };
+  try {
+    const relayPid = child.pid;
+    if (!isRelayAlive(child) || !isPid(relayPid)) {
+      // No live relay, so there is nothing left to end.
+      finish();
+      return;
+    }
+    let killer;
+    try {
+      killer = spawnFn('taskkill', ['/PID', String(relayPid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      // The tree kill could not be started at all.
+      fallback();
+      return;
+    }
+    const startWait = setTimeout(finish, WIN32_TASKKILL_START_WAIT_MS);
+    killer.once('spawn', () => {
+      clearTimeout(startWait);
+      finish();
+    });
+    // Kept for the killer's whole life, so a late failure is never an
+    // unhandled 'error' event, and it still ends the relay's descendants.
+    killer.on('error', () => {
+      clearTimeout(startWait);
+      fallback();
+    });
+    killer.unref();
+  } catch {
+    finish();
+  }
+}
+/**
+ * The fallback behind {@link endRelayTreeWindows} (kurone-kito/idd-skill#5362).
+ * Lists the processes once, asynchronously, then ends the relay's hook
+ * descendants deepest first, and the relay itself. Nothing is ended when the
+ * relay has already exited. The relay is also checked again after the listing,
+ * because the listing takes time: a relay that exited meanwhile means nothing
+ * is ended, since the listed pids may have been reused. A failed listing counts
+ * as unknown, so only the relay is ended. Never rejects.
+ */
+/**
+ * Runs the injected collector under the same bound as the default listing
+ * (kurone-kito/idd-skill#5362). An override that throws, rejects, or does not
+ * settle in time counts as unknown (`null`), and a late result is ignored, so
+ * an injected collector can never keep the relay from being ended.
+ */
+function collectWithDeadline(collectDescendants, relayPid) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), WIN32_PROCESS_LIST_TIMEOUT_MS);
+  });
+  const collected = Promise.resolve()
+    .then(() => collectDescendants(relayPid))
+    .catch(() => null);
+  return Promise.race([collected, deadline]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+async function endRelayAfterFailedTreeKill(
+  child,
+  relayPid,
+  collectDescendants,
+  killPid,
+) {
+  try {
+    if (!isRelayAlive(child) || !isProcessRunning(relayPid)) {
+      return;
+    }
+    // Unknown (a throw, a rejection, or no answer within the deadline): keep
+    // nothing, so only the relay is ended.
+    const records = await collectWithDeadline(collectDescendants, relayPid);
+    const plan = planRelayDescendants(relayPid, records);
+    if (!isRelayAlive(child) || !isProcessRunning(relayPid)) {
+      return;
+    }
+    endRelayDescendants(relayPid, plan, killPid);
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already exited; ignore.
+    }
+  } catch {
+    // Never rejects; the caller still settles.
+  }
+}
+/** True while `child` has neither exited nor been signalled. */
+function isRelayAlive(child) {
+  return child.exitCode === null && child.signalCode === null;
+}
+/** True while the OS still reports a live process with this pid. */
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Only ESRCH proves that the process is gone. Any other error, such as
+    // EPERM on win32, means it may still run, so the fallback keeps going and
+    // still ends the relay (fail closed; kurone-kito/idd-skill#5362).
+    return error.code !== 'ESRCH';
+  }
+}
+function isPid(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+/**
+ * Keeps the records that lie below `rootPid`, walking parent links breadth
+ * first from the root. A record joins only when its parent is the root or a
+ * record already kept, so a record with an unknown parent is dropped along
+ * with everything below it. Duplicate pids, `rootPid`, this process's own
+ * pid, and malformed records are dropped too. The result is sorted deepest
+ * first (a stable sort, so equal depths keep their walk order).
+ */
+function planRelayDescendants(rootPid, records) {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  const childrenOf = new Map();
+  for (const record of records) {
+    if (typeof record !== 'object' || record === null) {
+      continue;
+    }
+    const { pid, parentPid } = record;
+    if (!isPid(pid) || !isPid(parentPid)) {
+      continue;
+    }
+    if (pid === rootPid || pid === process.pid) {
+      continue;
+    }
+    const entry = { pid, parentPid };
+    const siblings = childrenOf.get(parentPid);
+    if (siblings) {
+      siblings.push(entry);
+    } else {
+      childrenOf.set(parentPid, [entry]);
+    }
+  }
+  const depthOf = new Map([[rootPid, 0]]);
+  const kept = [];
+  const queue = [{ pid: rootPid, depth: 0 }];
+  for (const parent of queue) {
+    for (const entry of childrenOf.get(parent.pid) ?? []) {
+      if (depthOf.has(entry.pid)) {
+        continue;
+      }
+      const depth = parent.depth + 1;
+      depthOf.set(entry.pid, depth);
+      kept.push({ ...entry, depth });
+      queue.push({ pid: entry.pid, depth });
+    }
+  }
+  return kept.sort((a, b) => b.depth - a.depth);
+}
+/**
+ * Ends the planned descendants, in the order `planRelayDescendants` returns
+ * them (deepest first). Before each kill, the record's `parentPid` must be
+ * the relay or a descendant still pending in this plan; otherwise the pid is
+ * not passed to `killPid` (kurone-kito/idd-skill#5362). A `killPid` that
+ * throws is absorbed, and the rest still run. The caller ends the relay
+ * afterwards.
+ */
+function endRelayDescendants(relayPid, plan, killPid) {
+  const pending = new Set(plan.map((entry) => entry.pid));
+  for (const entry of plan) {
+    const parentKnown =
+      entry.parentPid === relayPid || pending.has(entry.parentPid);
+    pending.delete(entry.pid);
+    if (!parentKnown) {
+      continue;
+    }
+    try {
+      killPid(entry.pid);
+    } catch {
+      // Refused: absorbed, so the remaining descendants and the relay still end.
+    }
+  }
+}
+/** Default {@link InvokeCritiqueTelemetryHookOptions.killPid}: a forced
+ * termination of the single process `pid` (`TerminateProcess` on win32). */
+function killProcessByPid(pid) {
+  process.kill(pid, 'SIGKILL');
+}
+/**
+ * Default win32 {@link InvokeCritiqueTelemetryHookOptions.collectDescendants}
+ * (kurone-kito/idd-skill#5362). One PowerShell call lists every process with
+ * its `ParentProcessId`. This deliberately does not use `taskkill`, because
+ * this listing serves the case where `taskkill` cannot be started. It runs
+ * asynchronously, so it never blocks the event loop, and the PowerShell process
+ * is killed at {@link WIN32_PROCESS_LIST_TIMEOUT_MS}. Resolves `null` on any
+ * failure (no `powershell.exe`, a non-zero exit, the timeout, or output that
+ * does not parse). Never rejects.
+ */
+function collectWin32RelayDescendants() {
+  return new Promise((resolve) => {
+    let output = '';
+    let finished = false;
+    const finish = (records) => {
+      if (!finished) {
+        finished = true;
+        resolve(records);
+      }
+    };
+    try {
+      const listing = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress',
+        ],
+        { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
+      );
+      const bound = setTimeout(() => {
+        try {
+          listing.kill();
+        } catch {
+          // Already exited; ignore.
+        }
+        finish(null);
+      }, WIN32_PROCESS_LIST_TIMEOUT_MS);
+      listing.stdout?.setEncoding('utf8');
+      listing.stdout?.on('data', (chunk) => {
+        output += chunk;
+      });
+      listing.on('error', () => {
+        clearTimeout(bound);
+        finish(null);
+      });
+      listing.on('close', (code) => {
+        clearTimeout(bound);
+        finish(code === 0 ? parseWin32ProcessListing(output) : null);
+      });
+    } catch {
+      finish(null);
+    }
+  });
+}
+/**
+ * Parses the PowerShell listing into process records. Rows without a valid pid
+ * and parent pid are dropped. Returns `null` when the text does not parse.
+ */
+function parseWin32ProcessListing(text) {
+  try {
+    const parsed = JSON.parse(text);
+    // ConvertTo-Json emits a bare object, not an array, for a single process.
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const records = [];
+    for (const row of rows) {
+      if (typeof row !== 'object' || row === null) {
+        continue;
+      }
+      const { ProcessId, ParentProcessId } = row;
+      if (isPid(ProcessId) && isPid(ParentProcessId)) {
+        records.push({ pid: ProcessId, parentPid: ParentProcessId });
+      }
+    }
+    return records;
+  } catch {
+    return null;
   }
 }
 /**
