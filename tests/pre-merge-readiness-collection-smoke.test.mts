@@ -496,7 +496,13 @@ function buildStubGhScript(
   // this stub's own "unexpected invocation" exit; harmless here since none
   // of this suite's assertions depend on viewerLogin/viewerAppSlug, but an
   // arg-shape drift on those two specific calls alone would not turn red.
-  return `const args = process.argv.slice(2);
+  return `const rawArgs = process.argv.slice(2);
+// gh-exec inserts "--hostname <host>" right after "api" on a GHES host. Drop
+// the pair, so every route below matches on the endpoint at index 1 and the
+// raw header at index 3 on any host.
+const args = rawArgs[0] === 'api' && rawArgs[1] === '--hostname'
+  ? ['api', ...rawArgs.slice(3)]
+  : rawArgs;
 const a = (i) => args[i];
 ${
   options.invocationLogPath === undefined
