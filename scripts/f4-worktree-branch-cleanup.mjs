@@ -44,6 +44,7 @@ import {
 } from './preserve-destination.mjs';
 import { gitChildEnvironment } from './provider-adapter-github.mjs';
 import { readWindowsAcl } from './windows-acl.mjs';
+import { readWindowsProcessRecords } from './windows-process-cwd.mjs';
 
 const F4_CLEANUP_FLAG_SPEC = {
   '--issue': { type: 'string' },
@@ -354,6 +355,9 @@ export function createLiveDeps(options) {
         { branch, expectedSha, apply: mode === 'apply' },
         (args) => runGit(args, options.primaryRoot),
       ),
+    platform,
+    readWindowsProcesses:
+      options.windowsProcessReader ?? (() => readWindowsProcessRecords()),
     withCloneLock: (run) => {
       let handle;
       try {

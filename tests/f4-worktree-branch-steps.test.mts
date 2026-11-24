@@ -12,6 +12,7 @@ import {
   type DirectoryPrivacy,
   type F4WorktreeBranchDeps,
   type F4WorktreeBranchInput,
+  type F4WorktreeBranchReport,
   type GitResult,
   isWithinRoot,
   type LstatKind,
@@ -21,6 +22,10 @@ import {
   runF4WorktreeBranchSteps,
   type SpawnedResult,
 } from '../src/scripts/f4-worktree-branch-steps.mts';
+import type {
+  WindowsProcessRecord,
+  WindowsProcessRecords,
+} from '../src/scripts/windows-process-cwd.mts';
 
 // Fake-dependency coverage of the F4 steps 4 to 6 flow (#4370). Every git
 // call, lstat, spawned helper, gh read, lock, and remote deletion is a fake
@@ -281,6 +286,10 @@ interface HarnessOptions {
     readonly destination: string;
     readonly identity: string;
   };
+  /** The host platform. Unset is non-win32, so the holder check does not run. */
+  readonly platform?: NodeJS.Platform;
+  /** The batch process reader. Unset, a call throws, so a stray call fails. */
+  readonly processRecords?: () => WindowsProcessRecords;
 }
 
 /** Build the deps: git answers by the first matching route, else success. */
@@ -444,6 +453,14 @@ function harness(options: HarnessOptions = {}): Harness {
         return { acquired: false };
       }
       return { acquired: true, value: run() };
+    },
+    platform: options.platform ?? 'linux',
+    readWindowsProcesses: () => {
+      events.push('process-read');
+      if (options.processRecords === undefined) {
+        throw new Error('the process reader is not expected in this test');
+      }
+      return options.processRecords();
     },
   };
   return {
@@ -2577,4 +2594,414 @@ test('a file or symlink at the modules path keeps the generic detail (#5225)', (
     assert.ok(detail.startsWith('git worktree remove refused:'), detail);
     assert.equal(detail.includes('§LWR'), false, `${kind}: ${detail}`);
   }
+});
+
+// The win32 holder check (#5363). The process reader is a fake. `winPath`
+// gives each test path a drive-C form, so the containment check reads the same
+// paths on any host. Every run here goes through the harness fakes only.
+
+const CURRENT_SID = 'S-1-5-21-100-200-300-1001';
+const OTHER_SID = 'S-1-5-21-100-200-300-2002';
+
+/** A drive-C form of a test path, with Windows separators, on any host. */
+function winPath(path: string): string {
+  return `C:${path.replace(/^[A-Za-z]:/, '').replaceAll('/', '\\')}`;
+}
+
+function liveRecord(
+  pid: number,
+  directory: string | null,
+  bitness: 32 | 64 = 64,
+  ownerSid: string = CURRENT_SID,
+): WindowsProcessRecord {
+  return { pid, kind: 'live', bitness, ownerSid, directory, reason: null };
+}
+
+function deniedRecord(
+  pid: number,
+  ownerSid: string | null,
+): WindowsProcessRecord {
+  return {
+    pid,
+    kind: 'denied',
+    bitness: null,
+    ownerSid,
+    directory: null,
+    reason: null,
+  };
+}
+
+function exitedRecord(pid: number): WindowsProcessRecord {
+  return {
+    pid,
+    kind: 'exited',
+    bitness: null,
+    ownerSid: null,
+    directory: null,
+    reason: null,
+  };
+}
+
+function errorRecord(pid: number, reason: string): WindowsProcessRecord {
+  return {
+    pid,
+    kind: 'error',
+    bitness: null,
+    ownerSid: null,
+    directory: null,
+    reason,
+  };
+}
+
+/** A reader that returns `records` for the current user. */
+function readerOf(
+  records: WindowsProcessRecord[],
+): () => WindowsProcessRecords {
+  return () => ({ currentSid: CURRENT_SID, records });
+}
+
+/** The git writes, directory changes, and remote deletes a run made. */
+function mutations(h: Harness): string[] {
+  return [
+    ...h.events.filter((event) =>
+      /^(git:(fetch|switch|worktree remove|branch )|git:-c merge\.|mkdir:|rename:)/u.test(
+        event,
+      ),
+    ),
+    ...h.remoteCalls,
+  ];
+}
+
+/** The detail of the step-4 record, or an empty string. */
+function step4Detail(report: F4WorktreeBranchReport): string {
+  return report.steps.find((entry) => entry.step === 'step-4')?.detail ?? '';
+}
+
+/** A harness on win32 whose path fake maps every path to drive C. */
+function winHarness(options: HarnessOptions = {}): Harness {
+  return harness({ platform: 'win32', realpath: winPath, ...options });
+}
+
+const SRC = `${WORKTREE}/src`;
+
+test('a live process inside the worktree stops the apply run before any mutation', () => {
+  const h = winHarness({ processRecords: readerOf([liveRecord(4242, SRC)]) });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.status, 'hold');
+  assert.equal(report.reason, 'worktree-holder');
+  assert.equal(report.nextAction, NEXT_ACTIONS['worktree-holder']);
+  assert.deepEqual(stepsOf(report), [
+    'path-check:passed',
+    'claim-check:passed',
+    'proof-check:passed',
+    'step-4:held',
+  ]);
+  assert.ok(step4Detail(report).includes(`pid 4242 at ${SRC}`));
+  assert.deepEqual(mutations(h), []);
+});
+
+test('a dry run reports the same holder and mutates nothing', () => {
+  const h = winHarness({ processRecords: readerOf([liveRecord(4242, SRC)]) });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.mode, 'dry-run');
+  assert.equal(report.status, 'hold');
+  assert.equal(report.reason, 'worktree-holder');
+  assert.ok(step4Detail(report).includes(`pid 4242 at ${SRC}`));
+  assert.deepEqual(mutations(h), []);
+});
+
+test('the holder check reads processes after the proof and before the fast-forward', () => {
+  const h = winHarness({ processRecords: readerOf([exitedRecord(700)]) });
+  runF4WorktreeBranchSteps(input(), h.deps);
+  const read = h.events.indexOf('process-read');
+  assert.ok(read >= 0, 'the reader is called');
+  assert.ok(read < h.events.indexOf('git:fetch origin'));
+});
+
+test('a proof hold stops before the process reader is called', () => {
+  const proof = {
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      '--worktree /work/gone is not a worktree that git worktree list --porcelain registers for this repository\n',
+  };
+  const h = winHarness({
+    proof,
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'proof-worktree-missing');
+  assert.equal(h.events.includes('process-read'), false);
+});
+
+test('a directory that differs from the worktree only in letter case is inside', () => {
+  const upper = winPath(SRC).toUpperCase();
+  const h = harness({
+    platform: 'win32',
+    realpath: (path) => (path === SRC ? upper : winPath(path)),
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-holder');
+});
+
+test('a directory that differs from the worktree only in separator style is inside', () => {
+  const forward = `${winPath(WORKTREE).replaceAll('\\', '/')}/src`;
+  const h = harness({
+    platform: 'win32',
+    realpath: (path) => (path === SRC ? forward : winPath(path)),
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-holder');
+});
+
+test('the worktree path itself is inside, and a sibling sharing its name start is not', () => {
+  const same = winHarness({
+    processRecords: readerOf([liveRecord(11, WORKTREE)]),
+  });
+  assert.equal(
+    runF4WorktreeBranchSteps(input(), same.deps).reason,
+    'worktree-holder',
+  );
+
+  const sibling = winHarness({
+    processRecords: readerOf([liveRecord(12, `${WORKTREE}-2`)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), sibling.deps);
+  assert.notEqual(report.reason, 'worktree-holder');
+  assert.notEqual(report.reason, 'worktree-unknown');
+  assert.ok(sibling.events.includes('git:fetch origin'));
+});
+
+test('a reader that throws stops the run as worktree-unknown, in both modes', () => {
+  const throws = (): WindowsProcessRecords => {
+    throw new Error('powershell exited 1');
+  };
+  for (const apply of [true, false]) {
+    const h = winHarness({ processRecords: throws });
+    const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+    assert.equal(report.reason, 'worktree-unknown');
+    assert.equal(report.nextAction, NEXT_ACTIONS['worktree-unknown']);
+    assert.ok(step4Detail(report).includes('the process reader failed'));
+    assert.equal(step4Detail(report).includes('powershell exited'), false);
+    assert.deepEqual(mutations(h), []);
+  }
+});
+
+test('an error record stops the run as worktree-unknown and names its reason', () => {
+  for (const apply of [true, false]) {
+    const h = winHarness({
+      processRecords: readerOf([errorRecord(77, 'OpenProcess failed')]),
+    });
+    const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+    assert.equal(report.reason, 'worktree-unknown');
+    assert.ok(
+      step4Detail(report).includes('pid 77 could not be read: OpenProcess'),
+    );
+    assert.deepEqual(mutations(h), []);
+  }
+});
+
+test('a live 32-bit process with no directory is listed as not inspected and does not stop the dry run', () => {
+  const h = winHarness({
+    processRecords: readerOf([liveRecord(88, null, 32)]),
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.notEqual(report.reason, 'worktree-unknown');
+  assert.notEqual(report.reason, 'worktree-holder');
+  assert.ok(
+    step4Detail(report).includes(
+      'pid 88 (live 32-bit process; directory not read)',
+    ),
+  );
+  assert.deepEqual(mutations(h), []);
+});
+
+test('an empty process list or a missing reader result stops the run as worktree-unknown', () => {
+  const empty = winHarness({ processRecords: readerOf([]) });
+  const missing = winHarness({ processRecords: () => null as never });
+  for (const h of [empty, missing]) {
+    for (const apply of [true, false]) {
+      const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+      assert.equal(report.reason, 'worktree-unknown');
+    }
+  }
+  assert.deepEqual(mutations(empty), []);
+  assert.deepEqual(mutations(missing), []);
+});
+
+test('a holder and a live 64-bit process with no directory stop as worktree-holder, and both are reported', () => {
+  for (const apply of [true, false]) {
+    const h = winHarness({
+      processRecords: readerOf([
+        liveRecord(4242, SRC),
+        liveRecord(99, null, 64),
+      ]),
+    });
+    const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+    assert.equal(report.reason, 'worktree-holder');
+    assert.ok(step4Detail(report).includes(`pid 4242 at ${SRC}`));
+    assert.ok(
+      step4Detail(report).includes(
+        'pid 99 is live with no directory, so its location cannot be checked',
+      ),
+    );
+    assert.deepEqual(mutations(h), []);
+  }
+});
+
+test('a live 64-bit process with no directory still stops the run as worktree-unknown', () => {
+  for (const apply of [true, false]) {
+    const h = winHarness({
+      processRecords: readerOf([liveRecord(99, null, 64)]),
+    });
+    const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+    assert.equal(report.reason, 'worktree-unknown');
+    assert.ok(
+      step4Detail(report).includes(
+        'pid 99 is live with no directory, so its location cannot be checked',
+      ),
+    );
+    assert.deepEqual(mutations(h), []);
+  }
+});
+
+test('a holder and a live 32-bit process in one result stop as worktree-holder, and both are reported', () => {
+  for (const apply of [true, false]) {
+    const h = winHarness({
+      processRecords: readerOf([
+        liveRecord(4242, SRC),
+        liveRecord(88, null, 32),
+      ]),
+    });
+    const report = runF4WorktreeBranchSteps(input({ apply }), h.deps);
+    assert.equal(report.reason, 'worktree-holder');
+    assert.ok(step4Detail(report).includes(`pid 4242 at ${SRC}`));
+    assert.ok(
+      step4Detail(report).includes(
+        'pid 88 (live 32-bit process; directory not read)',
+      ),
+    );
+    assert.deepEqual(mutations(h), []);
+  }
+});
+
+test('a directory that realpath cannot resolve stops the run as worktree-unknown', () => {
+  const realpath = (path: string): string => {
+    if (path === SRC) {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    }
+    return winPath(path);
+  };
+  const h = harness({
+    platform: 'win32',
+    realpath,
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-unknown');
+  assert.ok(
+    step4Detail(report).includes(
+      'the directory of pid 4242 cannot be resolved with realpath',
+    ),
+  );
+  assert.deepEqual(mutations(h), []);
+});
+
+test('a directory that realpath resolves to a non-drive path stops the run as worktree-unknown', () => {
+  const h = harness({
+    platform: 'win32',
+    realpath: (path) => (path === SRC ? '/work/issue-4370/src' : winPath(path)),
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-unknown');
+  assert.ok(
+    step4Detail(report).includes(
+      'the directory of pid 4242 cannot be resolved with realpath',
+    ),
+  );
+});
+
+test('a worktree path that realpath cannot resolve stops before the reader is called', () => {
+  const h = harness({
+    platform: 'win32',
+    realpath: (path) => (path.endsWith('issue-4370') ? null : winPath(path)),
+    processRecords: readerOf([liveRecord(4242, SRC)]),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-unknown');
+  assert.ok(
+    step4Detail(report).includes(
+      'the worktree path cannot be resolved with realpath',
+    ),
+  );
+  assert.equal(h.events.includes('process-read'), false);
+});
+
+test('a denied record owned by LocalSystem or by an unreadable owner is listed and does not stop', () => {
+  const records = [deniedRecord(501, 'S-1-5-18'), deniedRecord(502, null)];
+  const dry = winHarness({ processRecords: readerOf(records) });
+  const dryReport = runF4WorktreeBranchSteps(input({ apply: false }), dry.deps);
+  assert.ok(step4Detail(dryReport).includes('pid 501 (owner S-1-5-18)'));
+  assert.ok(step4Detail(dryReport).includes('pid 502 (owner unreadable)'));
+  assert.equal(
+    dryReport.steps.find((entry) => entry.step === 'step-4')?.status,
+    'would-run',
+  );
+
+  const applied = winHarness({ processRecords: readerOf(records) });
+  runF4WorktreeBranchSteps(input(), applied.deps);
+  assert.ok(applied.events.includes('git:fetch origin'));
+});
+
+test('a denied record owned by the current user is listed, and one of another account is not', () => {
+  const h = winHarness({
+    processRecords: readerOf([
+      deniedRecord(601, CURRENT_SID),
+      deniedRecord(602, OTHER_SID),
+    ]),
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  const detail = step4Detail(report);
+  assert.ok(detail.includes(`pid 601 (owner ${CURRENT_SID})`));
+  assert.equal(detail.includes('pid 602'), false);
+  assert.notEqual(report.reason, 'worktree-holder');
+  assert.notEqual(report.reason, 'worktree-unknown');
+});
+
+test('exited records and live records outside the worktree leave the run as it is off win32', () => {
+  const records = [exitedRecord(700), liveRecord(701, '/elsewhere/tool')];
+  const onWin32 = winHarness({ processRecords: readerOf(records) });
+  const control = harness({
+    realpath: winPath,
+    processRecords: readerOf(records),
+  });
+  const a = runF4WorktreeBranchSteps(input(), onWin32.deps);
+  const b = runF4WorktreeBranchSteps(input(), control.deps);
+  assert.notEqual(a.reason, 'worktree-holder');
+  assert.notEqual(a.reason, 'worktree-unknown');
+  assert.equal(a.status, b.status);
+  assert.equal(a.reason, b.reason);
+  assert.deepEqual(a.steps, b.steps);
+  assert.deepEqual(
+    onWin32.events.filter((event) => event !== 'process-read'),
+    control.events,
+  );
+  assert.ok(onWin32.events.includes('git:fetch origin'));
+});
+
+test('off win32 the reader is not called, even with a live holder in the worktree', () => {
+  const h = harness({ processRecords: readerOf([liveRecord(4242, SRC)]) });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(h.events.includes('process-read'), false);
+  assert.notEqual(report.reason, 'worktree-holder');
+  assert.ok(h.events.includes('git:fetch origin'));
+});
+
+test('the released-claim cleanup makes no process read, even on win32', () => {
+  const h = winHarness({ processRecords: readerOf([liveRecord(4242, SRC)]) });
+  runF4WorktreeBranchSteps(input({ cleanupMode: 'released-claim' }), h.deps);
+  assert.equal(h.events.includes('process-read'), false);
 });

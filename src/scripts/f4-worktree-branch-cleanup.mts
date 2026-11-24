@@ -55,6 +55,10 @@ import {
 } from './preserve-destination.mts';
 import { gitChildEnvironment } from './provider-adapter-github.mts';
 import { readWindowsAcl, type WindowsAclReader } from './windows-acl.mts';
+import {
+  readWindowsProcessRecords,
+  type WindowsProcessRecords,
+} from './windows-process-cwd.mts';
 
 const F4_CLEANUP_FLAG_SPEC = {
   '--issue': { type: 'string' },
@@ -270,6 +274,8 @@ export interface LiveCleanupOptions {
   readonly home?: string;
   readonly now?: () => Date;
   readonly windowsAclReader?: WindowsAclReader;
+  /** The batch process reader of the win32 holder check (#5363). */
+  readonly windowsProcessReader?: () => WindowsProcessRecords;
 }
 
 /** The argv of `resume-claim-routing --assert` for the claimed worktree. */
@@ -431,6 +437,9 @@ export function createLiveDeps(
         { branch, expectedSha, apply: mode === 'apply' },
         (args): GitCommandResult => runGit(args, options.primaryRoot),
       ),
+    platform,
+    readWindowsProcesses:
+      options.windowsProcessReader ?? (() => readWindowsProcessRecords()),
     withCloneLock: (run) => {
       let handle: ReturnType<typeof acquireCloneLock>;
       try {
