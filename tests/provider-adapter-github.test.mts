@@ -7952,22 +7952,26 @@ test('getRepositoryFileBytesAtRef returns not-a-file for a submodule that GitHub
 });
 
 test('getRepositoryFileBytesAtRef throws when the raw request fails (#5341)', () => {
+  // A name with characters that need URL encoding, so the encoded endpoint
+  // and the unencoded path cannot be confused in the message.
+  const path = 'a?b#c d.txt';
   const rawFailure = missingDirectoryError();
   const port = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
-      ghText: () => listingText([listingEntry('f.txt', Buffer.from('x'))]),
+      ghText: () => listingText([listingEntry(path, Buffer.from('x'))]),
       ghBytesUnbounded: () => {
         throw rawFailure;
       },
     }),
   );
   assert.throws(
-    () => port.getRepositoryFileBytesAtRef('o', 'r', 'f.txt', 'main'),
+    () => port.getRepositoryFileBytesAtRef('o', 'r', path, 'main'),
     (error: unknown) =>
       error instanceof Error &&
-      error.message.includes('f.txt') &&
+      error.message.includes(path) &&
+      error.message.includes(encodeURIComponent(path)) === false &&
       error.cause === rawFailure,
   );
 });
