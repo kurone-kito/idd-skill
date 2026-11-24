@@ -2023,8 +2023,10 @@ function endRecordedStub(pid: number, name: string): void {
 function recordedStubIsRunning(pid: number, name: string): boolean {
   try {
     process.kill(pid, 0);
-  } catch {
-    return false;
+  } catch (error) {
+    // Only ESRCH proves the pid is gone. Any other probe error (EPERM, for
+    // example) is inconclusive, so it fails closed as "still running".
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
   if (process.platform === 'win32') {
     const lookup = spawnSync(
