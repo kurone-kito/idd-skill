@@ -1997,12 +1997,12 @@ async function waitForStubPid(
 }
 
 /** Ends a stub that a fallback test started, by its recorded pid. It acts only
- * while `recordedStubIsRunning` still confirms that pid is that stub, since a
+ * while `recordedStubState` reports that pid as the running stub, since a
  * pid can be reused. On POSIX the stub shares the relay's process group, so
  * `cleanupProcessTree` may already have ended it; the check comes first, and
  * the direct SIGKILL is the fallback when the group kill did not reach it. */
 function endRecordedStub(pid: number, name: string): void {
-  if (!recordedStubIsRunning(pid, name)) {
+  if (recordedStubState(pid, name) !== 'running') {
     return;
   }
   if (process.platform === 'win32') {
@@ -2016,17 +2016,26 @@ function endRecordedStub(pid: number, name: string): void {
   }
 }
 
-/** Whether `pid` is alive and still running the stub `name`. The pid alone is
- * not proof, because a pid can be reused after its stub exits. So the
- * executable path (win32) or the stub body path in the command line (POSIX)
- * must match as well. */
-function recordedStubIsRunning(pid: number, name: string): boolean {
+/** What the recorded pid is, as far as the stub `name` is concerned.
+ * `running`: the pid is alive and still runs the stub. The pid alone is not
+ * proof, because a pid can be reused, so the executable path (win32) or the
+ * stub body path in the command line (POSIX) must match as well.
+ * `gone`: the pid no longer exists, or a successful lookup shows another
+ * program owns it.
+ * `unknown`: a probe or lookup failed and says nothing either way. Only
+ * `running` may be acted on, so an unknown result never terminates a process
+ * and never counts as a clean exit. */
+type RecordedStubState = 'running' | 'gone' | 'unknown';
+
+function recordedStubState(pid: number, name: string): RecordedStubState {
   try {
     process.kill(pid, 0);
   } catch (error) {
     // Only ESRCH proves the pid is gone. Any other probe error (EPERM, for
-    // example) is inconclusive, so it fails closed as "still running".
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    // example) is inconclusive.
+    return (error as NodeJS.ErrnoException).code === 'ESRCH'
+      ? 'gone'
+      : 'unknown';
   }
   if (process.platform === 'win32') {
     const lookup = spawnSync(
@@ -2038,31 +2047,32 @@ function recordedStubIsRunning(pid: number, name: string): boolean {
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     );
-    // A failed lookup says nothing about the pid, so it fails closed as
-    // "still running". Only a successful lookup can prove a different owner.
     if (lookup.error !== undefined || lookup.status !== 0) {
-      return true;
+      return 'unknown';
     }
-    return lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`);
+    return lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`)
+      ? 'running'
+      : 'gone';
   }
   const lookup = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], {
     encoding: 'utf8',
   });
   if (lookup.error !== undefined || lookup.status !== 0) {
-    return true;
+    return 'unknown';
   }
-  return lookup.stdout.includes(`${name}.body.js`);
+  return lookup.stdout.includes(`${name}.body.js`) ? 'running' : 'gone';
 }
 
-/** Polls until the recorded stub is gone, since a POSIX SIGKILL is delivered
- * asynchronously. Returns false if it is still running at the deadline. */
+/** Polls until the recorded stub is `gone`, since a POSIX SIGKILL is delivered
+ * asynchronously. Returns false if it is still `running` or `unknown` at the
+ * deadline, so a stub that cannot be verified fails the test. */
 async function waitUntilRecordedStubGone(
   pid: number,
   name: string,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
-  while (recordedStubIsRunning(pid, name)) {
+  while (recordedStubState(pid, name) !== 'gone') {
     if (Date.now() >= deadline) {
       return false;
     }
@@ -2084,6 +2094,9 @@ after(async () => {
       if (pid === undefined) {
         continue;
       }
+      // A stub that its own test's finally did not end is ended here, by the
+      // verified pid, so a failed cleanup cannot keep the worktree locked.
+      endRecordedStub(pid, name);
       assert.ok(
         await waitUntilRecordedStubGone(pid, name, 5_000),
         `stub ${name} (pid ${pid}) is still running after its fallback test`,
