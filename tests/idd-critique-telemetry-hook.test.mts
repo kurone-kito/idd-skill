@@ -1955,44 +1955,53 @@ function stubPidFile(name: string): string {
   return join(stubPidDirectory, `${name}.pid`);
 }
 
-/** Stub body that records its own pid in `pidFile` as it starts, then keeps
- * running until it is killed. The fallback tests read the pid back so they
- * can end the stub directly, rather than through the relay's pid, which is
- * already dead by the time the cleanup runs. */
+/** A stub's own record of itself: its pid, and the exact path of the program
+ * it runs. Both are needed, because a pid can be reused by another invocation
+ * of a stub with the same name, and only the full path tells them apart. */
+type StubRecord = { pid: number; path: string };
+
+/** Stub body that records its own pid and program path in `pidFile` as it
+ * starts, then keeps running until it is killed. On win32 the stub is a
+ * hardlink, so `process.execPath` is its own path; on POSIX the stub runs
+ * `node <bodyPath>`, so `process.argv[1]` is its body path. The fallback tests
+ * read the record back so they can end the stub directly, rather than through
+ * the relay's pid, which is already dead by the time the cleanup runs. */
 function recordingStubBody(pidFile: string): string {
   return (
-    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid) + '\\n');\n` +
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, ` +
+    "String(process.pid) + '\\n' + " +
+    "(process.platform === 'win32' ? process.execPath : process.argv[1]) + '\\n');\n" +
     'setInterval(() => {}, 1000);\n'
   );
 }
 
-/** Reads a stub's pid record. The stub writes the pid with a trailing newline,
- * so a torn or partial read (for example "1234" of "12345") does not parse. */
-function readStubPid(pidFile: string): number | undefined {
+/** Reads a stub's record. A torn or partial read does not match the full
+ * two-line shape, so it is never taken as a record. */
+function readStubRecord(pidFile: string): StubRecord | undefined {
   try {
-    const content = readFileSync(pidFile, 'utf8');
-    return /^[1-9]\d*\n$/u.test(content) ? Number(content.trim()) : undefined;
+    const match = /^([1-9]\d*)\n(.+)\n$/u.exec(readFileSync(pidFile, 'utf8'));
+    return match ? { pid: Number(match[1]), path: match[2] } : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** Waits up to `timeoutMs` for a stub to write its pid file. A stub that
- * never starts fails the test, since nothing was proven about it. */
-async function waitForStubPid(
+/** Waits up to `timeoutMs` for a stub to write its record. A stub that never
+ * starts fails the test, since nothing was proven about it. */
+async function waitForStubRecord(
   pidFile: string,
   timeoutMs: number,
-): Promise<number> {
+): Promise<StubRecord> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const pid = readStubPid(pidFile);
-    if (pid !== undefined) {
-      return pid;
+    const record = readStubRecord(pidFile);
+    if (record !== undefined) {
+      return record;
     }
     await delay(50);
   }
   assert.fail(
-    `stub did not write its pid file ${pidFile} within ${timeoutMs} ms`,
+    `stub did not write its record ${pidFile} within ${timeoutMs} ms`,
   );
 }
 
@@ -2001,10 +2010,11 @@ async function waitForStubPid(
  * pid can be reused. On POSIX the stub shares the relay's process group, so
  * `cleanupProcessTree` may already have ended it; the check comes first, and
  * the direct SIGKILL is the fallback when the group kill did not reach it. */
-function endRecordedStub(pid: number, name: string): void {
-  if (recordedStubState(pid, name) !== 'running') {
+function endRecordedStub(record: StubRecord): void {
+  if (recordedStubState(record) !== 'running') {
     return;
   }
+  const { pid } = record;
   if (process.platform === 'win32') {
     cleanupProcessTree(pid);
     return;
@@ -2016,10 +2026,11 @@ function endRecordedStub(pid: number, name: string): void {
   }
 }
 
-/** What the recorded pid is, as far as the stub `name` is concerned.
- * `running`: the pid is alive and still runs the stub. The pid alone is not
- * proof, because a pid can be reused, so the executable path (win32) or the
- * stub body path in the command line (POSIX) must match as well.
+/** What the recorded stub's pid is now, judged against its full recorded path.
+ * `running`: the pid is alive and runs exactly the recorded program. The pid
+ * alone is not proof, because a pid can be reused, so the full executable
+ * path (win32) or the full stub body path in the command line (POSIX) must
+ * match as well.
  * `gone`: the pid no longer exists, or a successful lookup shows another
  * program owns it.
  * `unknown`: a probe or lookup failed and says nothing either way. Only
@@ -2027,7 +2038,8 @@ function endRecordedStub(pid: number, name: string): void {
  * and never counts as a clean exit. */
 type RecordedStubState = 'running' | 'gone' | 'unknown';
 
-function recordedStubState(pid: number, name: string): RecordedStubState {
+function recordedStubState(record: StubRecord): RecordedStubState {
+  const { pid } = record;
   try {
     process.kill(pid, 0);
   } catch (error) {
@@ -2050,7 +2062,7 @@ function recordedStubState(pid: number, name: string): RecordedStubState {
     if (lookup.error !== undefined || lookup.status !== 0) {
       return 'unknown';
     }
-    return lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`)
+    return lookup.stdout.trim().toLowerCase() === record.path.toLowerCase()
       ? 'running'
       : 'gone';
   }
@@ -2060,19 +2072,18 @@ function recordedStubState(pid: number, name: string): RecordedStubState {
   if (lookup.error !== undefined || lookup.status !== 0) {
     return 'unknown';
   }
-  return lookup.stdout.includes(`${name}.body.js`) ? 'running' : 'gone';
+  return lookup.stdout.includes(record.path) ? 'running' : 'gone';
 }
 
 /** Polls until the recorded stub is `gone`, since a POSIX SIGKILL is delivered
  * asynchronously. Returns false if it is still `running` or `unknown` at the
  * deadline, so a stub that cannot be verified fails the test. */
 async function waitUntilRecordedStubGone(
-  pid: number,
-  name: string,
+  record: StubRecord,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
-  while (recordedStubState(pid, name) !== 'gone') {
+  while (recordedStubState(record) !== 'gone') {
     if (Date.now() >= deadline) {
       return false;
     }
@@ -2087,21 +2098,28 @@ after(async () => {
     return;
   }
   stubPidDirectory = undefined;
+  const survivors: string[] = [];
   try {
     for (const entry of readdirSync(directory)) {
-      const name: string = entry.replace(/\.pid$/u, '');
-      const pid = readStubPid(join(directory, entry));
-      if (pid === undefined) {
+      const name = entry.replace(/\.pid$/u, '');
+      const record = readStubRecord(join(directory, entry));
+      if (record === undefined) {
         continue;
       }
-      // A stub that its own test's finally did not end is ended here, by the
-      // verified pid, so a failed cleanup cannot keep the worktree locked.
-      endRecordedStub(pid, name);
-      assert.ok(
-        await waitUntilRecordedStubGone(pid, name, 5_000),
-        `stub ${name} (pid ${pid}) is still running after its fallback test`,
-      );
+      // A stub that its own test's finally did not end is ended here, by its
+      // verified record, so a failed cleanup cannot keep the worktree locked.
+      // Every record is processed before anything is reported, so one
+      // survivor cannot hide another.
+      endRecordedStub(record);
+      if (!(await waitUntilRecordedStubGone(record, 5_000))) {
+        survivors.push(`${name} (pid ${record.pid})`);
+      }
     }
+    assert.deepEqual(
+      survivors,
+      [],
+      `recorded stubs still running after their fallback tests: ${survivors.join(', ')}`,
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -2122,7 +2140,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
   );
   try {
     let primaryChild: ReturnType<typeof spawn> | undefined;
-    let stubPid: number | undefined;
+    let stubRecord: StubRecord | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       if (args[0] === 'taskkill') {
         throw new Error('synthetic taskkill spawn failure');
@@ -2144,7 +2162,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         // Long enough that the relay has spawned its stub before the kill.
         { timeoutMs: 2_000, spawnFn, platform: 'win32' },
       );
-      stubPid = await waitForStubPid(stubPidFile(stubName), 5_000);
+      stubRecord = await waitForStubRecord(stubPidFile(stubName), 5_000);
       assert.deepEqual(result, { attempted: true, ok: false });
       assert.ok(
         primaryChild,
@@ -2187,8 +2205,8 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
       }
       // The stub is the process that outlives the relay here, so end it by
       // its own recorded pid. The relay's pid is no longer a valid handle.
-      if (stubPid !== undefined) {
-        endRecordedStub(stubPid, stubName);
+      if (stubRecord !== undefined) {
+        endRecordedStub(stubRecord);
       }
     }
   } finally {
@@ -2222,7 +2240,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
   );
   try {
     let primaryChild: ReturnType<typeof spawn> | undefined;
-    let stubPid: number | undefined;
+    let stubRecord: StubRecord | undefined;
     const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
       if (args[0] === 'taskkill') {
         const fakeKiller = new EventEmitter() as unknown as ReturnType<
@@ -2257,7 +2275,7 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         // Long enough that the relay has spawned its stub before the kill.
         { timeoutMs: 2_000, spawnFn, platform: 'win32' },
       );
-      stubPid = await waitForStubPid(stubPidFile(stubName), 5_000);
+      stubRecord = await waitForStubRecord(stubPidFile(stubName), 5_000);
       assert.deepEqual(result, { attempted: true, ok: false });
       assert.ok(
         primaryChild,
@@ -2284,9 +2302,9 @@ test('invokeCritiqueTelemetryHook falls back to killing just the wrapper when th
         cleanupProcessTree(pid);
       }
       // As in the synchronous-throw test above: end the stub by its own
-      // recorded pid, since the relay's pid is no longer a valid handle.
-      if (stubPid !== undefined) {
-        endRecordedStub(stubPid, stubName);
+      // recorded record, since the relay's pid is no longer a valid handle.
+      if (stubRecord !== undefined) {
+        endRecordedStub(stubRecord);
       }
     }
   } finally {
