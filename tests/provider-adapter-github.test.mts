@@ -7952,18 +7952,38 @@ test('getRepositoryFileBytesAtRef returns not-a-file for a submodule that GitHub
 });
 
 test('getRepositoryFileBytesAtRef throws when the raw request fails (#5341)', () => {
+  const rawFailure = missingDirectoryError();
   const port = createGithubProviderAdapter(
     'o',
     'r',
     fakeDeps({
       ghText: () => listingText([listingEntry('f.txt', Buffer.from('x'))]),
       ghBytesUnbounded: () => {
-        throw missingDirectoryError();
+        throw rawFailure;
       },
     }),
   );
-  assert.throws(() =>
-    port.getRepositoryFileBytesAtRef('o', 'r', 'f.txt', 'main'),
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'f.txt', 'main'),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes('f.txt') &&
+      error.cause === rawFailure,
+  );
+});
+
+test('getRepositoryFileBytesAtRef throws, naming the path, when the raw body is empty for a non-zero size', () => {
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => listingText([listingEntry('empty.txt', Buffer.from('x'))]),
+      ghBytesUnbounded: () => Buffer.alloc(0),
+    }),
+  );
+  assert.throws(
+    () => port.getRepositoryFileBytesAtRef('o', 'r', 'empty.txt', 'main'),
+    /empty\.txt/,
   );
 });
 
