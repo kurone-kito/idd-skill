@@ -2038,15 +2038,20 @@ function recordedStubIsRunning(pid: number, name: string): boolean {
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     );
-    return (
-      lookup.status === 0 &&
-      lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`)
-    );
+    // A failed lookup says nothing about the pid, so it fails closed as
+    // "still running". Only a successful lookup can prove a different owner.
+    if (lookup.error !== undefined || lookup.status !== 0) {
+      return true;
+    }
+    return lookup.stdout.trim().toLowerCase().endsWith(`${name}.exe`);
   }
   const lookup = spawnSync('ps', ['-o', 'args=', '-p', String(pid)], {
     encoding: 'utf8',
   });
-  return lookup.status === 0 && lookup.stdout.includes(`${name}.body.js`);
+  if (lookup.error !== undefined || lookup.status !== 0) {
+    return true;
+  }
+  return lookup.stdout.includes(`${name}.body.js`);
 }
 
 /** Polls until the recorded stub is gone, since a POSIX SIGKILL is delivered
