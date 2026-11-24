@@ -3783,56 +3783,14 @@ function assertReadsFollowListings(
 }
 
 test('readiness sends the listing request before the raw request', () => {
-  // Every read the criteria above name, each in the run that makes it. Each
-  // block holds only its own fixture, so one large buffer is alive at a time.
-  {
-    const path = 'src/large-base.txt';
-    const run = runLargeFileReadiness({
-      claimBound: true,
-      fixtures: [{ path, bytes: textFixture(5 * MIB, '# end of base file') }],
-      changedFiles: [path],
-    });
-    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
-  }
-  {
-    const path = 'audit/sync-manifest.json';
-    const run = runLargeFileReadiness({
-      claimBound: true,
-      fixtures: [{ path, bytes: syncManifestFixture(5 * MIB) }],
-      changedFiles: ['src/scripts/example.mts'],
-    });
-    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
-  }
-  {
-    const path = '.github/CODEOWNERS';
-    const run = runLargeFileReadiness({
-      claimBound: false,
-      fixtures: [{ path, bytes: textFixture(5 * MIB, CODEOWNERS_RULE) }],
-      changedFiles: ['src/scripts/example.mts'],
-    });
-    assertReadsFollowListings(run, [{ path, ref: 'main' }]);
-  }
-  {
-    const path = '.github/CODEOWNERS';
-    const run = runLargeFileReadiness({
-      claimBound: true,
-      fixtures: [{ path, bytes: textFixture(50 * MIB, CODEOWNERS_RULE) }],
-      changedFiles: [path],
-    });
-    assertReadsFollowListings(run, [
-      { path, ref: MERGE_BASE_SHA },
-      { path, ref: 'main' },
-    ]);
-  }
-  {
-    const path = 'src/exact-limit.txt';
-    const run = runLargeFileReadiness({
-      claimBound: true,
-      fixtures: [
-        { path, bytes: textFixture(104_857_600, '# end of base file') },
-      ],
-      changedFiles: [path],
-    });
-    assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
-  }
+  // The ordering rule is asserted for every large read in the focused tests
+  // above, through assertReadsFollowListings. This test checks the same rule on
+  // a small file, so CI does not repeat the large transfers.
+  const path = 'src/small-base.txt';
+  const run = runLargeFileReadiness({
+    claimBound: true,
+    fixtures: [{ path, bytes: textFixture(4_096, '# end of base file') }],
+    changedFiles: [path],
+  });
+  assertReadsFollowListings(run, [{ path, ref: MERGE_BASE_SHA }]);
 });
