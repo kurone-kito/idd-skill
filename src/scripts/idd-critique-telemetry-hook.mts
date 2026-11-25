@@ -107,20 +107,32 @@ const WATCHDOG_ARMED_TIMEOUT_MS = 3_000;
 /**
  * Bound on the win32 PowerShell process listing that finds a timed-out
  * relay's descendants (kurone-kito/idd-skill#5362, see
- * {@link collectWin32RelayDescendants}). The listing runs asynchronously, and
- * a timeout whose tree kill failed settles only after it, so the bound keeps a
+ * {@link collectWin32RelayDescendants}, and kurone-kito/idd-skill#5382, see
+ * {@link WIN32_WATCHDOG_SCRIPT}). The listing runs asynchronously, and a
+ * timeout whose tree kill failed settles only after it, so the bound keeps a
  * hung PowerShell from delaying that result indefinitely.
  */
 const WIN32_PROCESS_LIST_TIMEOUT_MS = 5_000;
 
 /**
  * How long a win32 timeout waits for its `taskkill` tree kill to report that
- * it started (kurone-kito/idd-skill#5362, see {@link endRelayTreeWindows}). A
- * 'spawn' event within this bound means taskkill is running, and an 'error'
- * event means it could not start. With neither within the bound, the kill
- * counts as started.
+ * it started (kurone-kito/idd-skill#5362, see {@link endRelayTreeWindows}, and
+ * kurone-kito/idd-skill#5382, see {@link WIN32_WATCHDOG_SCRIPT}). A 'spawn'
+ * event within this bound means taskkill is running, and an 'error' event
+ * means it could not start. With neither within the bound, the kill counts as
+ * started.
  */
 const WIN32_TASKKILL_START_WAIT_MS = 1_000;
+
+/**
+ * The PowerShell command that lists every process with its parent pid
+ * (kurone-kito/idd-skill#5362). {@link collectWin32RelayDescendants} and the
+ * win32 watchdog script ({@link WIN32_WATCHDOG_SCRIPT}, kurone-kito/idd-skill
+ * #5382) both run it, so the two listings cannot drift apart. Exported so the
+ * tests compare the listing arguments against it.
+ */
+export const WIN32_PROCESS_LIST_COMMAND =
+  'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress';
 
 /**
  * Environment-variable name used to hand the real target `command`
@@ -158,8 +170,8 @@ const WIN32_RELAY_NODE_OPTIONS_ENV =
  * template literal needs; the rest of the script body contains no
  * literal `${` sequence of its own, so there is no collision risk with
  * the outer `.mts` template-literal interpolation to guard against here,
- * unlike the watchdog script, which interpolates nothing and takes its
- * values as argv.
+ * unlike the watchdog script, which interpolates three shared constants (see
+ * {@link WIN32_WATCHDOG_SCRIPT}) and takes its pid and delay as argv.
  *
  * **The relay's own environment is sanitized of `NODE_OPTIONS`**
  * (kurone-kito/idd-skill#2910 review, Copilot): the relay is itself a
@@ -237,11 +249,11 @@ const WIN32_RELAY_NODE_OPTIONS_ENV =
  * non-zero exit, a timeout), a defect in this script's own body would
  * also fail silently in production (its `stdio` discards stderr) --
  * an accepted extension of the existing contract, not a new risk;
- * the same gap already exists for the inline node watchdog
- * script below, with no unit-level syntax check for either. The tests
- * this issue adds are the mitigation, run for real (not just
- * argument-shape asserted) both locally, via the `platform: 'win32'`
- * override tests below, and on native `windows-latest` CI.
+ * the same gap still exists for this script, with no unit-level syntax
+ * check. The watchdog script below is different: the tests run it for real
+ * (kurone-kito/idd-skill#5382). The tests this issue adds are the mitigation,
+ * run for real (not just argument-shape asserted) both locally, via the
+ * `platform: 'win32'` override tests below, and on native `windows-latest` CI.
  */
 const WIN32_RELAY_SCRIPT = `
 const { spawn } = require('node:child_process');
@@ -341,16 +353,188 @@ process.stdin.on('end', () => {
  * Node script run by the win32 backup watchdog (see {@link spawnWatchdogWindows}).
  * Its two argv entries are the kill target's pid and a delay in milliseconds.
  * After the delay it runs `taskkill /PID <pid> /T /F` with `windowsHide: true`
- * and without `detached`. The script is one line with no double quotes, so it
- * is passed as a single `node -e` argument on Windows.
+ * and without `detached`. When that tree kill cannot be started, because the
+ * spawn throws or reports an 'error' event, it ends the relay's hook
+ * descendants and then the relay, as the awaited path's fallback does
+ * (kurone-kito/idd-skill#5382, see {@link endRelayTreeWindows}): it probes the
+ * relay, runs one PowerShell listing ({@link WIN32_PROCESS_LIST_COMMAND}),
+ * probes the relay again, and then ends the kept descendants deepest first
+ * and the relay last. Nothing else is ended, and the script exits by itself.
+ *
+ * The script is written by hand and does not import this module, so its keep
+ * rule and kill rule are a second copy of {@link planRelayDescendants} and
+ * {@link endRelayDescendants}. The shared bounds and the listing command are
+ * interpolated from the constants above, and the tests compare the two copies.
+ * The script spans several lines and contains double quotes. It is passed as a
+ * single `node -e` argument on Windows, with no shell hop.
  */
-const WIN32_WATCHDOG_SCRIPT =
-  "const { spawn } = require('node:child_process'); " +
-  'setTimeout(() => { ' +
-  "const killer = spawn('taskkill', ['/PID', process.argv[1], '/T', '/F'], " +
-  "{ stdio: 'ignore', windowsHide: true }); " +
-  "killer.on('error', () => {}); " +
-  '}, Number(process.argv[2]));';
+const WIN32_WATCHDOG_SCRIPT = `const { spawn } = require('node:child_process');
+const relayPid = Number(process.argv[1]);
+const isPid = (value) => Number.isSafeInteger(value) && value > 0;
+const relayRunning = () => {
+  try {
+    process.kill(relayPid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+};
+const parseListing = (text) => {
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const records = [];
+    for (const row of rows) {
+      if (typeof row !== 'object' || row === null) {
+        continue;
+      }
+      const { ProcessId, ParentProcessId } = row;
+      if (isPid(ProcessId) && isPid(ParentProcessId)) {
+        records.push({ pid: ProcessId, parentPid: ParentProcessId });
+      }
+    }
+    return records;
+  } catch {
+    return null;
+  }
+};
+const listProcesses = () => new Promise((resolve) => {
+  let output = '';
+  let finished = false;
+  const finish = (records) => {
+    if (!finished) {
+      finished = true;
+      resolve(records);
+    }
+  };
+  try {
+    const listing = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', ${JSON.stringify(WIN32_PROCESS_LIST_COMMAND)}],
+      { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
+    );
+    const bound = setTimeout(() => {
+      try {
+        listing.kill();
+      } catch {
+        // Already exited; ignore.
+      }
+      finish(null);
+    }, ${WIN32_PROCESS_LIST_TIMEOUT_MS});
+    listing.stdout?.setEncoding('utf8');
+    listing.stdout?.on('data', (chunk) => {
+      output += chunk;
+    });
+    listing.on('error', () => {
+      clearTimeout(bound);
+      finish(null);
+    });
+    listing.on('close', (code) => {
+      clearTimeout(bound);
+      finish(code === 0 ? parseListing(output) : null);
+    });
+  } catch {
+    finish(null);
+  }
+});
+const planDescendants = (records) => {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  const childrenOf = new Map();
+  for (const record of records) {
+    if (typeof record !== 'object' || record === null) {
+      continue;
+    }
+    const { pid, parentPid } = record;
+    if (!isPid(pid) || !isPid(parentPid)) {
+      continue;
+    }
+    if (pid === relayPid || pid === process.pid) {
+      continue;
+    }
+    const entry = { pid, parentPid };
+    const siblings = childrenOf.get(parentPid);
+    if (siblings) {
+      siblings.push(entry);
+    } else {
+      childrenOf.set(parentPid, [entry]);
+    }
+  }
+  const depthOf = new Map([[relayPid, 0]]);
+  const kept = [];
+  const queue = [{ pid: relayPid, depth: 0 }];
+  for (const parent of queue) {
+    for (const entry of childrenOf.get(parent.pid) ?? []) {
+      if (depthOf.has(entry.pid)) {
+        continue;
+      }
+      const depth = parent.depth + 1;
+      depthOf.set(entry.pid, depth);
+      kept.push({ ...entry, depth });
+      queue.push({ pid: entry.pid, depth });
+    }
+  }
+  return kept.sort((a, b) => b.depth - a.depth);
+};
+const endDescendants = (plan) => {
+  const pending = new Set(plan.map((entry) => entry.pid));
+  for (const entry of plan) {
+    const parentKnown = entry.parentPid === relayPid || pending.has(entry.parentPid);
+    pending.delete(entry.pid);
+    if (!parentKnown) {
+      continue;
+    }
+    try {
+      process.kill(entry.pid, 'SIGKILL');
+    } catch {
+      // Refused: absorbed, so the remaining descendants and the relay still end.
+    }
+  }
+};
+let fallbackStarted = false;
+const endRelayAfterFailedTreeKill = async () => {
+  if (!relayRunning()) {
+    return;
+  }
+  const plan = planDescendants(await listProcesses());
+  if (!relayRunning()) {
+    return;
+  }
+  endDescendants(plan);
+  try {
+    process.kill(relayPid, 'SIGKILL');
+  } catch {
+    // Already exited; ignore.
+  }
+};
+const fallback = () => {
+  if (!fallbackStarted) {
+    fallbackStarted = true;
+    endRelayAfterFailedTreeKill().catch(() => {});
+  }
+};
+setTimeout(() => {
+  let killer;
+  try {
+    killer = spawn('taskkill', ['/PID', process.argv[1], '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  } catch {
+    fallback();
+    return;
+  }
+  // A 'spawn' event, or no event within the bound, counts as started. The
+  // 'error' listener stays attached for the killer's whole life, as in
+  // endRelayTreeWindows, so a late error still runs the fallback.
+  const startWait = setTimeout(() => {}, ${WIN32_TASKKILL_START_WAIT_MS});
+  killer.once('spawn', () => {
+    clearTimeout(startWait);
+  });
+  killer.on('error', () => {
+    clearTimeout(startWait);
+    fallback();
+  });
+}, Number(process.argv[2]));
+`;
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -588,6 +772,11 @@ export interface InvokeCritiqueTelemetryHookOptions {
    * the relay is still alive. The default asks PowerShell for every process's
    * `ParentProcessId` instead of using `taskkill`, because the fallback
    * exists for the case where `taskkill` cannot be started.
+   *
+   * This option applies to the awaited path only. The win32 watchdog runs as a
+   * separate `node -e` process, which cannot receive an injected function, so
+   * this option does not apply to the watchdog (kurone-kito/idd-skill#5382),
+   * which always runs the PowerShell listing of `WIN32_PROCESS_LIST_COMMAND`.
    */
   collectDescendants?: (
     relayPid: number,
@@ -600,6 +789,11 @@ export interface InvokeCritiqueTelemetryHookOptions {
    * `process.kill(pid, 'SIGKILL')`, which is a forced termination on win32.
    * It must not use `taskkill`. A throw is absorbed, and the remaining
    * descendants and the relay are still ended.
+   *
+   * This option applies to the awaited path only. The win32 watchdog runs as a
+   * separate `node -e` process, which cannot receive an injected function, so
+   * this option does not apply to the watchdog (kurone-kito/idd-skill#5382),
+   * which ends each descendant with its own `process.kill`.
    */
   killPid?: (pid: number) => void;
 }
@@ -1419,7 +1613,7 @@ function collectWin32RelayDescendants(): Promise<ReadonlyArray<ProcessRecord> | 
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress',
+          WIN32_PROCESS_LIST_COMMAND,
         ],
         { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
       );
@@ -1628,15 +1822,17 @@ export function watchdogEnvironment(
  * file took the count of `CASCADIA_HOSTING_WINDOW_CLASS` windows from 1 to 18
  * on a Windows Terminal host. The node watchdog is a detached process too,
  * so it gets no console, as the win32 relay already does; the relay opened
- * no window in the same measurement. Its only console child, `taskkill`, is
- * started with `windowsHide: true` and without `detached`, so Windows honors
- * `CREATE_NO_WINDOW` for it.
+ * no window in the same measurement. Its console children are `taskkill` and,
+ * only when that tree kill cannot be started (kurone-kito/idd-skill#5382), the
+ * PowerShell process listing. Both are started with `windowsHide: true` and
+ * without `detached`, so Windows honors `CREATE_NO_WINDOW` for them.
  *
  * `detached: true` stays on the watchdog on purpose. The watchdog must
  * outlive the caller's `process.exit()` (`--invoke`'s whole point), and it
  * keeps the Ctrl+C behavior this file already has. {@link cancelWatchdog}
  * still disarms it with a `taskkill /T /F` tree-kill on the watchdog's own
- * pid, which ends the watchdog and any `taskkill` it has started.
+ * pid, which ends the watchdog and any child it has started, `taskkill` or the
+ * PowerShell listing.
  *
  * Residual, as before: Windows recycles freed pids much faster than POSIX, so
  * a quick-exit hook's watchdog can stay armed for the rest of `timeoutMs`

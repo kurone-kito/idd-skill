@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import {
+  execFileSync,
+  type SpawnOptions,
+  spawn,
+  spawnSync,
+} from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
@@ -25,6 +30,7 @@ import {
   buildCritiqueTelemetryHookReport,
   type CritiqueTelemetryHookPayload,
   invokeCritiqueTelemetryHook,
+  WIN32_PROCESS_LIST_COMMAND,
   watchdogEnvironment,
 } from '../src/scripts/idd-critique-telemetry-hook.mts';
 import { trackTempDirectories } from './temp-fixtures.mts';
@@ -1541,12 +1547,12 @@ test('invokeCritiqueTelemetryHook spawns a win32 backup watchdog as a detached n
     const script = watchdogArgs[1] ?? '';
     assert.match(
       script,
-      /spawn\('taskkill', \['\/PID', process\.argv\[1\], '\/T', '\/F'\]/,
+      /spawn\('taskkill', \['\/PID', process\.argv\[1\], '\/T', '\/F'\], \{\s*stdio: 'ignore',\s*windowsHide: true/,
       `expected the watchdog script to run taskkill /PID <pid> /T /F, got: ${script}`,
     );
     assert.match(
       script,
-      /\}, Number\(process\.argv\[2\]\)\);$/,
+      /\}, Number\(process\.argv\[2\]\)\);/,
       `expected the watchdog script to wait for the delay argument, got: ${script}`,
     );
     assert.match(
@@ -1820,6 +1826,723 @@ test('invokeCritiqueTelemetryHook win32 backup watchdog actually kills a real hu
     restore();
     if (hookPid) {
       cleanupProcessTree(hookPid);
+    }
+  }
+});
+
+/** Scripted answers for one run of the win32 watchdog script (see
+ * `runWatchdogScript`). The script runs in a real `node` child, and a preload
+ * replaces `process.kill` and `child_process.spawn` inside that child. */
+type WatchdogHarnessPlan = {
+  /** Answers to the relay probes `process.kill(pid, 0)`, in call order: 'ok'
+   * (alive), 'ESRCH' (gone), or 'EPERM' (alive, but refused). A call past the
+   * end of the list answers 'ok'. */
+  probes?: ReadonlyArray<'ok' | 'ESRCH' | 'EPERM'>;
+  /** Pids whose `process.kill(pid, 'SIGKILL')` throws. The call is recorded first. */
+  killThrows?: ReadonlyArray<number>;
+  /** What the fake `taskkill` child does. */
+  taskkill: 'started' | 'silent' | 'error' | 'throw' | 'error-after-spawn';
+  /** What the fake PowerShell listing child does. Defaults to `never`. */
+  listing?: WatchdogListingPlan;
+};
+
+/** What the fake PowerShell listing child does. `close` emits its stdout, then
+ * 'close' with `code`. Without `text`, the stdout is `rows` as JSON, plus a row
+ * for the script's own pid under `selfParentPid` (the preload knows that pid). */
+type WatchdogListingPlan =
+  | {
+      mode: 'close';
+      code?: number;
+      rows?: ReadonlyArray<Record<string, unknown>>;
+      text?: string;
+      selfParentPid?: number;
+    }
+  | { mode: 'error' }
+  | { mode: 'throw' }
+  | { mode: 'never' };
+
+/** One call the preload recorded, in the order the script made it. */
+type WatchdogCall =
+  | {
+      kind: 'spawn';
+      command: string;
+      args: string[];
+      options: Record<string, unknown>;
+    }
+  | { kind: 'probe'; pid: number; answer: string }
+  | { kind: 'kill'; pid: number; signal: string }
+  | { kind: 'child-kill'; command: string; signal: string | null };
+
+type WatchdogRun = {
+  status: number | null;
+  stderr: string;
+  elapsedMs: number;
+  calls: WatchdogCall[];
+};
+
+/** The relay pid the script-only tests pass to the script. The probes are
+ * scripted, so no such process has to exist. */
+const FAKE_RELAY_PID = 61_001;
+
+/** The descendant kills for `treeListingRows`, deepest first. */
+const TREE_KILL_ORDER = [7102, 7101, 7201];
+
+/**
+ * A listing of one relay with a child, a sibling of that child, and a
+ * grandchild below the child, in that order (kurone-kito/idd-skill#5382). Rows
+ * use the PowerShell names `ProcessId` and `ParentProcessId`.
+ */
+function treeListingRows(relayPid: number): Array<Record<string, unknown>> {
+  return [
+    { ProcessId: relayPid, ParentProcessId: 4 },
+    { ProcessId: 7101, ParentProcessId: relayPid },
+    { ProcessId: 7201, ParentProcessId: relayPid },
+    { ProcessId: 7102, ParentProcessId: 7101 },
+  ];
+}
+
+/** A stand-in `ChildProcess` for a spawn that the test does not run: it emits
+ * nothing and can be unref'd. */
+function inertChildProcess(): RelayChild {
+  const fake = new EventEmitter() as unknown as RelayChild;
+  (fake as unknown as { unref: () => void }).unref = () => undefined;
+  return fake;
+}
+
+/**
+ * The watchdog script text that `invokeCritiqueTelemetryHook` passes on win32,
+ * captured through an injected `spawnFn` (kurone-kito/idd-skill#5382). The hook
+ * is a quick-exit stub, and the watchdog's own spawn gets an inert stand-in, so
+ * no real watchdog runs.
+ */
+async function captureWin32WatchdogScript(): Promise<string> {
+  let watchdogArgv: string[] | undefined;
+  const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+    if (isWin32NodeWatchdogSpawn(args)) {
+      watchdogArgv = args[1] as string[];
+      return inertChildProcess();
+    }
+    return spawn(...args);
+  }) as typeof spawn;
+  const restore = stubExecutable(
+    'idd-telemetry-hook-watchdog-script-capture',
+    'process.exit(0);\n',
+  );
+  try {
+    await invokeCritiqueTelemetryHook(
+      'idd-telemetry-hook-watchdog-script-capture',
+      samplePayload(),
+      { timeoutMs: 5_000, spawnFn, platform: 'win32' },
+    );
+  } finally {
+    restore();
+  }
+  const script = extractWatchdogScript(watchdogArgv);
+  assert.ok(
+    script.includes('taskkill'),
+    'expected the win32 watchdog script to be captured',
+  );
+  return script;
+}
+
+/**
+ * Source of the preload that the script child loads with `--require`. It
+ * records every `process.kill` and `spawn` call to `recordPath`, one JSON line
+ * per call, and answers them from `plan`. The fake children emit their events
+ * on the next turn, after the script has attached its listeners.
+ */
+function watchdogHarnessPreload(
+  recordPath: string,
+  plan: WatchdogHarnessPlan,
+): string {
+  const config = {
+    recordPath,
+    probes: plan.probes ?? [],
+    killThrows: plan.killThrows ?? [],
+    taskkill: plan.taskkill,
+    listing: plan.listing ?? { mode: 'never' },
+  };
+  return [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    "const childProcess = require('node:child_process');",
+    "const { EventEmitter } = require('node:events');",
+    `const config = ${JSON.stringify(config)};`,
+    'function record(entry) {',
+    "  fs.appendFileSync(config.recordPath, JSON.stringify(entry) + '\\n');",
+    '}',
+    'let probeCount = 0;',
+    'process.kill = (pid, signal) => {',
+    '  if (signal === 0) {',
+    "    const answer = config.probes[probeCount] ?? 'ok';",
+    '    probeCount += 1;',
+    "    record({ kind: 'probe', pid, answer });",
+    "    if (answer === 'ok') {",
+    '      return true;',
+    '    }',
+    '    const error = new Error(answer);',
+    '    error.code = answer;',
+    '    throw error;',
+    '  }',
+    "  record({ kind: 'kill', pid, signal });",
+    '  if (config.killThrows.includes(pid)) {',
+    "    const error = new Error('synthetic kill failure');",
+    "    error.code = 'EPERM';",
+    '    throw error;',
+    '  }',
+    '  return true;',
+    '};',
+    'function fakeChild(command) {',
+    '  const child = new EventEmitter();',
+    '  child.stdout = new EventEmitter();',
+    '  child.stdout.setEncoding = () => {};',
+    '  child.unref = () => {};',
+    '  child.kill = (signal) => {',
+    "    record({ kind: 'child-kill', command, signal: signal ?? null });",
+    '    return true;',
+    '  };',
+    '  return child;',
+    '}',
+    'childProcess.spawn = (command, args, options) => {',
+    "  record({ kind: 'spawn', command, args, options: JSON.parse(JSON.stringify(options ?? {})) });",
+    "  if (command === 'taskkill') {",
+    "    if (config.taskkill === 'throw') {",
+    "      throw new Error('synthetic taskkill spawn throw');",
+    '    }',
+    '    const child = fakeChild(command);',
+    "    if (config.taskkill === 'started') {",
+    "      setImmediate(() => child.emit('spawn'));",
+    "      setTimeout(() => child.emit('exit', 0, null), 50);",
+    "    } else if (config.taskkill === 'error') {",
+    "      setImmediate(() => child.emit('error', new Error('synthetic taskkill spawn error')));",
+    "    } else if (config.taskkill === 'error-after-spawn') {",
+    "      setImmediate(() => child.emit('spawn'));",
+    "      setTimeout(() => child.emit('error', new Error('synthetic late taskkill error')), 200);",
+    '    }',
+    '    return child;',
+    '  }',
+    '  const child = fakeChild(command);',
+    '  const listing = config.listing;',
+    "  if (listing.mode === 'throw') {",
+    "    throw new Error('synthetic listing spawn throw');",
+    '  }',
+    "  if (listing.mode === 'error') {",
+    "    setImmediate(() => child.emit('error', new Error('synthetic listing spawn error')));",
+    "  } else if (listing.mode === 'close') {",
+    '    const rows = (listing.rows ?? []).slice();',
+    '    if (listing.selfParentPid !== undefined) {',
+    '      rows.push({ ProcessId: process.pid, ParentProcessId: listing.selfParentPid });',
+    '    }',
+    '    const text = listing.text !== undefined ? listing.text : JSON.stringify(rows);',
+    '    setImmediate(() => {',
+    "      child.stdout.emit('data', text);",
+    "      child.emit('close', listing.code ?? 0);",
+    '    });',
+    '  }',
+    '  return child;',
+    '};',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Runs the watchdog script text as the real watchdog runs it, with the delay
+ * `0`: `node --require <preload> -e <script> <relayPid> 0`, with the environment
+ * from `watchdogEnvironment()`. Returns the recorded calls, the exit status, and
+ * the elapsed time, which includes the Node start with the preload.
+ */
+function runWatchdogScript(
+  script: string,
+  relayPid: number,
+  plan: WatchdogHarnessPlan,
+): WatchdogRun {
+  const dir = makeTempDir(
+    join(tmpdir(), 'idd-critique-telemetry-hook-watchdog-script-'),
+  );
+  const recordPath = join(dir, 'calls.jsonl');
+  const preloadPath = join(dir, 'preload.cjs');
+  writeFileSync(preloadPath, watchdogHarnessPreload(recordPath, plan));
+  const startedAt = Date.now();
+  const result = spawnSync(
+    process.execPath,
+    ['--require', preloadPath, '-e', script, String(relayPid), '0'],
+    {
+      env: watchdogEnvironment(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      timeout: 20_000,
+    },
+  );
+  const elapsedMs = Date.now() - startedAt;
+  const calls = existsSync(recordPath)
+    ? readFileSync(recordPath, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as WatchdogCall)
+    : [];
+  return { status: result.status, stderr: result.stderr, elapsedMs, calls };
+}
+
+/** The recorded calls of one kind, in order. */
+function callsOf<K extends WatchdogCall['kind']>(
+  run: WatchdogRun,
+  kind: K,
+): Array<Extract<WatchdogCall, { kind: K }>> {
+  return run.calls.filter(
+    (call): call is Extract<WatchdogCall, { kind: K }> => call.kind === kind,
+  );
+}
+
+/**
+ * Asserts what every script run must hold: exit code 0, empty stderr, an exit
+ * by itself within `boundMs`, and no spawn other than the tree kill and at most
+ * one listing (kurone-kito/idd-skill#5382).
+ */
+function assertWatchdogRunClean(run: WatchdogRun, boundMs: number): void {
+  assert.equal(
+    run.status,
+    0,
+    `expected exit code 0, got ${run.status}; stderr: ${run.stderr}`,
+  );
+  assert.equal(run.stderr, '', 'expected empty stderr');
+  assert.ok(
+    run.elapsedMs < boundMs,
+    `expected the script to exit by itself within ${boundMs} ms, took ${run.elapsedMs} ms`,
+  );
+  const commands = callsOf(run, 'spawn').map((call) => call.command);
+  for (const command of commands) {
+    assert.ok(
+      command === 'taskkill' || command === 'powershell.exe',
+      `expected only taskkill and the listing to be spawned, got ${command}`,
+    );
+  }
+  assert.ok(
+    commands.filter((command) => command === 'powershell.exe').length <= 1,
+    'expected at most one process listing',
+  );
+}
+
+test('the win32 watchdog script ends nothing when its taskkill starts, and exits by itself (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  for (const taskkill of ['started', 'silent'] as const) {
+    const run = runWatchdogScript(script, FAKE_RELAY_PID, { taskkill });
+    const spawns = callsOf(run, 'spawn');
+    assert.equal(spawns.length, 1, `${taskkill}: expected only taskkill`);
+    assert.equal(spawns[0].command, 'taskkill');
+    assert.deepEqual(spawns[0].args, [
+      '/PID',
+      String(FAKE_RELAY_PID),
+      '/T',
+      '/F',
+    ]);
+    assert.equal(spawns[0].options.stdio, 'ignore');
+    assert.equal(spawns[0].options.windowsHide, true);
+    assert.equal(spawns[0].options.detached, undefined);
+    assert.deepEqual(
+      run.calls.filter((call) => call.kind === 'probe' || call.kind === 'kill'),
+      [],
+      `${taskkill}: expected no process.kill call, probe included`,
+    );
+    assertWatchdogRunClean(run, 4_000);
+  }
+});
+
+test('the win32 watchdog script ends the relay descendants deepest first, then the relay, when its taskkill reports an error (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  const run = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+  });
+  const spawns = callsOf(run, 'spawn');
+  assert.deepEqual(
+    spawns.map((call) => call.command),
+    ['taskkill', 'powershell.exe'],
+    'expected the tree kill, then the listing',
+  );
+  assert.deepEqual(spawns[1].args, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    WIN32_PROCESS_LIST_COMMAND,
+  ]);
+  assert.equal(spawns[1].options.windowsHide, true);
+  assert.deepEqual(spawns[1].options.stdio, ['ignore', 'pipe', 'ignore']);
+  assert.equal(spawns[1].options.detached, undefined);
+  assert.equal(spawns[1].options.shell, undefined);
+  // The relay is probed before the listing and again after it.
+  assert.deepEqual(
+    run.calls.map((call) => call.kind),
+    ['spawn', 'probe', 'spawn', 'probe', 'kill', 'kill', 'kill', 'kill'],
+  );
+  const kills = callsOf(run, 'kill');
+  assert.deepEqual(
+    kills.map((call) => call.pid),
+    [...TREE_KILL_ORDER, FAKE_RELAY_PID],
+  );
+  for (const kill of kills) {
+    assert.equal(typeof kill.pid, 'number');
+    assert.equal(kill.signal, 'SIGKILL');
+  }
+  assertWatchdogRunClean(run, 4_000);
+});
+
+test('the win32 watchdog script runs the same fallback when its taskkill throws, or reports an error after it started, once (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  for (const taskkill of ['throw', 'error-after-spawn'] as const) {
+    const run = runWatchdogScript(script, FAKE_RELAY_PID, {
+      taskkill,
+      listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+    });
+    assert.deepEqual(
+      callsOf(run, 'spawn').map((call) => call.command),
+      ['taskkill', 'powershell.exe'],
+      `${taskkill}: expected one listing, after the tree kill`,
+    );
+    assert.deepEqual(
+      callsOf(run, 'kill').map((call) => call.pid),
+      [...TREE_KILL_ORDER, FAKE_RELAY_PID],
+      `${taskkill}: expected the same kills as the error case, once`,
+    );
+    assertWatchdogRunClean(run, 4_000);
+  }
+});
+
+test('the win32 watchdog script ends nothing when the relay is already gone, or gone after the listing (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  // The first probe reports the relay gone: no listing, no kill.
+  const first = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    probes: ['ESRCH'],
+    listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+  });
+  assert.deepEqual(
+    callsOf(first, 'spawn').map((call) => call.command),
+    ['taskkill'],
+    'expected no listing when the relay is already gone',
+  );
+  assert.deepEqual(callsOf(first, 'kill'), []);
+  assertWatchdogRunClean(first, 4_000);
+  // The relay is alive at the first probe but gone at the second: the listing
+  // runs, and nothing is killed.
+  const second = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    probes: ['ok', 'ESRCH'],
+    listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+  });
+  assert.equal(callsOf(second, 'spawn').length, 2);
+  assert.deepEqual(callsOf(second, 'kill'), []);
+  assertWatchdogRunClean(second, 4_000);
+});
+
+test('the win32 watchdog script treats an EPERM probe as a live relay and still ends it (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  for (const probes of [['EPERM'], ['ok', 'EPERM']] as const) {
+    const run = runWatchdogScript(script, FAKE_RELAY_PID, {
+      taskkill: 'error',
+      probes: [...probes],
+      listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+    });
+    assert.deepEqual(
+      callsOf(run, 'kill').map((call) => call.pid),
+      [...TREE_KILL_ORDER, FAKE_RELAY_PID],
+      `probes ${probes.join(',')}: expected the same kills as the successful probes`,
+    );
+    assertWatchdogRunClean(run, 4_000);
+  }
+});
+
+test('the win32 watchdog script ends only the relay when the listing fails (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  const failures: Array<{ label: string; listing: WatchdogListingPlan }> = [
+    {
+      label: 'a non-zero exit',
+      listing: {
+        mode: 'close',
+        code: 1,
+        rows: treeListingRows(FAKE_RELAY_PID),
+      },
+    },
+    {
+      label: 'text that is not JSON',
+      listing: { mode: 'close', text: 'not json' },
+    },
+    { label: 'an error event', listing: { mode: 'error' } },
+    { label: 'a synchronous throw', listing: { mode: 'throw' } },
+  ];
+  for (const { label, listing } of failures) {
+    const run = runWatchdogScript(script, FAKE_RELAY_PID, {
+      taskkill: 'error',
+      listing,
+    });
+    assert.deepEqual(
+      callsOf(run, 'kill').map((call) => call.pid),
+      [FAKE_RELAY_PID],
+      `${label}: expected only the relay to be ended`,
+    );
+    assertWatchdogRunClean(run, 4_000);
+  }
+});
+
+test('the win32 watchdog script ends only the relay, and reaps its listing, when the listing never finishes (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  const run = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    listing: { mode: 'never' },
+  });
+  assert.deepEqual(
+    callsOf(run, 'kill').map((call) => call.pid),
+    [FAKE_RELAY_PID],
+    'expected only the relay to be ended',
+  );
+  assert.ok(
+    callsOf(run, 'child-kill').some(
+      (call) => call.command === 'powershell.exe',
+    ),
+    'expected the listing to be ended through its handle kill()',
+  );
+  assertWatchdogRunClean(run, 10_000);
+});
+
+test('the win32 watchdog script keeps ending the rest when one kill throws (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  const descendantThrows = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    killThrows: [7102],
+    listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+  });
+  assert.deepEqual(
+    callsOf(descendantThrows, 'kill').map((call) => call.pid),
+    [...TREE_KILL_ORDER, FAKE_RELAY_PID],
+    'expected the remaining descendants and the relay to still be ended',
+  );
+  assertWatchdogRunClean(descendantThrows, 4_000);
+  const relayThrows = runWatchdogScript(script, FAKE_RELAY_PID, {
+    taskkill: 'error',
+    killThrows: [FAKE_RELAY_PID],
+    listing: { mode: 'close', rows: treeListingRows(FAKE_RELAY_PID) },
+  });
+  assert.deepEqual(
+    callsOf(relayThrows, 'kill').map((call) => call.pid),
+    [...TREE_KILL_ORDER, FAKE_RELAY_PID],
+    'expected every kill to be attempted when the relay kill throws',
+  );
+  assertWatchdogRunClean(relayThrows, 4_000);
+});
+
+/**
+ * The table's listing as the awaited path reads it: `pid` and `parentPid`. It
+ * covers a deep chain below the relay, siblings, a parent outside the relay's
+ * tree, a non-numeric and a missing pid, a duplicate, the relay itself, and a
+ * cycle the relay does not reach (kurone-kito/idd-skill#5382).
+ */
+function listingTableRecords(
+  relayPid: number,
+): Array<{ pid?: unknown; parentPid?: unknown }> {
+  return [
+    { pid: 7101, parentPid: relayPid },
+    { pid: 7102, parentPid: 7101 },
+    { pid: 7103, parentPid: 7102 },
+    { pid: 7201, parentPid: relayPid },
+    { pid: 7202, parentPid: 7201 },
+    { pid: 7301, parentPid: 9_990_001 },
+    { pid: 'x7401', parentPid: relayPid },
+    { parentPid: relayPid },
+    { pid: 7101, parentPid: relayPid },
+    { pid: relayPid, parentPid: relayPid },
+    { pid: 7501, parentPid: 7502 },
+    { pid: 7502, parentPid: 7501 },
+  ];
+}
+
+/** The same records as the PowerShell listing writes them. */
+function toListingRows(
+  records: Array<{ pid?: unknown; parentPid?: unknown }>,
+): Array<Record<string, unknown>> {
+  return records.map((record) => ({
+    ProcessId: record.pid,
+    ParentProcessId: record.parentPid,
+  }));
+}
+
+/** The descendant kills that `listingTableRecords` must produce, deepest first. */
+const TABLE_DESCENDANT_KILLS = [7103, 7102, 7202, 7101, 7201];
+
+test('the win32 watchdog script and the awaited path end the same descendants in the same order (kurone-kito/idd-skill#5382)', async () => {
+  // The awaited side: a real relay, a failing taskkill, and the injected listing.
+  const awaited = await runFakeCollectorTimeout(
+    'idd-telemetry-hook-table-parity',
+    (relayPid: number) =>
+      listingTableRecords(relayPid) as unknown as ReadonlyArray<{
+        pid: number;
+        parentPid: number;
+      }>,
+  );
+  const relayPid = awaited.relayPid;
+  // The script side: the same listing, through the watchdog's own copy.
+  const script = await captureWin32WatchdogScript();
+  const run = runWatchdogScript(script, relayPid, {
+    taskkill: 'error',
+    listing: {
+      mode: 'close',
+      rows: toListingRows(listingTableRecords(relayPid)),
+      selfParentPid: relayPid,
+    },
+  });
+  const kills = callsOf(run, 'kill');
+  assert.equal(
+    kills[kills.length - 1]?.pid,
+    relayPid,
+    'expected the relay to be the last kill',
+  );
+  assert.equal(kills[kills.length - 1]?.signal, 'SIGKILL');
+  const scriptDescendants = kills.slice(0, -1).map((call) => call.pid);
+  assert.ok(
+    TABLE_DESCENDANT_KILLS.length > 0,
+    'expected a non-empty table of kills',
+  );
+  assert.deepEqual(
+    awaited.killed,
+    TABLE_DESCENDANT_KILLS,
+    'expected the awaited path to end the table descendants in order',
+  );
+  assert.deepEqual(
+    scriptDescendants,
+    awaited.killed,
+    'expected the script to end the same descendants in the same order',
+  );
+  assertWatchdogRunClean(run, 4_000);
+});
+
+test('the win32 watchdog script contains no exec, execFile, or execSync call (kurone-kito/idd-skill#5382)', async () => {
+  const script = await captureWin32WatchdogScript();
+  assert.doesNotMatch(script, /\bexec(?:File|Sync)?\b/u);
+});
+
+/**
+ * A preload for the watchdog process (kurone-kito/idd-skill#5382). Its
+ * `taskkill` spawn emits an 'error' event, as a spawn that cannot start does,
+ * so the real watchdog takes its descendant fallback. It writes `markerPath`
+ * when it does so, which proves that the preload was loaded. Every other spawn
+ * is real.
+ */
+function unstartableTaskkillPreloadSource(markerPath: string): string {
+  return [
+    "'use strict';",
+    "const childProcess = require('node:child_process');",
+    "const { EventEmitter } = require('node:events');",
+    'const realSpawn = childProcess.spawn;',
+    'childProcess.spawn = function (command, ...rest) {',
+    "  if (command === 'taskkill') {",
+    `    require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'intercepted');`,
+    '    const fake = new EventEmitter();',
+    '    fake.unref = () => {};',
+    "    setImmediate(() => fake.emit('error', new Error('synthetic taskkill spawn error')));",
+    '    return fake;',
+    '  }',
+    '  return realSpawn.call(this, command, ...rest);',
+    '};',
+    '',
+  ].join('\n');
+}
+
+test('the win32 watchdog ends a real hook descendant tree when its own taskkill cannot start, and spares a process outside it (kurone-kito/idd-skill#5382)', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const dir = makeTempDir(
+    join(tmpdir(), 'idd-critique-telemetry-hook-watchdog-real-fallback-'),
+  );
+  const pidPath = join(dir, 'pids.json');
+  const preloadPath = join(dir, 'unstartable-taskkill.cjs');
+  const markerPath = join(dir, 'taskkill-intercepted.txt');
+  writeFileSync(preloadPath, unstartableTaskkillPreloadSource(markerPath));
+  const name = 'idd-telemetry-hook-watchdog-real-descendants';
+  const restore = descendantStub(name, pidPath);
+  // Started by the test, outside the relay's tree: it must still run afterwards.
+  const bystander = spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000);'],
+    { stdio: 'ignore', windowsHide: true },
+  );
+  let relayPid: number | undefined;
+  let watchdogPid: number | undefined;
+  let pids: DescendantPids | undefined;
+  try {
+    const spawnFn: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+      // The in-process tree kill is neutered, so the watchdog is the only kill.
+      if (args[0] === 'taskkill') {
+        return inertChildProcess();
+      }
+      if (isWin32NodeWatchdogSpawn(args)) {
+        // The watchdog's environment gets a preload that makes its own
+        // taskkill spawn fail. The options are changed after
+        // watchdogEnvironment() has built the environment.
+        const options = args[2] as SpawnOptions;
+        // NODE_OPTIONS reads a backslash as an escape, so a Windows path must
+        // be passed with forward slashes, or the preload never loads.
+        const preloadForNodeOptions = preloadPath.replace(/\\/g, '/');
+        const watchdog = spawn(args[0], args[1] as string[], {
+          ...options,
+          env: {
+            ...options.env,
+            NODE_OPTIONS: `--require "${preloadForNodeOptions}"`,
+          },
+        });
+        watchdogPid = watchdog.pid;
+        return watchdog;
+      }
+      const child = spawn(...args);
+      if (isWin32RelaySpawn(args)) {
+        relayPid = child.pid;
+      }
+      return child;
+    }) as typeof spawn;
+    // The watchdog delay leaves the stub time to record its pids, which takes
+    // two to three seconds on this host (a PowerShell lookup). The command is
+    // stayAliveCommand(name), so the stub does not evaluate its stdin payload
+    // as a script (kurone-kito/idd-skill#5382).
+    const pending = invokeCritiqueTelemetryHook(
+      stayAliveCommand(name),
+      samplePayload(),
+      {
+        timeoutMs: 15_000,
+        spawnFn,
+        platform: 'win32',
+      },
+    );
+    pids = await readDescendantPids(pidPath);
+    assert.equal(pids.relay, relayPid, 'expected the recorded relay pid');
+    await pending;
+    const gone = await Promise.all([
+      waitUntilProcessGone(pids.relay, 20_000),
+      waitUntilProcessGone(pids.hook, 20_000),
+      waitUntilProcessGone(pids.child, 20_000),
+    ]);
+    assert.deepEqual(
+      gone,
+      [true, true, true],
+      `expected the watchdog to end the relay (${pids.relay}), the hook (${pids.hook}), and the child (${pids.child}) within 20 seconds`,
+    );
+    assert.ok(
+      existsSync(markerPath),
+      'expected the watchdog taskkill spawn to be made unstartable, so the fallback ran',
+    );
+    assert.ok(
+      isProcessRunning(bystander.pid as number),
+      'expected the process outside the relay tree to still be running',
+    );
+  } finally {
+    restore();
+    reapPid(bystander.pid);
+    reapPid(watchdogPid);
+    // The tree kill reaches the hook and its child even when the pids were
+    // never recorded, which reapPid cannot do.
+    if (relayPid) {
+      cleanupProcessTree(relayPid);
+    }
+    if (pids) {
+      reapPid(pids.hook);
+      reapPid(pids.child);
     }
   }
 });
@@ -2437,9 +3160,7 @@ function relayTaskkillSpawnFn(
   return ((...args: Parameters<typeof spawn>) => {
     // The backup watchdog is refused here. Left running, it tree-kills the
     // relay on its own deadline, which can end the descendants before the
-    // fallback under test runs, so the test would pass without the fix. It
-    // is also not available in the case this fix is for: its own spawn needs
-    // the same `taskkill`, so it cannot run when `taskkill` cannot be started.
+    // fallback under test runs, so the test would pass without the fix.
     if (isWin32NodeWatchdogSpawn(args)) {
       throw new Error('synthetic watchdog spawn failure');
     }
