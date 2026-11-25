@@ -49,6 +49,15 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/claim-lock.mjs');
 
+/**
+ * The process temp directory can be the 8.3 short form of the profile path on
+ * win32 (for example `C:\Users\KURONE~1\...`). Resolve it to the full form so
+ * fixture roots match the paths git and `realpathSync.native` report.
+ */
+function longTmpdir(): string {
+  return realpathSync.native(tmpdir());
+}
+
 function git(cwd: string, args: string[]): void {
   execFileSync('git', args, { cwd, env: fixtureEnv(), stdio: 'pipe' });
 }
@@ -59,7 +68,7 @@ function git(cwd: string, args: string[]): void {
  * case rather than a plain repo's own `.git` directory.
  */
 function setupLinkedWorktree(): { primary: string; worktree: string } {
-  const primary = mkdtempSync(join(tmpdir(), 'idd-claim-lock-'));
+  const primary = mkdtempSync(join(longTmpdir(), 'idd-claim-lock-'));
   git(primary, ['init', '-b', 'main']);
   git(primary, ['config', 'user.email', 'test@example.com']);
   git(primary, ['config', 'user.name', 'Test']);
@@ -966,7 +975,7 @@ test('acquire: authorized takeover replaces a malformed lock file', () => {
 });
 
 test('acquire/check: a nonexistent or non-git --worktree path fails loudly rather than silently no-op', () => {
-  const missing = join(tmpdir(), `idd-claim-lock-missing-${process.pid}`);
+  const missing = join(longTmpdir(), `idd-claim-lock-missing-${process.pid}`);
   assert.throws(() => checkClaimLock(missing));
   assert.throws(() => acquireClaimLock(missing, 'agent-a', 'claim-a', false));
 });
@@ -996,7 +1005,7 @@ function captureStderr(body: () => void): string {
 
 test('acquire/check against a nonexistent --worktree path does not leak the underlying `git rev-parse` failure to the real stderr stream (#3434)', () => {
   const missing = join(
-    tmpdir(),
+    longTmpdir(),
     `idd-claim-lock-missing-stderr-${process.pid}`,
   );
   const captured = captureStderr(() => {
@@ -1899,7 +1908,7 @@ for (const shape of SPURIOUS_EXIT_SHAPES) {
         const decoyStdout =
           shape === 'decoy-stdout'
             ? failingSpawn === 1
-              ? join(tmpdir(), 'idd-3664-absent-decoy', '.git')
+              ? join(longTmpdir(), 'idd-3664-absent-decoy', '.git')
               : `${decoyAdminDir}\n${realCommonDir}\n`
             : '';
 
@@ -2085,7 +2094,7 @@ for (const { name, fields } of NON_RETRYABLE_EXITS) {
 }
 
 test('rev-parse lookup: a nonexistent worktree path still fails after exactly one real git spawn (#3664)', () => {
-  const missing = join(tmpdir(), `idd-3664-missing-${process.pid}`);
+  const missing = join(longTmpdir(), `idd-3664-missing-${process.pid}`);
   let thrown: unknown;
   const spawns = withRevParseStub(
     () => undefined,
@@ -2385,7 +2394,7 @@ test('generated-tokens: resolveGeneratedTokensPath resolves inside the linked wo
 });
 
 test('CLI: --record-tokens on a non-worktree path names the remedy, not the raw git error', async () => {
-  const plain = mkdtempSync(join(tmpdir(), 'claim-lock-not-worktree-'));
+  const plain = mkdtempSync(join(longTmpdir(), 'claim-lock-not-worktree-'));
   try {
     await assert.rejects(
       execFileAsync(
@@ -2418,7 +2427,7 @@ test('CLI: --record-tokens on a non-worktree path names the remedy, not the raw 
 });
 
 test('CLI: --record-tokens keeps the git diagnostic when the path has a .git entry', async () => {
-  const broken = mkdtempSync(join(tmpdir(), 'claim-lock-broken-worktree-'));
+  const broken = mkdtempSync(join(longTmpdir(), 'claim-lock-broken-worktree-'));
   try {
     writeFileSync(join(broken, '.git'), 'gitdir: /nonexistent/admin-dir\n');
     await assert.rejects(
