@@ -2339,19 +2339,23 @@ test('the win32 watchdog script keeps ending the rest when one kill throws (kuro
 function listingTableRecords(
   relayPid: number,
 ): Array<{ pid?: unknown; parentPid?: unknown }> {
+  // Every fixture pid is an offset from the relay pid, so none can equal the
+  // relay, or the pid of a real process the runner may own (CodeRabbit,
+  // kurone-kito/idd-skill#5382).
+  const at = (offset: number): number => relayPid + offset;
   return [
-    { pid: 7101, parentPid: relayPid },
-    { pid: 7102, parentPid: 7101 },
-    { pid: 7103, parentPid: 7102 },
-    { pid: 7201, parentPid: relayPid },
-    { pid: 7202, parentPid: 7201 },
-    { pid: 7301, parentPid: 9_990_001 },
+    { pid: at(101), parentPid: relayPid },
+    { pid: at(102), parentPid: at(101) },
+    { pid: at(103), parentPid: at(102) },
+    { pid: at(201), parentPid: relayPid },
+    { pid: at(202), parentPid: at(201) },
+    { pid: at(301), parentPid: at(9_990_001) },
     { pid: 'x7401', parentPid: relayPid },
     { parentPid: relayPid },
-    { pid: 7101, parentPid: relayPid },
+    { pid: at(101), parentPid: relayPid },
     { pid: relayPid, parentPid: relayPid },
-    { pid: 7501, parentPid: 7502 },
-    { pid: 7502, parentPid: 7501 },
+    { pid: at(501), parentPid: at(502) },
+    { pid: at(502), parentPid: at(501) },
   ];
 }
 
@@ -2365,8 +2369,10 @@ function toListingRows(
   }));
 }
 
-/** The descendant kills that `listingTableRecords` must produce, deepest first. */
-const TABLE_DESCENDANT_KILLS = [7103, 7102, 7202, 7101, 7201];
+/** The descendant kills that listingTableRecords must produce, deepest first. */
+function tableDescendantKills(relayPid: number): number[] {
+  return [103, 102, 202, 101, 201].map((offset) => relayPid + offset);
+}
 
 test('the win32 watchdog script and the awaited path end the same descendants in the same order (kurone-kito/idd-skill#5382)', async () => {
   // The awaited side: a real relay, a failing taskkill, and the injected listing.
@@ -2398,12 +2404,12 @@ test('the win32 watchdog script and the awaited path end the same descendants in
   assert.equal(kills[kills.length - 1]?.signal, 'SIGKILL');
   const scriptDescendants = kills.slice(0, -1).map((call) => call.pid);
   assert.ok(
-    TABLE_DESCENDANT_KILLS.length > 0,
+    tableDescendantKills(relayPid).length > 0,
     'expected a non-empty table of kills',
   );
   assert.deepEqual(
     awaited.killed,
-    TABLE_DESCENDANT_KILLS,
+    tableDescendantKills(relayPid),
     'expected the awaited path to end the table descendants in order',
   );
   assert.deepEqual(
