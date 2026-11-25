@@ -3502,8 +3502,7 @@ test('verified unmerged fallback authorizes a narrow forced retry for dirty remo
             ok: false,
             status: 1,
             stdout: '',
-            stderr:
-              "fatal: resolve('/repo/linked') contains modified or untracked files, use --force to delete it",
+            stderr: `fatal: ${resolve('/repo/linked')} contains modified or untracked files, use --force to delete it`,
           };
     },
   });
@@ -4984,7 +4983,7 @@ test('stops removal when a preserved ignored backup changes before cleanup', () 
     },
     pathExists: (path) => !cleanedPaths.has(path),
     readPathFingerprint: (path) => {
-      if (String(path).startsWith(resolve('/tmp/preserve/'))) {
+      if (String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`)) {
         destinationReads += 1;
         return destinationReads === 1 ? 'recorded-backup' : 'tampered-backup';
       }
@@ -5041,7 +5040,7 @@ test('verifies only the newest ignored snapshot after a refresh', () => {
     pathExists: (path) =>
       path === resolve('/repo/linked/secret.env') ? sourceVisible : true,
     readPathFingerprint: (path) =>
-      String(path).startsWith(resolve('/tmp/preserve/'))
+      String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`)
         ? 'dest-stable'
         : `source-v${generation}`,
     copyPath: () => {},
@@ -5099,7 +5098,7 @@ test('blocks cleanup when a preserved ignored source changes after its copy', ()
       return cleanRepoRunGit(argv);
     },
     readPathFingerprint: (path) => {
-      if (String(path).startsWith(resolve('/tmp/preserve/')))
+      if (String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`))
         return 'backup-stable';
       fingerprintCalls += 1;
       // The copy records a matching before/after pair. The next source read
