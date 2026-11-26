@@ -9943,7 +9943,12 @@ for (const testCase of PRODUCTION_BIRTH_CASES) {
         103,
         ['--apply', '--operator-confirmed-no-live-session'],
         {
-          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require ${shimPath}`]
+          // Quoted, so a profile path with a space stays one NODE_OPTIONS value;
+          // forward slashes keep the quoted value free of backslash escapes.
+          NODE_OPTIONS: [
+            process.env.NODE_OPTIONS,
+            `--require "${shimPath.replaceAll('\\', '/')}"`,
+          ]
             .filter(Boolean)
             .join(' '),
           IDD_LWR_SHIM_PLAN: JSON.stringify(plan),
