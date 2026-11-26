@@ -9398,7 +9398,7 @@ test('sandbox: removing the selected worktree leaves unrelated prunable admin da
       ['worktree', 'list', '--porcelain'],
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(!worktreeListAfter.includes(sandbox.linked));
+    assert.ok(!gitPath(worktreeListAfter).includes(gitPath(sandbox.linked)));
     assert.match(worktreeListAfter, /branch refs\/heads\/issue\/104-unrelated/);
     assert.match(worktreeListAfter, /prunable/);
     assert.equal(snapshotDirectoryTree(unrelatedAdminDir), adminSnapshotBefore);
