@@ -530,7 +530,8 @@ test('the package scripts wire check, lint:minimum, and lint to the canonical ru
 // entry point runs it. Each run gets a fresh scratch repository with real git
 // and real pnpm. Its node_modules is a real directory of links to the
 // checkout's packages, so pnpm writes inside the scratch tree and never through
-// to this checkout. Skipped when the tools are absent (the bare-node lane).
+// to this checkout. Skipped when the tools are absent (the bare-node lane), and
+// on win32 under issue #5392 (see WIN32_CONFIG_DEPENDENCY_SKIP).
 // ---------------------------------------------------------------------------
 
 const requireFromHere = createRequire(import.meta.url);
@@ -546,6 +547,15 @@ function toolsInstalledForScratch(): boolean {
 const SCRATCH_SKIP = toolsInstalledForScratch()
   ? false
   : 'typescript and @biomejs/biome are not installed (bare-node lane)';
+
+// #5392: on win32, pnpm fails its updateConfig hook for a config-dependency in
+// the scratch repository (the ENOENT under node_modules/.pnpm-config), so the
+// #3987 test below is skipped there. The space-in-path test after it keeps the
+// space case running on win32 without a config-dependency layout.
+const WIN32_CONFIG_DEPENDENCY_SKIP =
+  process.platform === 'win32'
+    ? 'win32: pnpm fails its updateConfig hook for a config-dependency in a scratch repository (issue #5392)'
+    : false;
 
 const RUN_TIMEOUT_MS = 600_000;
 const GIT_NULL_DEVICE = process.platform === 'win32' ? 'NUL' : devNull;
@@ -687,7 +697,7 @@ function buildScratchRepository(parent: string, sentinel: string): string {
 }
 
 test('a tampered committed runner copy is reported as drift, and neither check nor lint:minimum runs it (#3987)', {
-  skip: SCRATCH_SKIP,
+  skip: SCRATCH_SKIP || WIN32_CONFIG_DEPENDENCY_SKIP,
   timeout: 2 * RUN_TIMEOUT_MS + 300_000,
 }, (t) => {
   const probe = spawnSync('pnpm', ['--version'], {
@@ -751,5 +761,46 @@ test('a tampered committed runner copy is reported as drift, and neither check n
     checkoutFingerprint(),
     before,
     "the scratch runs leave the checkout's dependency links and lockfile unchanged",
+  );
+});
+
+// #5392: a path that contains a space runs pnpm without a config-dependency
+// layout. This is the space case split out of the #3987 test. It runs on win32
+// and wherever the scratch tools are installed. The pnpm it starts is whichever
+// binary PATH resolves (mise's latest on the recorded win32 host), not the
+// repository's packageManager pin.
+test('a path that contains a space runs pnpm without a config-dependency layout (issue #5392)', {
+  skip: SCRATCH_SKIP,
+  timeout: RUN_TIMEOUT_MS,
+}, (t) => {
+  const parent = mkdtempSync(join(tmpdir(), 'check project scratch '));
+  t.after(() => rmSync(parent, { recursive: true, force: true }));
+  const probe = join(parent, 'probe project');
+  mkdirSync(probe);
+  writeFileSync(
+    join(probe, 'package.json'),
+    `${JSON.stringify({ name: 'space-path-probe', private: true, scripts: { probe: 'node -v' } }, null, 2)}\n`,
+  );
+  const result = spawnSync('pnpm', ['run', 'probe'], {
+    cwd: probe,
+    encoding: 'utf8',
+    env: scratchEnv(),
+    timeout: RUN_TIMEOUT_MS,
+  });
+  assert.equal(result.error, undefined, 'pnpm run probe must start');
+  assert.equal(
+    result.signal,
+    null,
+    'pnpm run probe must finish within its time bound',
+  );
+  assert.equal(
+    result.status,
+    0,
+    `pnpm run probe must exit 0: ${result.stderr}`,
+  );
+  assert.match(
+    result.stdout,
+    /^v\d+\./m,
+    'the probe script must print the node version',
   );
 });
