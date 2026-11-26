@@ -3,11 +3,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -439,6 +441,45 @@ interface CliFixture {
   restore: () => void;
 }
 
+/**
+ * On win32 a cache directory under the temp folder inherits an ACL that grants
+ * an AppContainer SID, which the private-ACL check refuses. Refuse a link
+ * first, then give this one directory an ACL that names only SYSTEM, the
+ * built-in Administrators, and the current user.
+ */
+function makeWindowsDirectoryPrivate(dir: string): void {
+  if (lstatSync(dir).isSymbolicLink()) {
+    throw new Error(`refusing to set an ACL on a link: ${dir}`);
+  }
+  // Absolute System32 paths, as the production ACL reader uses, so a PATH
+  // entry cannot shadow them.
+  const system32 = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+  const currentSid = execFileSync(
+    join(system32, 'whoami.exe'),
+    ['/user', '/fo', 'csv', '/nh'],
+    { encoding: 'utf8' },
+  )
+    .trim()
+    .split(',')
+    .pop()
+    ?.replace(/"/g, '');
+  assert.ok(currentSid?.startsWith('S-1-'), 'whoami reports a user SID');
+  execFileSync(
+    join(system32, 'icacls.exe'),
+    [
+      dir,
+      '/inheritance:r',
+      '/grant:r',
+      '*S-1-5-18:(OI)(CI)F',
+      '/grant:r',
+      '*S-1-5-32-544:(OI)(CI)F',
+      '/grant:r',
+      `*${currentSid}:(OI)(CI)F`,
+    ],
+    { stdio: 'pipe' },
+  );
+}
+
 function cliFixture(
   enabled: boolean,
   stub: (logPath: string) => string = GH_STUB,
@@ -448,6 +489,14 @@ function cliFixture(
   const cacheDir = join(root, 'cache');
   mkdirSync(join(workspace, '.github', 'idd'), { recursive: true });
   mkdirSync(cacheDir);
+  if (process.platform === 'win32') {
+    try {
+      makeWindowsDirectoryPrivate(cacheDir);
+    } catch (error) {
+      rmSync(root, { recursive: true, force: true });
+      throw error;
+    }
+  }
   execFileSync('git', ['init', '-q', workspace]);
   execFileSync(
     'git',
@@ -498,6 +547,29 @@ function runCli(
 function ghCalls(fx: CliFixture): number {
   return readFileSync(fx.log, 'utf8').split('\n').filter(Boolean).length;
 }
+
+test('CLI: a cache directory that is a link is refused before any write', () => {
+  const fx = cliFixture(true);
+  const target = join(fx.root, 'link-target');
+  try {
+    mkdirSync(target);
+    rmSync(fx.cacheDir, { recursive: true, force: true });
+    symlinkSync(
+      target,
+      fx.cacheDir,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    // A cache flag makes the report carry its cache meta, which names the bypass.
+    const result = runCli(fx, ['--issue', '700', '--refresh-cache']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).cache.mode, 'bypass');
+    assert.deepEqual(readdirSync(target), []);
+  } finally {
+    rmSync(fx.cacheDir, { force: true });
+    fx.restore();
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
 
 test('CLI: a warm repeat spawns no gh process and reports the hint', () => {
   const fx = cliFixture(true);
