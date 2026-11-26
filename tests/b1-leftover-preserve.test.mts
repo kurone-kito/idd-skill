@@ -2192,9 +2192,15 @@ const failClosedRows: [string, string, Overrides][] = [
       hook: (f, file, args) => {
         if (!isGitCommand(args, 'worktree', 'list')) return undefined;
         const real = REAL_RUN(file, args);
+        // git prints the primary with forward slashes on win32, so match that
+        // printed form rather than the backslash form join() builds.
+        const printed =
+          process.platform === 'win32'
+            ? f.primary.replaceAll('\\', '/')
+            : f.primary;
         return {
           ...real,
-          stdout: real.stdout.replaceAll(f.primary, `${f.primary}-elsewhere`),
+          stdout: real.stdout.replaceAll(printed, `${printed}-elsewhere`),
         };
       },
     },
