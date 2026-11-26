@@ -197,6 +197,15 @@ async function captureStderrAsync<T>(
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
+/**
+ * The process temp directory can be the 8.3 short form of the profile path on
+ * win32 (for example `C:\Users\KURONE~1\...`). Resolve it to the full form so
+ * fixture roots match the paths git and `realpathSync.native` report.
+ */
+function longTmpdir(): string {
+  return realpathSync.native(tmpdir());
+}
+
 test('extractors classify roadmap markers and outbound references', () => {
   const body = `
 <!-- idd-skill-roadmap-id: root-roadmap -->
@@ -2237,7 +2246,7 @@ process.exit(1);
 
 test('CLI path fails when an explicit policy file is invalid', () => {
   const tempRoot = mkdtempSync(
-    join(tmpdir(), 'idd-discover-roadmap-graph-policy-'),
+    join(longTmpdir(), 'idd-discover-roadmap-graph-policy-'),
   );
   const policyPath = join(tempRoot, 'bad-policy.json');
   const restore = stubExecutable(
@@ -3394,7 +3403,9 @@ const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 test('owner evidence requires a generated-tokens record alongside the lock (#3141)', () => {
   // A new lock is refused on the primary worktree, so the session evidence
   // lives on a linked worktree — the same place B1 acquires it.
-  const primary = mkdtempSync(join(tmpdir(), 'idd-discover-owner-evidence-'));
+  const primary = mkdtempSync(
+    join(longTmpdir(), 'idd-discover-owner-evidence-'),
+  );
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
   const branch = 'issue/3141-owner-evidence';
   const claimId = 'claim-owner-evidence';
@@ -6052,7 +6063,7 @@ function runProgressCli(
   extraArgs: string[],
   { identity = true }: { identity?: boolean } = {},
 ) {
-  const cwd = mkdtempSync(join(tmpdir(), 'idd-progress-cli-'));
+  const cwd = mkdtempSync(join(longTmpdir(), 'idd-progress-cli-'));
   const restore = stubExecutable('gh', ghBody);
   try {
     return spawnSync(
@@ -6197,7 +6208,7 @@ process.exit(1);
 });
 
 test('CLI: the rerun arguments name every scope and flag of the invocation (#3598)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-progress-policy-'));
+  const dir = mkdtempSync(join(longTmpdir(), 'idd-progress-policy-'));
   const policyPath = join(dir, 'policy.json');
   writeFileSync(policyPath, '{}');
   try {
