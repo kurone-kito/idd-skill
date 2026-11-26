@@ -25,8 +25,16 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { tmpdir as nodeTmpdir } from 'node:os';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -83,6 +91,21 @@ import {
   type WorktreeRemnantEvidencePorts,
 } from '../src/scripts/worktree-remnant-evidence.mts';
 import { fixtureEnv, stubExecutable } from './test-utils.mts';
+
+// The process temp directory can be the 8.3 short form on win32; resolve it
+// so fixture roots match what git and realpathSync.native report (issue #5390).
+const tmpdir = (): string => realpathSync.native(nodeTmpdir());
+
+// git prints worktree paths with forward slashes on win32.
+// Literal-text regex builder: escapes a path so it matches as plain text.
+function escText(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function rx(text: string): RegExp {
+  return new RegExp(escText(text));
+}
+
+const gitPath = (p: string): string => p.replaceAll('\\', '/');
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -577,7 +600,7 @@ test('primary recovery rejects an owner/repo override for another local reposito
 
 test('parseArgs rejects issue numbers that are not safe positive integers', () => {
   assert.equal(
-    parseArgs(['--issue', '3536', '--worktree', '/repo/linked']).issue,
+    parseArgs(['--issue', '3536', '--worktree', resolve('/repo/linked')]).issue,
     3536,
   );
   assert.equal(
@@ -585,13 +608,17 @@ test('parseArgs rejects issue numbers that are not safe positive integers', () =
       '--issue',
       String(Number.MAX_SAFE_INTEGER),
       '--worktree',
-      '/repo/linked',
+      resolve('/repo/linked'),
     ]).issue,
     Number.MAX_SAFE_INTEGER,
   );
   assert.equal(
-    parseArgs(['--issue', '9007199254740992', '--worktree', '/repo/linked'])
-      .issue,
+    parseArgs([
+      '--issue',
+      '9007199254740992',
+      '--worktree',
+      resolve('/repo/linked'),
+    ]).issue,
     null,
   );
   assert.equal(
@@ -599,7 +626,7 @@ test('parseArgs rejects issue numbers that are not safe positive integers', () =
       '--issue',
       '999999999999999999999',
       '--worktree',
-      '/repo/linked',
+      resolve('/repo/linked'),
     ]).issue,
     null,
   );
@@ -698,9 +725,9 @@ test('countTaggedStashEntries counts only entries whose final message is the tag
 });
 
 test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching branch', () => {
-  const pathExists = (p: string) => p === '/present';
+  const pathExists = (p: string) => p === resolve('/present');
   const base = {
-    path: '/gone',
+    path: resolve('/gone'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -708,14 +735,18 @@ test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching 
     prunable: true,
   };
   assert.equal(
-    evaluatePrunableShortcut([base], '/gone', 'issue/1-task', pathExists)
-      .eligible,
+    evaluatePrunableShortcut(
+      [base],
+      resolve('/gone'),
+      'issue/1-task',
+      pathExists,
+    ).eligible,
     true,
   );
   assert.equal(
     evaluatePrunableShortcut(
       [{ ...base, locked: true }],
-      '/gone',
+      resolve('/gone'),
       'issue/1-task',
       pathExists,
     ).eligible,
@@ -724,8 +755,8 @@ test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching 
   );
   assert.equal(
     evaluatePrunableShortcut(
-      [{ ...base, path: '/present' }],
-      '/present',
+      [{ ...base, path: resolve('/present') }],
+      resolve('/present'),
       'issue/1-task',
       pathExists,
     ).eligible,
@@ -735,7 +766,7 @@ test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching 
   assert.equal(
     evaluatePrunableShortcut(
       [{ ...base, branchRef: 'refs/heads/other-branch' }],
-      '/gone',
+      resolve('/gone'),
       'issue/1-task',
       pathExists,
     ).eligible,
@@ -745,7 +776,7 @@ test('evaluatePrunableShortcut requires prunable + absent + unlocked + matching 
   assert.equal(
     evaluatePrunableShortcut(
       [base],
-      '/nonexistent-record',
+      resolve('/nonexistent-record'),
       'issue/1-task',
       pathExists,
     ).eligible,
@@ -763,7 +794,7 @@ test('evaluatePrunableShortcut fails closed on a detached record, even prunable+
   // unrelated.
   const pathExists = () => false;
   const detachedRecord = {
-    path: '/gone',
+    path: resolve('/gone'),
     branchRef: null,
     detached: true,
     bare: false,
@@ -773,7 +804,7 @@ test('evaluatePrunableShortcut fails closed on a detached record, even prunable+
   assert.equal(
     evaluatePrunableShortcut(
       [detachedRecord],
-      '/gone',
+      resolve('/gone'),
       'issue/1-task',
       pathExists,
     ).eligible,
@@ -783,7 +814,7 @@ test('evaluatePrunableShortcut fails closed on a detached record, even prunable+
 
 test('evaluatePrunableShortcut fails closed when the requested branch is unknown', () => {
   const record = {
-    path: '/gone',
+    path: resolve('/gone'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -791,14 +822,15 @@ test('evaluatePrunableShortcut fails closed when the requested branch is unknown
     prunable: true,
   };
   assert.equal(
-    evaluatePrunableShortcut([record], '/gone', null, () => false).eligible,
+    evaluatePrunableShortcut([record], resolve('/gone'), null, () => false)
+      .eligible,
     false,
   );
 });
 
 test('evaluatePrunableShortcut fails closed when the target path is unreadable', () => {
   const record = {
-    path: '/restricted/gone',
+    path: resolve('/restricted/gone'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -842,7 +874,7 @@ test('detectInProgressOperation reads orig-head for an in-progress rebase, not H
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/.git/rebase-merge\n',
+          stdout: `${resolve('/repo/.git/rebase-merge')}\n`,
           stderr: '',
         };
       }
@@ -850,11 +882,13 @@ test('detectInProgressOperation reads orig-head for an in-progress rebase, not H
     }
     return { ok: true, status: 0, stdout: 'replay-tip-sha\n', stderr: '' };
   };
-  const pathExists = (p: string) => p === '/repo/.git/rebase-merge';
+  const pathExists = (p: string) => p === resolve('/repo/.git/rebase-merge');
   const readFile = (p: string) =>
-    p === '/repo/.git/rebase-merge/orig-head' ? 'orig-head-sha\n' : null;
+    p === resolve('/repo/.git/rebase-merge/orig-head')
+      ? 'orig-head-sha\n'
+      : null;
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     pathExists,
     readFile,
@@ -870,7 +904,7 @@ test('detectInProgressOperation reports null when nothing is in progress', () =>
     stderr: '',
   });
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     () => false,
     () => null,
@@ -894,14 +928,14 @@ test('detectInProgressOperation fails closed when rebase metadata is unreadable'
       return {
         ok: true,
         status: 0,
-        stdout: '/repo/.git/rebase-merge\n',
+        stdout: `${resolve('/repo/.git/rebase-merge')}\n`,
         stderr: '',
       };
     }
     return { ok: true, status: 0, stdout: '', stderr: '' };
   };
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     () => false,
     () => null,
@@ -915,13 +949,14 @@ for (const operationCase of [
   { kind: 'cherry-pick', marker: 'CHERRY_PICK_HEAD' },
 ] as const) {
   test(`detectInProgressOperation fails closed when ${operationCase.kind} metadata is present but unreadable`, () => {
+    const markerPath = join(resolve('/repo/.git'), operationCase.marker);
     const runGit = (argv: string[]): LocalGitCommandResult => {
       if (argv[0] === 'rev-parse' && argv.includes(operationCase.marker)) {
         if (argv.includes('--git-path')) {
           return {
             ok: true,
             status: 0,
-            stdout: `/repo/.git/${operationCase.marker}\n`,
+            stdout: `${markerPath}\n`,
             stderr: '',
           };
         }
@@ -933,11 +968,11 @@ for (const operationCase of [
       return { ok: false, status: 1, stdout: '', stderr: '' };
     };
     const result = detectInProgressOperation(
-      '/repo',
+      resolve('/repo'),
       runGit,
       () => false,
       () => null,
-      () => 'unknown',
+      (candidate) => (candidate === markerPath ? 'unknown' : 'absent'),
     );
     assert.deepEqual(result, { kind: operationCase.kind, tipSha: null });
   });
@@ -959,14 +994,14 @@ test('detectInProgressOperation fails closed when bisect metadata is unreadable'
       return {
         ok: true,
         status: 0,
-        stdout: '/repo/.git/BISECT_LOG\n',
+        stdout: `${resolve('/repo/.git/BISECT_LOG')}\n`,
         stderr: '',
       };
     }
     return { ok: true, status: 0, stdout: '', stderr: '' };
   };
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     () => false,
     () => null,
@@ -1017,7 +1052,7 @@ test('extractDirtyEntries preserves staged and unstaged status columns', () => {
 
 test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
   assert.equal(isSafeRelativePath('a/b.txt'), true);
-  assert.equal(isSafeRelativePath('/etc/passwd'), false);
+  assert.equal(isSafeRelativePath(resolve('/etc/passwd')), false);
   assert.equal(isSafeRelativePath('../escape.txt'), false);
   assert.equal(isSafeRelativePath('a/../../escape.txt'), false);
   assert.equal(
@@ -1029,36 +1064,56 @@ test('isSafeRelativePath rejects absolute paths and any `..` segment', () => {
 });
 
 test('isPathContainedIn is platform-portable, not a hardcoded `/`-prefix check (Copilot review finding)', () => {
-  assert.equal(isPathContainedIn('/target', '/target'), true);
-  assert.equal(isPathContainedIn('/target/sub', '/target'), true);
-  assert.equal(isPathContainedIn('/other', '/target'), false);
+  assert.equal(isPathContainedIn(resolve('/target'), resolve('/target')), true);
+  assert.equal(
+    isPathContainedIn(resolve('/target/sub'), resolve('/target')),
+    true,
+  );
+  assert.equal(isPathContainedIn(resolve('/other'), resolve('/target')), false);
   // A sibling directory sharing a string prefix must never read as
   // "contained" -- the exact bug a bare `startsWith` check produces.
-  assert.equal(isPathContainedIn('/target-sibling', '/target'), false);
-  assert.equal(isPathContainedIn('/target', '/target/sub'), false);
-  assert.equal(isPathContainedIn('/target/..backup', '/target'), true);
-  assert.equal(isPathContainedIn('/target/../other', '/target'), false);
   assert.equal(
-    isPathContainedIn('/target/safe\\..\\backup', '/target'),
-    process.platform !== 'win32',
-    'backslashes are filename characters on POSIX but separators on Windows',
+    isPathContainedIn(resolve('/target-sibling'), resolve('/target')),
+    false,
+  );
+  assert.equal(
+    isPathContainedIn(resolve('/target'), resolve('/target/sub')),
+    false,
+  );
+  assert.equal(
+    isPathContainedIn(resolve('/target/..backup'), resolve('/target')),
+    true,
+  );
+  assert.equal(
+    isPathContainedIn(resolve('/target/../other'), resolve('/target')),
+    false,
+  );
+  assert.equal(
+    isPathContainedIn('/target/safe\\..\\backup', resolve('/target')),
+    true,
+    'a backslash stays inside the target on both POSIX and Windows',
   );
 });
 
 test('resolveEffectiveRealpath walks up to the nearest existing ancestor and re-appends the missing suffix', () => {
-  const fakeFs: Record<string, string> = { '/real/base': '/real/base' };
+  const fakeFs: Record<string, string> = {
+    [resolve('/real/base')]: resolve('/real/base'),
+  };
   const realpathOrNull = (p: string) => fakeFs[p] ?? null;
   // '/link' is a symlink resolving to '/real/base'; '/link/new/dir' does
   // not exist yet, so a plain realpath call on it returns null and would
   // previously skip the containment check entirely.
-  fakeFs['/link'] = '/real/base';
+  fakeFs[resolve('/link')] = resolve('/real/base');
   assert.equal(
-    resolveEffectiveRealpath('/link/new/dir', realpathOrNull),
-    '/real/base/new/dir',
+    resolveEffectiveRealpath(resolve('/link/new/dir'), realpathOrNull),
+    resolve('/real/base/new/dir'),
   );
-  assert.equal(resolveEffectiveRealpath('/link', realpathOrNull), '/real/base');
   assert.equal(
-    resolveEffectiveRealpath('/nowhere/at/all', realpathOrNull),
+    resolveEffectiveRealpath(resolve('/link'), realpathOrNull),
+    resolve('/real/base'),
+  );
+  assert.equal(
+    resolveEffectiveRealpath(resolve('/nowhere/at/all'), realpathOrNull),
     null,
   );
 });
@@ -1106,7 +1161,7 @@ test('detectInProgressOperation preserves the BISECT_START ref tip, not the mid-
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/.git/BISECT_LOG\n',
+          stdout: `${resolve('/repo/.git/BISECT_LOG')}\n`,
           stderr: '',
         };
       }
@@ -1114,7 +1169,7 @@ test('detectInProgressOperation preserves the BISECT_START ref tip, not the mid-
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/.git/BISECT_START\n',
+          stdout: `${resolve('/repo/.git/BISECT_START')}\n`,
           stderr: '',
         };
       }
@@ -1135,11 +1190,11 @@ test('detectInProgressOperation preserves the BISECT_START ref tip, not the mid-
       stderr: '',
     };
   };
-  const pathExists = (p: string) => p === '/repo/.git/BISECT_LOG';
+  const pathExists = (p: string) => p === resolve('/repo/.git/BISECT_LOG');
   const readFile = (p: string) =>
-    p === '/repo/.git/BISECT_START' ? 'issue/1-task\n' : null;
+    p === resolve('/repo/.git/BISECT_START') ? 'issue/1-task\n' : null;
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     pathExists,
     readFile,
@@ -1160,7 +1215,7 @@ test('detectInProgressOperation reports a bisect with a null tip when BISECT_STA
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/.git/BISECT_LOG\n',
+          stdout: `${resolve('/repo/.git/BISECT_LOG')}\n`,
           stderr: '',
         };
       }
@@ -1168,9 +1223,9 @@ test('detectInProgressOperation reports a bisect with a null tip when BISECT_STA
     }
     return { ok: true, status: 0, stdout: '', stderr: '' };
   };
-  const pathExists = (p: string) => p === '/repo/.git/BISECT_LOG';
+  const pathExists = (p: string) => p === resolve('/repo/.git/BISECT_LOG');
   const result = detectInProgressOperation(
-    '/repo',
+    resolve('/repo'),
     runGit,
     pathExists,
     () => null,
@@ -1187,7 +1242,7 @@ function baseArgs(
 ) {
   return {
     issue: 1,
-    worktree: '/repo/linked',
+    worktree: resolve('/repo/linked'),
     operatorConfirmedNoLiveSession: false,
     apply: false,
     agentId: 'test-agent',
@@ -1213,16 +1268,16 @@ function baseArgs(
  */
 function cleanRepoRunGit(
   argv: string[],
-  cwd = '/repo/linked',
+  cwd = resolve('/repo/linked'),
 ): LocalGitCommandResult {
   if (argv[0] === 'rev-parse' && argv.includes('--absolute-git-dir')) {
     return {
       ok: true,
       status: 0,
       stdout:
-        cwd === '/repo/primary'
-          ? '/repo/primary/.git\n'
-          : '/repo/primary/.git/worktrees/linked\n',
+        cwd === resolve('/repo/primary')
+          ? `${resolve('/repo/primary/.git')}\n`
+          : `${resolve('/repo/primary/.git/worktrees/linked')}\n`,
       stderr: '',
     };
   }
@@ -1256,16 +1311,16 @@ function fakeDeps(
     evidence: {
       local_worktree: {
         status: 'occupied',
-        paths: ['/repo/linked'],
+        paths: [resolve('/repo/linked')],
         reason: null,
       },
     },
   };
   const deps: LocalWorktreeRecoveryDeps = {
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -1273,7 +1328,7 @@ function fakeDeps(
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -1283,7 +1338,7 @@ function fakeDeps(
     ],
     confirmBlock: () => ({ ok: true, routing: okRouting, error: null }),
     checkLock: () => ({
-      path: '/repo/linked/.git/idd-claim.lock',
+      path: resolve('/repo/linked/.git/idd-claim.lock'),
       present: true,
       holder: {
         agentId: 'agent-x',
@@ -1301,12 +1356,15 @@ function fakeDeps(
     realpathOrNull: (p: string) => p,
     readlinkOrNull: () => null,
     readPathFingerprint: () => 'test-fingerprint',
-    acquireCloneLock: () => ({ path: '/repo/.idd-clone.lock', token: 'tok' }),
+    acquireCloneLock: () => ({
+      path: resolve('/repo/.idd-clone.lock'),
+      token: 'tok',
+    }),
     releaseCloneLock: () => {},
     resolveDevelopmentBranch: () => 'main',
     copyPath: () => {},
     removePath: () => {},
-    ensurePreserveDir: () => '/tmp/preserve',
+    ensurePreserveDir: () => resolve('/tmp/preserve'),
     now: () => '2026-09-25T00:00:00Z',
   };
   deps.removeWorktreeIfLockMatches = (
@@ -1458,7 +1516,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
   const deps = fakeDeps({
     acquireCloneLock: () => {
       callOrder.push('acquire');
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
     releaseCloneLock: () => {
       callOrder.push('release');
@@ -1477,7 +1535,7 @@ test('step 4 acquires the clone-scoped lock, re-checks, then removes, releasing 
             evidence: {
               local_worktree: {
                 status: 'occupied',
-                paths: ['/repo/linked'],
+                paths: [resolve('/repo/linked')],
                 reason: null,
               },
             },
@@ -1522,7 +1580,7 @@ test('apply passes the gate and reaches the same mutation flow when the Windows 
       windowsNoFollow: shim.deps,
       acquireCloneLock: () => {
         callOrder.push('acquire');
-        return { path: '/repo/.idd-clone.lock', token: 'tok' };
+        return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
       },
       releaseCloneLock: () => {
         callOrder.push('release');
@@ -1541,7 +1599,7 @@ test('apply passes the gate and reaches the same mutation flow when the Windows 
               evidence: {
                 local_worktree: {
                   status: 'occupied',
-                  paths: ['/repo/linked'],
+                  paths: [resolve('/repo/linked')],
                   reason: null,
                 },
               },
@@ -1642,7 +1700,7 @@ test('linked cleanup stops when an ignored path is reclassified by stash', () =>
     },
     copyPath: () => events.push('copy'),
     pathExists: (path) =>
-      path === '/repo/linked/hidden.env' ? sourcePresent : true,
+      path === resolve('/repo/linked/hidden.env') ? sourcePresent : true,
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
@@ -1660,7 +1718,7 @@ test('step 4 stops when the target worktree is replaced while waiting for the cl
   const deps = fakeDeps({
     acquireCloneLock: () => {
       phase = 'after';
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
     readDirectoryIdentity: (path) => ({
       dev: 'dev',
@@ -1690,7 +1748,7 @@ test('step 4 still releases the clone lock when removal fails', () => {
   const deps = fakeDeps({
     acquireCloneLock: () => {
       callOrder.push('acquire');
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
     releaseCloneLock: () => {
       callOrder.push('release');
@@ -1718,7 +1776,7 @@ test('step 4 verifies only the selected worktree after removal and never prunes 
     {
       acquireCloneLock: () => {
         callOrder.push('acquire');
-        return { path: '/repo/.idd-clone.lock', token: 'tok' };
+        return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
       },
       releaseCloneLock: () => {
         callOrder.push('release');
@@ -1739,7 +1797,7 @@ test('step 4 verifies only the selected worktree after removal and never prunes 
         return removed
           ? [
               {
-                path: '/repo/primary',
+                path: resolve('/repo/primary'),
                 branchRef: 'refs/heads/main',
                 detached: false,
                 bare: false,
@@ -1749,7 +1807,7 @@ test('step 4 verifies only the selected worktree after removal and never prunes 
             ]
           : [
               {
-                path: '/repo/primary',
+                path: resolve('/repo/primary'),
                 branchRef: 'refs/heads/main',
                 detached: false,
                 bare: false,
@@ -1757,7 +1815,7 @@ test('step 4 verifies only the selected worktree after removal and never prunes 
                 prunable: false,
               },
               {
-                path: '/repo/linked',
+                path: resolve('/repo/linked'),
                 branchRef: 'refs/heads/issue/1-task',
                 detached: false,
                 bare: false,
@@ -1767,7 +1825,7 @@ test('step 4 verifies only the selected worktree after removal and never prunes 
             ];
       },
       pathPresence: (path) => {
-        if (removed && path === '/repo/linked') {
+        if (removed && path === resolve('/repo/linked')) {
           callOrder.push('verify-path');
           return 'absent';
         }
@@ -1816,7 +1874,11 @@ test('step 4 records the observed target state and recovery action when verifica
     verdict.result,
     /post-removal verification failed: path=present/,
   );
-  assert.match(verdict.result, /target-record=present\(path=\/repo\/linked/);
+  assert.ok(
+    verdict.result.includes(
+      `target-record=present(path=${resolve('/repo/linked')},`,
+    ),
+  );
   assert.match(verdict.result, /Next action: re-run local-worktree-recovery/);
   assert.match(verdict.result, /do not run git worktree prune/);
 });
@@ -1824,7 +1886,7 @@ test('step 4 records the observed target state and recovery action when verifica
 test('step 4 holds and reports both observations when post-removal probes fail', () => {
   let removed = false;
   const primaryRecord = {
-    path: '/repo/primary',
+    path: resolve('/repo/primary'),
     branchRef: 'refs/heads/main',
     detached: false,
     bare: false,
@@ -1832,7 +1894,7 @@ test('step 4 holds and reports both observations when post-removal probes fail',
     prunable: false,
   };
   const linkedRecord = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -1872,7 +1934,7 @@ test('step 4 holds and reports both observations when post-removal probes fail',
 test('step 4 returns a preservation verdict when clone-lock acquisition throws', () => {
   let stashListCalls = 0;
   const deps = fakeDeps({
-    ensurePreserveDir: () => '/tmp/preserve',
+    ensurePreserveDir: () => resolve('/tmp/preserve'),
     runGit: (argv) => {
       if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
         return { ok: true, status: 0, stdout: '!! .env\0', stderr: '' };
@@ -1970,7 +2032,7 @@ test('step 4 stops removal when the worktree-local lock no longer matches the re
       checkLockCalls += 1;
       if (checkLockCalls === 1) {
         return {
-          path: '/repo/linked/.git/idd-claim.lock',
+          path: resolve('/repo/linked/.git/idd-claim.lock'),
           present: true,
           holder: {
             agentId: 'agent-x',
@@ -1980,7 +2042,7 @@ test('step 4 stops removal when the worktree-local lock no longer matches the re
         };
       }
       return {
-        path: '/repo/linked/.git/idd-claim.lock',
+        path: resolve('/repo/linked/.git/idd-claim.lock'),
         present: true,
         holder: {
           agentId: 'someone-else',
@@ -2002,7 +2064,7 @@ test('step 1 refuses an active or stale claim whose local lock is absent', () =>
   let removeCalled = false;
   const deps = fakeDeps({
     checkLock: () => ({
-      path: '/repo/linked/.git/idd-claim.lock',
+      path: resolve('/repo/linked/.git/idd-claim.lock'),
       present: false,
     }),
     runGit: (argv) => {
@@ -2021,7 +2083,7 @@ test('step 1 refuses an active or stale claim whose local lock is absent', () =>
 test('step 1 refuses a lockless active legacy claim', () => {
   const deps = fakeDeps({
     checkLock: () => ({
-      path: '/repo/linked/.git/idd-claim.lock',
+      path: resolve('/repo/linked/.git/idd-claim.lock'),
       present: false,
     }),
     confirmBlock: () => ({
@@ -2033,7 +2095,7 @@ test('step 1 refuses a lockless active legacy claim', () => {
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: null,
           },
         },
@@ -2051,7 +2113,7 @@ test('step 1 refuses a lockless active legacy claim', () => {
 
 test('step 4 proceeds when the worktree-local lock is absent at recheck time (legacy release)', () => {
   const deps = fakeDeps({
-    checkLock: () => ({ path: '/x', present: false }),
+    checkLock: () => ({ path: resolve('/x'), present: false }),
     confirmBlock: () => ({
       ok: true,
       routing: {
@@ -2062,7 +2124,7 @@ test('step 4 proceeds when the worktree-local lock is absent at recheck time (le
           released_claim: { claim_id: null, branch: 'issue/1-task' },
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: null,
           },
         },
@@ -2082,7 +2144,7 @@ test('step 1 always calls confirmBlock, even for a prunable-and-absent record (n
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2090,7 +2152,7 @@ test('step 1 always calls confirmBlock, even for a prunable-and-absent record (n
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2098,7 +2160,7 @@ test('step 1 always calls confirmBlock, even for a prunable-and-absent record (n
         prunable: true,
       },
     ],
-    pathExists: (p) => p !== '/repo/linked',
+    pathExists: (p) => p !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       return {
@@ -2110,7 +2172,7 @@ test('step 1 always calls confirmBlock, even for a prunable-and-absent record (n
           evidence: {
             local_worktree: {
               status: 'unreadable',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -2130,7 +2192,7 @@ test('prunable shortcut accepts the explicit absent probe from routing', () => {
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2138,7 +2200,7 @@ test('prunable shortcut accepts the explicit absent probe from routing', () => {
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2146,7 +2208,7 @@ test('prunable shortcut accepts the explicit absent probe from routing', () => {
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => ({
       ok: true,
       routing: {
@@ -2180,7 +2242,7 @@ test('prunable shortcut accepts the legacy-released routing shape', () => {
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2188,7 +2250,7 @@ test('prunable shortcut accepts the legacy-released routing shape', () => {
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2196,7 +2258,7 @@ test('prunable shortcut accepts the legacy-released routing shape', () => {
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => ({
       ok: true,
       routing: {
@@ -2231,7 +2293,7 @@ test('prunable shortcut refuses a fresh non-stale absent routing result', () => 
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2239,7 +2301,7 @@ test('prunable shortcut refuses a fresh non-stale absent routing result', () => 
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2247,7 +2309,7 @@ test('prunable shortcut refuses a fresh non-stale absent routing result', () => 
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => ({
       ok: true,
       routing: {
@@ -2283,7 +2345,7 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
   // gets.
   let listCalls = 0;
   const prunableRecord = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -2291,7 +2353,7 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
     prunable: true,
   };
   const primaryRecord = {
-    path: '/repo/primary',
+    path: resolve('/repo/primary'),
     branchRef: 'refs/heads/main',
     detached: false,
     bare: false,
@@ -2310,7 +2372,7 @@ test('step 4 re-verifies the prunable shortcut fresh under the clone lock, not j
         ? [primaryRecord, prunableRecord]
         : [primaryRecord, { ...prunableRecord, locked: true }];
     },
-    pathExists: (p) => p !== '/repo/linked',
+    pathExists: (p) => p !== resolve('/repo/linked'),
     runGit: (argv) => {
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
         removeCalled = true;
@@ -2334,7 +2396,7 @@ test('prunable shortcut rechecks takeover eligibility before removal', () => {
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2342,7 +2404,7 @@ test('prunable shortcut rechecks takeover eligibility before removal', () => {
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2350,7 +2412,7 @@ test('prunable shortcut rechecks takeover eligibility before removal', () => {
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       const stale = confirmCalls === 1;
@@ -2388,7 +2450,7 @@ test('prunable shortcut rechecks takeover eligibility before removal', () => {
 test('prunable shortcut removes the worktree with `--force`', () => {
   const removeArgv: string[][] = [];
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -2398,7 +2460,7 @@ test('prunable shortcut removes the worktree with `--force`', () => {
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2420,7 +2482,7 @@ test('prunable shortcut removes the worktree with `--force`', () => {
     deps,
   );
   assert.deepEqual(removeArgv, [
-    ['worktree', 'remove', '--force', '/repo/linked'],
+    ['worktree', 'remove', '--force', resolve('/repo/linked')],
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -2429,9 +2491,9 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
   const copied: string[] = [];
   let removed = false;
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: (_from, to) => copied.push(to),
@@ -2444,7 +2506,7 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
     removed
       ? [
           {
-            path: '/repo/primary',
+            path: resolve('/repo/primary'),
             branchRef: 'refs/heads/main',
             detached: false,
             bare: false,
@@ -2454,7 +2516,7 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
         ]
       : [
           {
-            path: '/repo/primary',
+            path: resolve('/repo/primary'),
             branchRef: 'refs/heads/main',
             detached: false,
             bare: false,
@@ -2462,7 +2524,7 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
             prunable: false,
           },
           {
-            path: '/repo/linked',
+            path: resolve('/repo/linked'),
             branchRef: 'refs/heads/issue/1-task',
             detached: false,
             bare: false,
@@ -2474,25 +2536,25 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(copied, ['/tmp/preserve/prunable-gitdir']);
+  assert.deepEqual(copied, [resolve('/tmp/preserve/prunable-gitdir')]);
   assert.equal(verdict.plan.prunableAdminCopy?.copiedTo, copied[0]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
 test('prunable shortcut validates explicit preserve-dir before creating it inside the vanished admin directory (Copilot review finding)', () => {
-  const adminPath = '/repo/primary/.git/worktrees/linked';
+  const adminPath = resolve('/repo/primary/.git/worktrees/linked');
   const unsafePreserveDir = `${adminPath}/preserve`;
   let ensurePreserveDirCalls = 0;
   let copyCalled = false;
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     realpathOrNull: (path) => path,
     findWorktreeAdminDir: () => ({ path: adminPath, error: null }),
     runGit: (argv, cwd) => {
       if (
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir') &&
-        cwd === '/repo/linked'
+        cwd === resolve('/repo/linked')
       ) {
         return { ok: false, status: 1, stdout: '', stderr: 'vanished' };
       }
@@ -2508,7 +2570,7 @@ test('prunable shortcut validates explicit preserve-dir before creating it insid
   });
   deps.listWorktreeRecords = () => [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -2516,7 +2578,7 @@ test('prunable shortcut validates explicit preserve-dir before creating it insid
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -2541,9 +2603,9 @@ test('prunable shortcut validates explicit preserve-dir before creating it insid
 
 test('retains a partial prunable admin copy and blocks removal', () => {
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: () => {
@@ -2552,7 +2614,7 @@ test('retains a partial prunable admin copy and blocks removal', () => {
   });
   deps.listWorktreeRecords = () => [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -2560,7 +2622,7 @@ test('retains a partial prunable admin copy and blocks removal', () => {
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -2573,13 +2635,13 @@ test('retains a partial prunable admin copy and blocks removal', () => {
     deps,
   );
   assert.deepEqual(verdict.plan.prunableAdminCopy, {
-    source: '/repo/primary/.git/worktrees/linked',
-    copiedTo: '/tmp/preserve/prunable-gitdir',
+    source: resolve('/repo/primary/.git/worktrees/linked'),
+    copiedTo: resolve('/tmp/preserve/prunable-gitdir'),
     destinationFingerprint: null,
     copyFailed: true,
-    plannedTo: '/tmp/preserve/prunable-gitdir',
+    plannedTo: resolve('/tmp/preserve/prunable-gitdir'),
   });
-  assert.equal(verdict.preserveDir, '/tmp/preserve');
+  assert.equal(verdict.preserveDir, resolve('/tmp/preserve'));
   assert.equal(verdict.mutated, true);
   assert.equal(verdict.plan.removal?.ran, false);
   assert.match(verdict.result, /could not copy the prunable/);
@@ -2601,7 +2663,7 @@ test('prunable shortcut rechecks claim identity after copying private admin data
           evidence: {
             local_worktree: {
               status: 'unreadable',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -2609,9 +2671,9 @@ test('prunable shortcut rechecks claim identity after copying private admin data
         error: null,
       };
     },
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: () => {},
@@ -2624,7 +2686,7 @@ test('prunable shortcut rechecks claim identity after copying private admin data
   });
   deps.listWorktreeRecords = () => [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -2632,7 +2694,7 @@ test('prunable shortcut rechecks claim identity after copying private admin data
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -2656,7 +2718,7 @@ test('prunable shortcut rechecks legacy release status before removal', () => {
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2664,7 +2726,7 @@ test('prunable shortcut rechecks legacy release status before removal', () => {
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2672,7 +2734,7 @@ test('prunable shortcut rechecks legacy release status before removal', () => {
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       const released = confirmCalls < 5;
@@ -2693,7 +2755,7 @@ test('prunable shortcut rechecks legacy release status before removal', () => {
             },
             local_worktree: {
               status: 'unreadable',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -2702,7 +2764,7 @@ test('prunable shortcut rechecks legacy release status before removal', () => {
       };
     },
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: () => {},
@@ -2728,7 +2790,7 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
   let backupExists = false;
   let removeCalled = false;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -2738,7 +2800,7 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2748,8 +2810,9 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
       record,
     ],
     pathExists: (path) => {
-      if (path === '/repo/linked') return false;
-      if (path === '/tmp/preserve/prunable-gitdir') return backupExists;
+      if (path === resolve('/repo/linked')) return false;
+      if (path === resolve('/tmp/preserve/prunable-gitdir'))
+        return backupExists;
       return true;
     },
     confirmBlock: () => {
@@ -2764,7 +2827,7 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
           evidence: {
             local_worktree: {
               status: 'unreadable',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -2773,7 +2836,7 @@ test('prunable shortcut re-verifies the admin backup immediately before removal'
       };
     },
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: () => {
@@ -2800,7 +2863,7 @@ test('prunable shortcut rechecks claim identity after final backup verification'
   let confirmCalls = 0;
   let removeCalled = false;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -2810,7 +2873,7 @@ test('prunable shortcut rechecks claim identity after final backup verification'
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2819,7 +2882,7 @@ test('prunable shortcut rechecks claim identity after final backup verification'
       },
       record,
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       return {
@@ -2834,7 +2897,7 @@ test('prunable shortcut rechecks claim identity after final backup verification'
           evidence: {
             local_worktree: {
               status: 'unreadable',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -2843,7 +2906,7 @@ test('prunable shortcut rechecks claim identity after final backup verification'
       };
     },
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     copyPath: () => {},
@@ -2868,7 +2931,7 @@ test('prunable shortcut stops when the target is recreated after the final recor
   let targetPathChecks = 0;
   let removeCalled = false;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -2878,7 +2941,7 @@ test('prunable shortcut stops when the target is recreated after the final recor
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2888,7 +2951,7 @@ test('prunable shortcut stops when the target is recreated after the final recor
       record,
     ],
     pathExists: (path) => {
-      if (path !== '/repo/linked') return false;
+      if (path !== resolve('/repo/linked')) return false;
       targetPathChecks += 1;
       // The second final shortcut predicate observes a checkout recreated
       // after the first final record check. It must fail closed instead of
@@ -2904,7 +2967,7 @@ test('prunable shortcut stops when the target is recreated after the final recor
         evidence: {
           local_worktree: {
             status: 'unreadable',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: 'recreated checkout is unreadable',
           },
         },
@@ -2932,7 +2995,7 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2940,7 +3003,7 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2948,7 +3011,7 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
         prunable: true,
       },
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     findWorktreeAdminDir: () => ({
       path: null,
       error: 'no readable gitdir pointer matched the target',
@@ -2973,14 +3036,15 @@ test('prunable shortcut stops when private admin-directory ownership cannot be e
 
 test('dry-run planning failures clear the ready gate', () => {
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked' && path !== '/tmp/explicit',
+    pathExists: (path) =>
+      path !== resolve('/repo/linked') && path !== resolve('/tmp/explicit'),
     findWorktreeAdminDir: () => ({
       path: null,
       error: 'no readable gitdir pointer matched the target',
     }),
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -2988,7 +3052,7 @@ test('dry-run planning failures clear the ready gate', () => {
         prunable: false,
       },
       {
-        path: '/repo/linked',
+        path: resolve('/repo/linked'),
         branchRef: 'refs/heads/issue/1-task',
         detached: false,
         bare: false,
@@ -2998,7 +3062,7 @@ test('dry-run planning failures clear the ready gate', () => {
     ],
   });
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    baseArgs({ apply: false, preserveDir: resolve('/tmp/explicit') }),
     deps,
   );
   assert.equal(verdict.ready, false);
@@ -3029,7 +3093,7 @@ test('dry-run preservation probe failures clear the ready gate', () => {
 
 test('dry-run rejects an existing explicit preserve directory', () => {
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ apply: false, preserveDir: '/tmp/preserve' }),
+    baseArgs({ apply: false, preserveDir: resolve('/tmp/preserve') }),
     fakeDeps(),
   );
   assert.equal(verdict.step1.outcome, 'preserve-dir-exists');
@@ -3043,7 +3107,7 @@ test('apply reserves an explicit preserve directory before any Git mutation', ()
   const verdict = runLocalWorktreeRecovery(
     baseArgs({
       apply: true,
-      preserveDir: '/tmp/preserve',
+      preserveDir: resolve('/tmp/preserve'),
       operatorConfirmedNoLiveSession: true,
     }),
     fakeDeps({
@@ -3070,19 +3134,20 @@ test('apply reserves an explicit preserve directory before any Git mutation', ()
 test('dry-run plans a prunable worktree private admin-directory backup without creating it', () => {
   let ensureCalls = 0;
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked' && path !== '/tmp/explicit',
+    pathExists: (path) =>
+      path !== resolve('/repo/linked') && path !== resolve('/tmp/explicit'),
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
     ensurePreserveDir: () => {
       ensureCalls += 1;
-      return '/tmp/explicit';
+      return resolve('/tmp/explicit');
     },
   });
   deps.listWorktreeRecords = () => [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -3090,7 +3155,7 @@ test('dry-run plans a prunable worktree private admin-directory backup without c
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -3099,32 +3164,32 @@ test('dry-run plans a prunable worktree private admin-directory backup without c
     },
   ];
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    baseArgs({ apply: false, preserveDir: resolve('/tmp/explicit') }),
     deps,
   );
   assert.equal(ensureCalls, 0);
-  assert.equal(verdict.preserveDir, '/tmp/explicit');
+  assert.equal(verdict.preserveDir, resolve('/tmp/explicit'));
   assert.deepEqual(verdict.plan.prunableAdminCopy, {
-    source: '/repo/primary/.git/worktrees/linked',
+    source: resolve('/repo/primary/.git/worktrees/linked'),
     copiedTo: null,
     destinationFingerprint: null,
     copyFailed: false,
-    plannedTo: '/tmp/explicit/prunable-gitdir',
+    plannedTo: resolve('/tmp/explicit/prunable-gitdir'),
   });
   assert.equal(verdict.plan.removal?.ran, false);
 });
 
 test('dry-run rejects an existing explicit preserve directory for a prunable shortcut', () => {
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     findWorktreeAdminDir: () => ({
-      path: '/repo/primary/.git/worktrees/linked',
+      path: resolve('/repo/primary/.git/worktrees/linked'),
       error: null,
     }),
   });
   deps.listWorktreeRecords = () => [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -3132,7 +3197,7 @@ test('dry-run rejects an existing explicit preserve directory for a prunable sho
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -3141,7 +3206,7 @@ test('dry-run rejects an existing explicit preserve directory for a prunable sho
     },
   ];
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ apply: false, preserveDir: '/tmp/explicit' }),
+    baseArgs({ apply: false, preserveDir: resolve('/tmp/explicit') }),
     deps,
   );
   assert.equal(verdict.step1.outcome, 'preserve-dir-exists');
@@ -3154,7 +3219,7 @@ test('prunable shortcut stops when the record becomes locked immediately before 
   let listCalls = 0;
   let removeCalled = false;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -3166,7 +3231,7 @@ test('prunable shortcut stops when the record becomes locked immediately before 
       listCalls += 1;
       return [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -3438,8 +3503,7 @@ test('verified unmerged fallback authorizes a narrow forced retry for dirty remo
             ok: false,
             status: 1,
             stdout: '',
-            stderr:
-              "fatal: '/repo/linked' contains modified or untracked files, use --force to delete it",
+            stderr: `fatal: ${resolve('/repo/linked')} contains modified or untracked files, use --force to delete it`,
           };
     },
   });
@@ -3464,7 +3528,7 @@ test('legacy lockless claims may complete the forced retry through the guard', (
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: null,
           },
           released_claim: { claim_id: null, branch: 'issue/1-task' },
@@ -3473,7 +3537,7 @@ test('legacy lockless claims may complete the forced retry through the guard', (
       error: null,
     }),
     checkLock: () => ({
-      path: '/repo/linked/.git/idd-claim.lock',
+      path: resolve('/repo/linked/.git/idd-claim.lock'),
       present: false,
     }),
     removeWorktreeIfLockMatches: (_path, _repo, _expected, force) => {
@@ -3505,7 +3569,7 @@ test('verified prunable shortcuts may keep unreadable routing during final check
   let removeCalled = false;
   let confirmCalls = 0;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -3515,7 +3579,7 @@ test('verified prunable shortcuts may keep unreadable routing during final check
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -3524,7 +3588,7 @@ test('verified prunable shortcuts may keep unreadable routing during final check
       },
       record,
     ],
-    pathExists: (p) => p !== '/repo/linked',
+    pathExists: (p) => p !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       const finalCheck = confirmCalls >= 2;
@@ -3541,7 +3605,7 @@ test('verified prunable shortcuts may keep unreadable routing during final check
               status: finalCheck
                 ? ('unreadable' as const)
                 : ('occupied' as const),
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: finalCheck ? 'prunable path is absent' : null,
             },
           },
@@ -3569,7 +3633,7 @@ test('dry-run never creates the preserve directory for an uninitialized submodul
   const deps = fakeDeps({
     ensurePreserveDir: () => {
       ensureCalls += 1;
-      return '/tmp/preserve';
+      return resolve('/tmp/preserve');
     },
     runGit: (argv) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
@@ -3596,7 +3660,7 @@ test('unknown uninitialized-submodule paths block removal before preservation is
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 uninitialized\n'
               : '',
           stderr: '',
@@ -3611,7 +3675,7 @@ test('unknown uninitialized-submodule paths block removal before preservation is
       return cleanRepoRunGit(argv, cwd);
     },
     pathPresence: (path) =>
-      path === '/repo/linked/uninitialized' ? 'unknown' : 'present',
+      path === resolve('/repo/linked/uninitialized') ? 'unknown' : 'present',
     copyPath: (_from, to) => copied.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
@@ -3637,7 +3701,7 @@ test('retains a partial uninitialized-submodule copy and blocks removal', () => 
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? '-abc123 submodule\n' : '',
+          stdout: cwd === resolve('/repo/linked') ? '-abc123 submodule\n' : '',
           stderr: '',
         };
       }
@@ -3675,7 +3739,8 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? `-${sha} uninitialized*\n` : '',
+          stdout:
+            cwd === resolve('/repo/linked') ? `-${sha} uninitialized*\n` : '',
           stderr: '',
         };
       }
@@ -3687,7 +3752,9 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked' ? ' M tracked.txt\n?? uninitialized*\n' : '',
+            cwd === resolve('/repo/linked')
+              ? ' M tracked.txt\n?? uninitialized*\n'
+              : '',
           stderr: '',
         };
       }
@@ -3748,7 +3815,7 @@ test('excludes uninitialized submodule contents from the parent stash', () => {
 test('refuses the cwd-inside-target invariant before step 1 ever runs', () => {
   let confirmCalls = 0;
   const deps = fakeDeps({
-    cwd: () => '/repo/linked/nested',
+    cwd: () => resolve('/repo/linked/nested'),
     confirmBlock: () => {
       confirmCalls += 1;
       return { ok: true, routing: null, error: null };
@@ -3762,14 +3829,14 @@ test('refuses the cwd-inside-target invariant before step 1 ever runs', () => {
 test('refuses invocation from a linked worktree even when targeting the primary', () => {
   let confirmCalls = 0;
   const deps = fakeDeps({
-    cwd: () => '/repo/linked',
+    cwd: () => resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       return { ok: true, routing: null, error: null };
     },
   });
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ worktree: '/repo/primary' }),
+    baseArgs({ worktree: resolve('/repo/primary') }),
     deps,
   );
   assert.equal(verdict.step1.outcome, 'cwd-outside-primary');
@@ -3803,7 +3870,7 @@ test('refuses --preserve-dir inside the target worktree before any mutation (Cop
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      preserveDir: '/repo/linked/backup',
+      preserveDir: resolve('/repo/linked/backup'),
     }),
     deps,
   );
@@ -3813,15 +3880,17 @@ test('refuses --preserve-dir inside the target worktree before any mutation (Cop
 
 test('refuses a dangling preserve-dir symlink into the target worktree', () => {
   const deps = fakeDeps({
-    realpathOrNull: (p) => (p === '/repo/linked' ? p : null),
+    realpathOrNull: (p) => (p === resolve('/repo/linked') ? p : null),
     readlinkOrNull: (p) =>
-      p === '/tmp/preserve-link' ? '/repo/linked/not-created' : null,
+      p === resolve('/tmp/preserve-link')
+        ? resolve('/repo/linked/not-created')
+        : null,
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      preserveDir: '/tmp/preserve-link',
+      preserveDir: resolve('/tmp/preserve-link'),
     }),
     deps,
   );
@@ -3837,7 +3906,7 @@ test('refuses a preserve directory inside the linked worktree private gitdir', (
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stdout: `${resolve('/repo/primary/.git/worktrees/linked')}\n`,
           stderr: '',
         };
       }
@@ -3848,7 +3917,7 @@ test('refuses a preserve directory inside the linked worktree private gitdir', (
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      preserveDir: '/repo/primary/.git/worktrees/linked/preserve',
+      preserveDir: resolve('/repo/primary/.git/worktrees/linked/preserve'),
     }),
     deps,
   );
@@ -3859,9 +3928,11 @@ test('refuses a preserve directory inside the linked worktree private gitdir', (
 test('refuses an ignored-file destination whose child symlink points into the target', () => {
   let removeCalled = false;
   const deps = fakeDeps({
-    realpathOrNull: (p) => (p === '/repo/linked' ? p : null),
+    realpathOrNull: (p) => (p === resolve('/repo/linked') ? p : null),
     readlinkOrNull: (p) =>
-      p === '/tmp/preserve/ignored' ? '/repo/linked/.redirect' : null,
+      p === resolve('/tmp/preserve/ignored')
+        ? resolve('/repo/linked/.redirect')
+        : null,
     runGit: (argv) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
         return {
@@ -3881,7 +3952,7 @@ test('refuses an ignored-file destination whose child symlink points into the ta
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      preserveDir: '/tmp/preserve',
+      preserveDir: resolve('/tmp/preserve'),
     }),
     deps,
   );
@@ -3892,12 +3963,14 @@ test('refuses an ignored-file destination whose child symlink points into the ta
 
 test('refuses an ignored-file destination whose child symlink points into the linked private gitdir', () => {
   let removeCalled = false;
-  const privateGitDir = '/repo/primary/.git/worktrees/linked';
+  const privateGitDir = resolve('/repo/primary/.git/worktrees/linked');
   const deps = fakeDeps({
     realpathOrNull: (p) =>
-      p === '/repo/linked' || p === privateGitDir ? p : null,
+      p === resolve('/repo/linked') || p === privateGitDir ? p : null,
     readlinkOrNull: (p) =>
-      p === '/tmp/preserve/ignored' ? `${privateGitDir}/redirect` : null,
+      p === resolve('/tmp/preserve/ignored')
+        ? `${privateGitDir}/redirect`
+        : null,
     runGit: (argv, cwd) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
         return {
@@ -3917,7 +3990,7 @@ test('refuses an ignored-file destination whose child symlink points into the li
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      preserveDir: '/tmp/preserve',
+      preserveDir: resolve('/tmp/preserve'),
     }),
     deps,
   );
@@ -3941,7 +4014,8 @@ test('uses collision-safe destinations for uninitialized submodule paths', () =>
       }
       return cleanRepoRunGit(argv);
     },
-    pathExists: (path) => !path.includes('/.git/worktrees/linked/modules/'),
+    pathExists: (path) =>
+      !path.includes(join('/.git/worktrees/linked/modules/')),
     copyPath: (_from, to) => copiedTo.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
@@ -3964,7 +4038,7 @@ test('refuses a fresh routing state of `-local-worktree-unreadable` outside the 
         evidence: {
           local_worktree: {
             status: 'unreadable',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: 'some read failure',
           },
         },
@@ -3984,7 +4058,7 @@ test('independently verified prunable worktrees may be unreadable at recheck', (
   let confirmCalls = 0;
   let removeCalled = false;
   const record = {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -3994,7 +4068,7 @@ test('independently verified prunable worktrees may be unreadable at recheck', (
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -4003,7 +4077,7 @@ test('independently verified prunable worktrees may be unreadable at recheck', (
       },
       record,
     ],
-    pathExists: (path) => path !== '/repo/linked',
+    pathExists: (path) => path !== resolve('/repo/linked'),
     confirmBlock: () => {
       confirmCalls += 1;
       const unreadable = confirmCalls >= 2;
@@ -4020,7 +4094,7 @@ test('independently verified prunable worktrees may be unreadable at recheck', (
               status: unreadable
                 ? ('unreadable' as const)
                 : ('occupied' as const),
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: unreadable ? 'prunable path is absent' : null,
             },
           },
@@ -4082,7 +4156,7 @@ test('a submodule-only parent status does not create a pointless parent stash', 
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stdout: cwd === resolve('/repo/linked') ? ' M submodule\n' : '',
           stderr: '',
         };
       }
@@ -4114,7 +4188,7 @@ test('an unstaged submodule HEAD difference stays in the parent scope', () => {
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stdout: cwd === resolve('/repo/linked') ? ' M submodule\n' : '',
           stderr: '',
         };
       }
@@ -4158,7 +4232,7 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '+abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
               : '',
           stderr: '',
@@ -4169,23 +4243,23 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' M submodule\n'
-              : cwd === '/repo/linked/submodule'
+              : cwd === resolve('/repo/linked/submodule')
                 ? ' M changed.txt\n'
                 : '',
           stderr: '',
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir')
       ) {
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/linked/.git/modules/submodule\n',
+          stdout: `${resolve('/repo/linked/.git/modules/submodule')}\n`,
           stderr: '',
         };
       }
@@ -4198,8 +4272,8 @@ test('a `+` submodule preserves its private admin data even when no ref is unpus
     deps,
   );
   assert.deepEqual(copied, [
-    '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
-    '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+    resolve('/tmp/preserve/submodule-gitdir/c3VibW9kdWxl'),
+    resolve('/tmp/preserve/submodule-gitdir/c3VibW9kdWxl'),
   ]);
   assert.equal(
     verdict.plan.stashes.find((stash) => stash.scope === 'submodule')
@@ -4226,14 +4300,14 @@ test('late preservation rescans initialized submodule ignored files before remov
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
               : '',
           stderr: '',
         };
       }
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
-        if (cwd === '/repo/linked/submodule') {
+        if (cwd === resolve('/repo/linked/submodule')) {
           // A per-batch recheck names its paths after `--` (issue #5224). It
           // re-reads what the cleanup scan just saw; it is not a new scan.
           if (argv.includes('--')) {
@@ -4266,24 +4340,27 @@ test('late preservation rescans initialized submodule ignored files before remov
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? ' M submodule\n' : '',
+          stdout: cwd === resolve('/repo/linked') ? ' M submodule\n' : '',
           stderr: '',
         };
       }
       if (argv[0] === 'clean') {
         cleanedPaths.add(
-          `/repo/linked/submodule/${String(argv.at(-1)).replace(':(literal)', '')}`,
+          join(
+            resolve('/repo/linked/submodule'),
+            String(argv.at(-1)).replace(':(literal)', ''),
+          ),
         );
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir')
       ) {
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git/modules/submodule\n',
+          stdout: `${resolve('/repo/primary/.git/modules/submodule')}\n`,
           stderr: '',
         };
       }
@@ -4299,23 +4376,25 @@ test('late preservation rescans initialized submodule ignored files before remov
   );
   assert.deepEqual(copied, [
     {
-      to: '/tmp/preserve/ignored/submodule/cache.tmp',
-      sourceRoot: '/repo/linked',
+      to: resolve('/tmp/preserve/ignored/submodule/cache.tmp'),
+      sourceRoot: resolve('/repo/linked'),
       additionalSourceRoots: [
-        '/repo/linked',
-        '/repo/linked/submodule',
-        '/repo/primary/.git/worktrees/linked',
-        '/repo/primary/.git/modules/submodule',
+        resolve('/repo/linked'),
+        resolve('/repo/linked/submodule'),
+        resolve('/repo/primary/.git/worktrees/linked'),
+        resolve('/repo/primary/.git/modules/submodule'),
       ],
     },
     {
-      to: '/tmp/preserve/ignored/final-removal/submodule/final-cache.tmp',
-      sourceRoot: '/repo/linked',
+      to: resolve(
+        '/tmp/preserve/ignored/final-removal/submodule/final-cache.tmp',
+      ),
+      sourceRoot: resolve('/repo/linked'),
       additionalSourceRoots: [
-        '/repo/linked',
-        '/repo/linked/submodule',
-        '/repo/primary/.git/worktrees/linked',
-        '/repo/primary/.git/modules/submodule',
+        resolve('/repo/linked'),
+        resolve('/repo/linked/submodule'),
+        resolve('/repo/primary/.git/worktrees/linked'),
+        resolve('/repo/primary/.git/modules/submodule'),
       ],
     },
   ]);
@@ -4356,7 +4435,7 @@ test('records partial ignored-file copies and blocks removal when a later copy f
   assert.equal(verdict.plan.ignoredFilesCopied[0]?.copiedTo !== null, true);
   assert.equal(
     verdict.plan.ignoredFilesCopied[1]?.copiedTo,
-    '/tmp/preserve/ignored/second.tmp',
+    resolve('/tmp/preserve/ignored/second.tmp'),
   );
   assert.equal(verdict.plan.ignoredFilesCopied[1]?.copyFailed, true);
   assert.equal(verdict.mutated, true);
@@ -4375,7 +4454,7 @@ test('late preservation refreshes uninitialized submodule copies before removal'
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 uninitialized\n'
               : '',
           stderr: '',
@@ -4385,7 +4464,7 @@ test('late preservation refreshes uninitialized submodule copies before removal'
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stdout: `${resolve('/repo/primary/.git/worktrees/linked')}\n`,
           stderr: '',
         };
       }
@@ -4394,7 +4473,8 @@ test('late preservation refreshes uninitialized submodule copies before removal'
       }
       return cleanRepoRunGit(argv, cwd);
     },
-    pathExists: (path) => !path.includes('/.git/worktrees/linked/modules/'),
+    pathExists: (path) =>
+      !path.includes(join('/.git/worktrees/linked/modules/')),
     copyPath: (_from, to, _sourceRoot, additionalSourceRoots) =>
       copied.push({ to, additionalSourceRoots }),
   });
@@ -4405,13 +4485,13 @@ test('late preservation refreshes uninitialized submodule copies before removal'
   assert.equal(copied.length, 3);
   assert.equal(copied[0]?.to, copied[1]?.to);
   assert.deepEqual(copied[0]?.additionalSourceRoots, [
-    '/repo/primary/.git/worktrees/linked',
+    resolve('/repo/primary/.git/worktrees/linked'),
   ]);
   assert.deepEqual(copied[1]?.additionalSourceRoots, [
-    '/repo/primary/.git/worktrees/linked',
+    resolve('/repo/primary/.git/worktrees/linked'),
   ]);
   assert.deepEqual(copied[2]?.additionalSourceRoots, [
-    '/repo/primary/.git/worktrees/linked',
+    resolve('/repo/primary/.git/worktrees/linked'),
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
@@ -4422,12 +4502,12 @@ test('late preservation discovers an uninitialized submodule that appears after 
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
-        if (cwd === '/repo/linked') submoduleStatusCalls += 1;
+        if (cwd === resolve('/repo/linked')) submoduleStatusCalls += 1;
         return {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 late-submodule\n'
               : '',
           stderr: '',
@@ -4437,7 +4517,7 @@ test('late preservation discovers an uninitialized submodule that appears after 
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git/worktrees/linked\n',
+          stdout: `${resolve('/repo/primary/.git/worktrees/linked')}\n`,
           stderr: '',
         };
       }
@@ -4447,9 +4527,10 @@ test('late preservation discovers an uninitialized submodule that appears after 
       return cleanRepoRunGit(argv, cwd);
     },
     pathExists: (path) =>
-      path === '/repo/linked' ||
-      (path === '/repo/linked/late-submodule' && submoduleStatusCalls >= 2) ||
-      path.startsWith('/tmp/preserve'),
+      path === resolve('/repo/linked') ||
+      (path === resolve('/repo/linked/late-submodule') &&
+        submoduleStatusCalls >= 2) ||
+      path.startsWith(resolve('/tmp/preserve')),
     copyPath: (_from, to) => copied.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
@@ -4469,12 +4550,12 @@ test('late preservation rejects an uninitialized submodule that becomes initiali
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
-        if (cwd === '/repo/linked') submoduleStatusCalls += 1;
+        if (cwd === resolve('/repo/linked')) submoduleStatusCalls += 1;
         return {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? submoduleStatusCalls === 1
                 ? '-abc123 late-submodule\n'
                 : ' abc123 late-submodule (heads/main)\n'
@@ -4491,9 +4572,9 @@ test('late preservation rejects an uninitialized submodule that becomes initiali
       return cleanRepoRunGit(argv, cwd);
     },
     pathExists: (path) =>
-      path === '/repo/linked' ||
-      path === '/repo/linked/late-submodule' ||
-      path.startsWith('/tmp/preserve'),
+      path === resolve('/repo/linked') ||
+      path === resolve('/repo/linked/late-submodule') ||
+      path.startsWith(resolve('/tmp/preserve')),
   });
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
@@ -4523,7 +4604,7 @@ test('late preservation rejects an unreadable ownership suffix after refresh', (
           evidence: {
             local_worktree: {
               status: confirmCalls >= 4 ? 'unreadable' : 'occupied',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -4537,7 +4618,7 @@ test('late preservation rejects an unreadable ownership suffix after refresh', (
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 uninitialized\n'
               : '',
           stderr: '',
@@ -4572,7 +4653,7 @@ test('preserves nested deinitialized submodule admin data', () => {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' abc123def456abc123def456abc123def456abcd parent (heads/main)\n-0000000000000000000000000000000000000000 parent/child\n'
               : '',
           stderr: '',
@@ -4593,8 +4674,10 @@ test('preserves nested deinitialized submodule admin data', () => {
     copied.some(
       ({ from, to }) =>
         from ===
-          '/repo/primary/.git/worktrees/linked/modules/parent/modules/child' &&
-        to === '/tmp/preserve/submodule-gitdir/cGFyZW50L2NoaWxk',
+          resolve(
+            '/repo/primary/.git/worktrees/linked/modules/parent/modules/child',
+          ) &&
+        to === resolve('/tmp/preserve/submodule-gitdir/cGFyZW50L2NoaWxk'),
     ),
   );
   assert.equal(verdict.plan.removal?.ran, true);
@@ -4609,7 +4692,7 @@ test('preserves slash-containing deinitialized submodule admin data', () => {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 libs/parent\n'
               : '',
           stderr: '',
@@ -4629,9 +4712,13 @@ test('preserves slash-containing deinitialized submodule admin data', () => {
   assert.ok(
     copied.some(
       ({ from, to }) =>
-        from === '/repo/primary/.git/worktrees/linked/modules/libs/parent' &&
+        from ===
+          resolve('/repo/primary/.git/worktrees/linked/modules/libs/parent') &&
         to ===
-          `/tmp/preserve/submodule-gitdir/${Buffer.from('libs/parent').toString('base64url')}`,
+          resolve(
+            '/tmp/preserve/submodule-gitdir',
+            Buffer.from('libs/parent').toString('base64url'),
+          ),
     ),
   );
   assert.equal(verdict.plan.removal?.ran, true);
@@ -4653,7 +4740,7 @@ test('late preservation refuses a claim change before removal', () => {
           evidence: {
             local_worktree: {
               status: 'occupied',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -4667,7 +4754,7 @@ test('late preservation refuses a claim change before removal', () => {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? '-0000000000000000000000000000000000000000 uninitialized\n'
               : '',
           stderr: '',
@@ -4711,7 +4798,7 @@ test('ordinary linked removal rechecks claim identity immediately before removal
           evidence: {
             local_worktree: {
               status: 'occupied',
-              paths: ['/repo/linked'],
+              paths: [resolve('/repo/linked')],
               reason: null,
             },
           },
@@ -4752,7 +4839,7 @@ test('a staged superproject gitlink is not excluded as a submodule-only change',
         return {
           ok: true,
           status: 0,
-          stdout: cwd === '/repo/linked' ? 'M  submodule\n' : '',
+          stdout: cwd === resolve('/repo/linked') ? 'M  submodule\n' : '',
           stderr: '',
         };
       }
@@ -4835,7 +4922,10 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
       }
       if (argv[0] === 'clean') {
         cleanedPaths.add(
-          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+          join(
+            resolve('/repo/linked'),
+            String(argv.at(-1)).replace(':(literal)', ''),
+          ),
         );
       }
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
@@ -4852,10 +4942,12 @@ test('rescans ignored files immediately before ordinary linked removal', () => {
   );
   assert.equal(ignoredScanCalls, 9);
   assert.deepEqual(copied, [
-    '/tmp/preserve/ignored/late.env',
-    '/tmp/preserve/ignored/final-removal/final.env',
-    '/tmp/preserve/ignored/final-removal-after-confirm/after-confirm.env',
-    '/tmp/preserve/ignored/after-final-confirmation.env',
+    resolve('/tmp/preserve/ignored/late.env'),
+    resolve('/tmp/preserve/ignored/final-removal/final.env'),
+    resolve(
+      '/tmp/preserve/ignored/final-removal-after-confirm/after-confirm.env',
+    ),
+    resolve('/tmp/preserve/ignored/after-final-confirmation.env'),
   ]);
   assert.equal(
     verdict.plan.ignoredFilesCopied.at(-1)?.path,
@@ -4878,7 +4970,10 @@ test('stops removal when a preserved ignored backup changes before cleanup', () 
       if (argv[0] === 'clean') {
         cleaned = true;
         cleanedPaths.add(
-          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+          join(
+            resolve('/repo/linked'),
+            String(argv.at(-1)).replace(':(literal)', ''),
+          ),
         );
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
@@ -4889,7 +4984,7 @@ test('stops removal when a preserved ignored backup changes before cleanup', () 
     },
     pathExists: (path) => !cleanedPaths.has(path),
     readPathFingerprint: (path) => {
-      if (String(path).startsWith('/tmp/preserve/')) {
+      if (String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`)) {
         destinationReads += 1;
         return destinationReads === 1 ? 'recorded-backup' : 'tampered-backup';
       }
@@ -4917,7 +5012,7 @@ test('verifies only the newest ignored snapshot after a refresh', () => {
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
-        const topLevel = cwd === undefined || cwd === '/repo/linked';
+        const topLevel = cwd === undefined || cwd === resolve('/repo/linked');
         if (topLevel && sourceVisible) {
           visibleTopLevelScans += 1;
           // The second top-level scan refreshes the same ignored path after
@@ -4944,9 +5039,9 @@ test('verifies only the newest ignored snapshot after a refresh', () => {
       return cleanRepoRunGit(argv, cwd);
     },
     pathExists: (path) =>
-      path === '/repo/linked/secret.env' ? sourceVisible : true,
+      path === resolve('/repo/linked/secret.env') ? sourceVisible : true,
     readPathFingerprint: (path) =>
-      String(path).startsWith('/tmp/preserve/')
+      String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`)
         ? 'dest-stable'
         : `source-v${generation}`,
     copyPath: () => {},
@@ -5004,7 +5099,8 @@ test('blocks cleanup when a preserved ignored source changes after its copy', ()
       return cleanRepoRunGit(argv);
     },
     readPathFingerprint: (path) => {
-      if (String(path).startsWith('/tmp/preserve/')) return 'backup-stable';
+      if (String(path).startsWith(`${resolve('/tmp/preserve')}${sep}`))
+        return 'backup-stable';
       fingerprintCalls += 1;
       // The copy records a matching before/after pair. The next source read
       // is the post-copy check and must observe the edit.
@@ -5080,7 +5176,7 @@ test('linked removal rechecks routing after final ignored-file cleanup', () => {
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: null,
           },
         },
@@ -5106,7 +5202,10 @@ test('linked removal rechecks routing after final ignored-file cleanup', () => {
       }
       if (argv[0] === 'clean') {
         cleanedPaths.add(
-          `/repo/linked/${String(argv.at(-1)).replace(':(literal)', '')}`,
+          join(
+            resolve('/repo/linked'),
+            String(argv.at(-1)).replace(':(literal)', ''),
+          ),
         );
       }
       if (argv[0] === 'worktree' && argv[1] === 'remove') {
@@ -5144,7 +5243,7 @@ test('linked removal rechecks routing after an empty final confirmation scan', (
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: null,
           },
         },
@@ -5309,7 +5408,7 @@ test('step 4 stops removal when the fresh claim/branch identity no longer matche
             evidence: {
               local_worktree: {
                 status: 'occupied',
-                paths: ['/repo/linked'],
+                paths: [resolve('/repo/linked')],
                 reason: null,
               },
             },
@@ -5405,13 +5504,13 @@ test('fresh stash verification rejects a stale duplicate tag after the new stash
 test('fresh preservation verification rejects a copied artifact redirected into the target', () => {
   let redirected = false;
   let removeCalled = false;
-  const copiedIgnoredFile = '/tmp/preserve/ignored/.env';
+  const copiedIgnoredFile = resolve('/tmp/preserve/ignored/.env');
   const deps = fakeDeps({
     acquireCloneLock: () => {
       redirected = true;
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
-    ensurePreserveDir: () => '/tmp/preserve',
+    ensurePreserveDir: () => resolve('/tmp/preserve'),
     runGit: (argv) => {
       if (argv[0] === 'status' && argv.includes('--porcelain=v1')) {
         return { ok: true, status: 0, stdout: '!! .env\0', stderr: '' };
@@ -5423,7 +5522,7 @@ test('fresh preservation verification rejects a copied artifact redirected into 
     },
     realpathOrNull: (path) =>
       redirected && path === copiedIgnoredFile
-        ? '/repo/linked/.git/redirected-artifact'
+        ? resolve('/repo/linked/.git/redirected-artifact')
         : path,
   });
   const verdict = runLocalWorktreeRecovery(
@@ -6241,7 +6340,7 @@ test('primary recovery does not treat missing released evidence as a legacy rele
 });
 
 test('primary legacy recovery reserves an absent lock before checkout', () => {
-  const root = '/repo/primary';
+  const root = resolve('/repo/primary');
   let checkoutDone = false;
   let lockPresent = false;
   let primaryMarker: PrimaryRecoveryLockMarker | null = null;
@@ -6440,7 +6539,7 @@ test('primary recovery resolves the development branch before preservation', () 
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/primary'],
+            paths: [resolve('/repo/primary')],
             reason: null,
           },
         },
@@ -6465,7 +6564,7 @@ test('primary recovery resolves the development branch before preservation', () 
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -6487,7 +6586,7 @@ test('primary recovery verifies the development branch exists before preservatio
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/primary'],
+            paths: [resolve('/repo/primary')],
             reason: null,
           },
         },
@@ -6517,7 +6616,7 @@ test('primary recovery verifies the development branch exists before preservatio
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -6538,7 +6637,7 @@ test('primary dry-run verifies the development branch exists before removal', ()
         evidence: {
           local_worktree: {
             status: 'occupied',
-            paths: ['/repo/primary'],
+            paths: [resolve('/repo/primary')],
             reason: null,
           },
         },
@@ -6556,7 +6655,7 @@ test('primary dry-run verifies the development branch exists before removal', ()
         : cleanRepoRunGit(argv),
   });
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ worktree: '/repo/primary' }),
+    baseArgs({ worktree: resolve('/repo/primary') }),
     deps,
   );
   assert.equal(verdict.mutated, false);
@@ -6906,7 +7005,7 @@ test('primary recovery removes initialized submodules deleted by the target bran
         path === root ||
         path === join(root, '.git') ||
         path === join(root, '.git/modules/submodule') ||
-        path.startsWith('/tmp/preserve') ||
+        path.startsWith(resolve('/tmp/preserve')) ||
         (submodulePresent && path === submodulePath) ||
         existsSync(path),
       confirmBlock: () => {
@@ -7005,8 +7104,9 @@ test('primary recovery removes initialized submodules deleted by the target bran
             status: 0,
             stdout:
               cwd === root
-                ? `${root}/.git\n`
-                : `${root}/.git/modules/submodule\n`,
+                ? `${resolve(root, '.git')}\n`
+                : `${resolve(root, '.git/modules/submodule')}\n`,
+
             stderr: '',
           };
         }
@@ -7028,7 +7128,7 @@ test('primary recovery removes initialized submodules deleted by the target bran
         rmSync(path, { recursive: true, force: true });
       },
       copyPath: (_from, _to, sourceRoot) => {
-        if (sourceRoot === `${root}/.git/modules/submodule`) {
+        if (sourceRoot === join(root, '.git', 'modules', 'submodule')) {
           events.push('copy-submodule-admin');
         }
       },
@@ -7092,7 +7192,7 @@ test('primary recovery stops when an initialized submodule tip changes late', ()
         path === submodulePath ||
         path === join(root, '.git') ||
         path === join(submodulePath, '.git') ||
-        path.startsWith('/tmp/preserve'),
+        path.startsWith(resolve('/tmp/preserve')),
       confirmBlock: () => {
         confirmCalls += 1;
         return {
@@ -7250,7 +7350,6 @@ test('primary recovery removes late ignored files before reporting release', () 
       },
       copyPath: (_from, to) => {
         events.push(`copy:${to}`);
-        mkdirSync(to, { recursive: true });
       },
       runGit: (argv, cwd) => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
@@ -7328,16 +7427,19 @@ test('primary recovery removes late ignored files before reporting release', () 
       deps,
     );
     assert.equal(ignoredScanCalls, 7);
-    assert.equal(events.includes(`copy:${preserveDir}/ignored/stale*`), true);
+    assert.equal(
+      events.includes(`copy:${join(preserveDir, 'ignored', 'stale*')}`),
+      true,
+    );
     assert.equal(
       events.includes(
-        `copy:${preserveDir}/ignored/post-checkout/generated-during-checkout*`,
+        `copy:${join(preserveDir, 'ignored', 'post-checkout', 'generated-during-checkout*')}`,
       ),
       true,
     );
     assert.equal(
       events.includes(
-        `copy:${preserveDir}/ignored/final-lock/generated-before-release*`,
+        `copy:${join(preserveDir, 'ignored', 'final-lock', 'generated-before-release*')}`,
       ),
       true,
     );
@@ -7611,7 +7713,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -7619,9 +7721,9 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     checkLock: () => ({
-      path: '/repo/primary/.git/idd-claim.lock',
+      path: resolve('/repo/primary/.git/idd-claim.lock'),
       present: false,
     }),
     confirmBlock: (() => {
@@ -7638,7 +7740,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
                 status: call <= 3 ? 'occupied' : 'absent',
-                paths: call <= 3 ? ['/repo/primary'] : [],
+                paths: call <= 3 ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -7653,7 +7755,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git\n',
+          stdout: `${resolve('/repo/primary/.git')}\n`,
           stderr: '',
         };
       }
@@ -7664,7 +7766,7 @@ test('primary-worktree release only deletes a lock the fresh recheck positively 
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -7684,7 +7786,7 @@ test('primary-worktree release rechecks the complete status immediately before l
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -7692,7 +7794,7 @@ test('primary-worktree release rechecks the complete status immediately before l
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     confirmBlock: (() => {
       let calls = 0;
       return () => {
@@ -7709,7 +7811,7 @@ test('primary-worktree release rechecks the complete status immediately before l
             evidence: {
               local_worktree: {
                 status: occupied ? 'occupied' : 'absent',
-                paths: occupied ? ['/repo/primary'] : [],
+                paths: occupied ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -7748,7 +7850,7 @@ test('primary-worktree release rechecks the complete status immediately before l
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -7766,7 +7868,7 @@ test('primary-worktree release rechecks claim identity after the final status pr
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -7774,7 +7876,7 @@ test('primary-worktree release rechecks claim identity after the final status pr
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     confirmBlock: (() => {
       let calls = 0;
       return () => {
@@ -7792,7 +7894,7 @@ test('primary-worktree release rechecks claim identity after the final status pr
               released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
               local_worktree: {
                 status: occupied ? 'occupied' : 'absent',
-                paths: occupied ? ['/repo/primary'] : [],
+                paths: occupied ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -7805,7 +7907,7 @@ test('primary-worktree release rechecks claim identity after the final status pr
       checkLockCalls += 1;
       const claimId = finalStatusProbe ? 'claim-y' : 'claim-x';
       return {
-        path: '/repo/primary/.git/idd-claim.lock',
+        path: resolve('/repo/primary/.git/idd-claim.lock'),
         present: true,
         holder: {
           agentId: 'test-agent',
@@ -7835,7 +7937,7 @@ test('primary-worktree release rechecks claim identity after the final status pr
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -7867,7 +7969,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -7875,7 +7977,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     checkLock: () => {
       checkLockCalls += 1;
       // Calls 1-3 are step 1, step 4's first recheck, and the immediate
@@ -7885,7 +7987,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
       // check. All seven must observe the recovered claim's lock before
       // deletion is authorized.
       return {
-        path: '/repo/primary/.git/idd-claim.lock',
+        path: resolve('/repo/primary/.git/idd-claim.lock'),
         present: true,
         holder: {
           agentId: 'claude-a0b633a6',
@@ -7913,7 +8015,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
             released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
             local_worktree: {
               status: confirmCalls <= 3 ? 'occupied' : 'absent',
-              paths: confirmCalls <= 3 ? ['/repo/primary'] : [],
+              paths: confirmCalls <= 3 ? [resolve('/repo/primary')] : [],
               reason: null,
             },
           },
@@ -7927,7 +8029,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git\n',
+          stdout: `${resolve('/repo/primary/.git')}\n`,
           stderr: '',
         };
       }
@@ -7938,7 +8040,7 @@ test('primary-worktree release accepts a new-format claim after checkout', () =>
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -7957,7 +8059,7 @@ test('primary-worktree release does not delete a lock replaced by another claim'
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -7965,11 +8067,11 @@ test('primary-worktree release does not delete a lock replaced by another claim'
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     checkLock: () => {
       checkLockCalls += 1;
       return {
-        path: '/repo/primary/.git/idd-claim.lock',
+        path: resolve('/repo/primary/.git/idd-claim.lock'),
         present: true,
         holder: {
           agentId: 'someone-else',
@@ -7994,7 +8096,7 @@ test('primary-worktree release does not delete a lock replaced by another claim'
             evidence: {
               local_worktree: {
                 status: call <= 3 ? 'occupied' : 'absent',
-                paths: call <= 3 ? ['/repo/primary'] : [],
+                paths: call <= 3 ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -8014,7 +8116,7 @@ test('primary-worktree release does not delete a lock replaced by another claim'
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -8030,7 +8132,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -8038,12 +8140,12 @@ test('primary-worktree release stops when the recovered claim lock disappears at
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     checkLock: () => {
       checkLockCalls += 1;
       return checkLockCalls < 4
         ? {
-            path: '/repo/primary/.git/idd-claim.lock',
+            path: resolve('/repo/primary/.git/idd-claim.lock'),
             present: true,
             holder: {
               agentId: 'agent-x',
@@ -8052,7 +8154,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
             },
           }
         : {
-            path: '/repo/primary/.git/idd-claim.lock',
+            path: resolve('/repo/primary/.git/idd-claim.lock'),
             present: false,
           };
     },
@@ -8073,7 +8175,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
                 status: call <= 3 ? 'occupied' : 'absent',
-                paths: call <= 3 ? ['/repo/primary'] : [],
+                paths: call <= 3 ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -8088,7 +8190,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git\n',
+          stdout: `${resolve('/repo/primary/.git')}\n`,
           stderr: '',
         };
       }
@@ -8099,7 +8201,7 @@ test('primary-worktree release stops when the recovered claim lock disappears at
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -8115,7 +8217,7 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
   const deps = fakeDeps({
     listWorktreeRecords: () => [
       {
-        path: '/repo/primary',
+        path: resolve('/repo/primary'),
         branchRef: 'refs/heads/main',
         detached: false,
         bare: false,
@@ -8123,16 +8225,16 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
         prunable: false,
       },
     ],
-    cwd: () => '/repo/primary',
+    cwd: () => resolve('/repo/primary'),
     checkLock: () => {
       checkLockCalls += 1;
       return checkLockCalls < 4
         ? {
-            path: '/repo/primary/.git/idd-claim.lock',
+            path: resolve('/repo/primary/.git/idd-claim.lock'),
             present: false,
           }
         : {
-            path: '/repo/primary/.git/idd-claim.lock',
+            path: resolve('/repo/primary/.git/idd-claim.lock'),
             present: true,
             holder: {
               agentId: 'new-agent',
@@ -8155,7 +8257,7 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
               released_claim: { claim_id: null, branch: 'issue/1-task' },
               local_worktree: {
                 status: call <= 3 ? 'occupied' : 'absent',
-                paths: call <= 3 ? ['/repo/primary'] : [],
+                paths: call <= 3 ? [resolve('/repo/primary')] : [],
                 reason: null,
               },
             },
@@ -8175,7 +8277,7 @@ test('primary legacy release refuses a non-legacy lock at the final check', () =
     baseArgs({
       apply: true,
       operatorConfirmedNoLiveSession: true,
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
     }),
     deps,
   );
@@ -8326,10 +8428,10 @@ test('retains a partial unmerged fallback copy and blocks removal', () => {
   );
   assert.equal(
     verdict.plan.stashes[0]?.unmergedFallbackCopiedTo,
-    '/tmp/preserve/unmerged-Lg',
+    resolve('/tmp/preserve/unmerged-Lg'),
   );
   assert.deepEqual(verdict.plan.stashes[0]?.unmergedFallbackCopiedFiles, [
-    '/tmp/preserve/unmerged-Lg/conflict.txt',
+    resolve('/tmp/preserve/unmerged-Lg/conflict.txt'),
   ]);
   assert.equal(verdict.plan.stashes[0]?.unmergedFallbackAllPreserved, false);
   assert.equal(verdict.mutated, true);
@@ -8346,7 +8448,7 @@ test('unmerged initialized-submodule fallback uses the parent worktree as symlin
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
               : '',
           stderr: '',
@@ -8360,16 +8462,16 @@ test('unmerged initialized-submodule fallback uses the parent worktree as symlin
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' M submodule\n'
-              : cwd === '/repo/linked/submodule'
+              : cwd === resolve('/repo/linked/submodule')
                 ? '?? conflict.txt\n'
                 : '',
           stderr: '',
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'stash' &&
         argv[1] === 'push'
       ) {
@@ -8388,7 +8490,10 @@ test('unmerged initialized-submodule fallback uses the parent worktree as symlin
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
-  assert.deepEqual(sourceRoots, ['/repo/linked', '/repo/linked']);
+  assert.deepEqual(sourceRoots, [
+    resolve('/repo/linked'),
+    resolve('/repo/linked'),
+  ]);
   assert.equal(verdict.plan.removal?.ran, true);
 });
 
@@ -8437,7 +8542,10 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
           stderr: '',
         };
       }
-      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+      if (
+        cwd === resolve('/repo/linked/submodule') &&
+        argv[0] === 'for-each-ref'
+      ) {
         queriedAllSubmoduleRefs = argv.includes('refs');
         return {
           ok: true,
@@ -8447,7 +8555,7 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'stash' &&
         argv[1] === 'list'
       ) {
@@ -8459,21 +8567,21 @@ test('copies an initialized submodule admin dir for pre-existing stashes or loca
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-list' &&
         argv.includes('--not')
       ) {
         return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir')
       ) {
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/linked/.git/modules/submodule\n',
+          stdout: `${resolve('/repo/linked/.git/modules/submodule')}\n`,
           stderr: '',
         };
       }
@@ -8515,7 +8623,10 @@ test('does not treat initialized submodule remote-tracking refs as local-only', 
           stderr: '',
         };
       }
-      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+      if (
+        cwd === resolve('/repo/linked/submodule') &&
+        argv[0] === 'for-each-ref'
+      ) {
         refQuery = argv;
         return {
           ok: true,
@@ -8544,7 +8655,7 @@ test('copies linked worktree admin data for top-level local refs', () => {
   const copied: Array<{ from: string; to: string }> = [];
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
-      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+      if (cwd === resolve('/repo/linked') && argv[0] === 'for-each-ref') {
         return {
           ok: true,
           status: 0,
@@ -8553,7 +8664,7 @@ test('copies linked worktree admin data for top-level local refs', () => {
         };
       }
       if (
-        cwd === '/repo/linked' &&
+        cwd === resolve('/repo/linked') &&
         argv[0] === 'rev-list' &&
         argv.includes('--not')
       ) {
@@ -8568,18 +8679,18 @@ test('copies linked worktree admin data for top-level local refs', () => {
     deps,
   );
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
-    copiedTo: '/tmp/preserve/worktree-gitdir',
-    plannedTo: '/tmp/preserve/worktree-gitdir',
+    copiedTo: resolve('/tmp/preserve/worktree-gitdir'),
+    plannedTo: resolve('/tmp/preserve/worktree-gitdir'),
     destinationFingerprint: 'test-fingerprint',
   });
   assert.deepEqual(copied, [
     {
-      from: '/repo/primary/.git/worktrees/linked',
-      to: '/tmp/preserve/worktree-gitdir',
+      from: resolve('/repo/primary/.git/worktrees/linked'),
+      to: resolve('/tmp/preserve/worktree-gitdir'),
     },
     {
-      from: '/repo/primary/.git/worktrees/linked',
-      to: '/tmp/preserve/worktree-gitdir',
+      from: resolve('/repo/primary/.git/worktrees/linked'),
+      to: resolve('/tmp/preserve/worktree-gitdir'),
     },
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
@@ -8588,7 +8699,7 @@ test('copies linked worktree admin data for top-level local refs', () => {
 test('retains a partial top-level worktree admin copy and blocks removal', () => {
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
-      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+      if (cwd === resolve('/repo/linked') && argv[0] === 'for-each-ref') {
         return {
           ok: true,
           status: 0,
@@ -8597,7 +8708,7 @@ test('retains a partial top-level worktree admin copy and blocks removal', () =>
         };
       }
       if (
-        cwd === '/repo/linked' &&
+        cwd === resolve('/repo/linked') &&
         argv[0] === 'rev-list' &&
         argv.includes('--not')
       ) {
@@ -8614,8 +8725,8 @@ test('retains a partial top-level worktree admin copy and blocks removal', () =>
     deps,
   );
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
-    copiedTo: '/tmp/preserve/worktree-gitdir',
-    plannedTo: '/tmp/preserve/worktree-gitdir',
+    copiedTo: resolve('/tmp/preserve/worktree-gitdir'),
+    plannedTo: resolve('/tmp/preserve/worktree-gitdir'),
     destinationFingerprint: null,
   });
   assert.equal(verdict.mutated, true);
@@ -8628,7 +8739,7 @@ test('copies linked worktree admin data for top-level private bisect refs', () =
   let queriedBisectRefs = false;
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
-      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+      if (cwd === resolve('/repo/linked') && argv[0] === 'for-each-ref') {
         queriedBisectRefs = argv.includes('refs/bisect');
         return {
           ok: true,
@@ -8638,7 +8749,7 @@ test('copies linked worktree admin data for top-level private bisect refs', () =
         };
       }
       if (
-        cwd === '/repo/linked' &&
+        cwd === resolve('/repo/linked') &&
         argv[0] === 'rev-list' &&
         argv.includes('--not')
       ) {
@@ -8656,12 +8767,12 @@ test('copies linked worktree admin data for top-level private bisect refs', () =
   assert.notEqual(verdict.plan.worktreeAdminCopy, null);
   assert.deepEqual(copied, [
     {
-      from: '/repo/primary/.git/worktrees/linked',
-      to: '/tmp/preserve/worktree-gitdir',
+      from: resolve('/repo/primary/.git/worktrees/linked'),
+      to: resolve('/tmp/preserve/worktree-gitdir'),
     },
     {
-      from: '/repo/primary/.git/worktrees/linked',
-      to: '/tmp/preserve/worktree-gitdir',
+      from: resolve('/repo/primary/.git/worktrees/linked'),
+      to: resolve('/tmp/preserve/worktree-gitdir'),
     },
   ]);
   assert.equal(verdict.plan.removal?.ran, true);
@@ -8672,7 +8783,7 @@ test('does not copy linked worktree admin data for shared refs alone', () => {
   let queriedWorktreeRefs = false;
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
-      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+      if (cwd === resolve('/repo/linked') && argv[0] === 'for-each-ref') {
         queriedWorktreeRefs = argv.includes('refs/worktree');
         return {
           ok: true,
@@ -8702,14 +8813,14 @@ test('copies linked worktree admin data for an interrupted operation without loc
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
       if (
-        cwd === '/repo/linked' &&
+        cwd === resolve('/repo/linked') &&
         argv[0] === 'rev-parse' &&
         argv.includes('-q') &&
         argv.includes('MERGE_HEAD')
       ) {
         return { ok: true, status: 0, stdout: 'merge-head\n', stderr: '' };
       }
-      if (cwd === '/repo/linked' && argv[0] === 'for-each-ref') {
+      if (cwd === resolve('/repo/linked') && argv[0] === 'for-each-ref') {
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
       return cleanRepoRunGit(argv, cwd);
@@ -8721,14 +8832,14 @@ test('copies linked worktree admin data for an interrupted operation without loc
     deps,
   );
   assert.deepEqual(verdict.plan.worktreeAdminCopy, {
-    copiedTo: '/tmp/preserve/worktree-gitdir',
-    plannedTo: '/tmp/preserve/worktree-gitdir',
+    copiedTo: resolve('/tmp/preserve/worktree-gitdir'),
+    plannedTo: resolve('/tmp/preserve/worktree-gitdir'),
     destinationFingerprint: 'test-fingerprint',
   });
   assert.deepEqual(copied, [
     {
-      from: '/repo/primary/.git/worktrees/linked',
-      to: '/tmp/preserve/worktree-gitdir',
+      from: resolve('/repo/primary/.git/worktrees/linked'),
+      to: resolve('/tmp/preserve/worktree-gitdir'),
     },
   ]);
 });
@@ -8736,14 +8847,14 @@ test('copies linked worktree admin data for an interrupted operation without loc
 test('dry-run plans an initialized submodule admin export without copying it', () => {
   const copied: string[] = [];
   const deps = fakeDeps({
-    pathExists: (path) => path !== '/tmp/preserve',
+    pathExists: (path) => path !== resolve('/tmp/preserve'),
     runGit: (argv, cwd) => {
       if (argv[0] === 'submodule' && argv[1] === 'status') {
         return {
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
               : '',
           stderr: '',
@@ -8754,21 +8865,21 @@ test('dry-run plans an initialized submodule admin export without copying it', (
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked/submodule'
+            cwd === resolve('/repo/linked/submodule')
               ? ' M changed.txt\n'
               : ' M submodule\n',
           stderr: '',
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir')
       ) {
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/linked/.git/modules/submodule\n',
+          stdout: `${resolve('/repo/linked/.git/modules/submodule')}\n`,
           stderr: '',
         };
       }
@@ -8777,7 +8888,7 @@ test('dry-run plans an initialized submodule admin export without copying it', (
     copyPath: (_from, to) => copied.push(to),
   });
   const verdict = runLocalWorktreeRecovery(
-    baseArgs({ apply: false, preserveDir: '/tmp/preserve' }),
+    baseArgs({ apply: false, preserveDir: resolve('/tmp/preserve') }),
     deps,
   );
   assert.deepEqual(copied, []);
@@ -8785,7 +8896,7 @@ test('dry-run plans an initialized submodule admin export without copying it', (
     {
       path: 'submodule',
       copiedTo: null,
-      plannedTo: '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl',
+      plannedTo: resolve('/tmp/preserve/submodule-gitdir/c3VibW9kdWxl'),
       destinationFingerprint: null,
       copyFailed: false,
     },
@@ -8802,13 +8913,16 @@ test('retains a partial initialized-submodule admin copy and blocks removal', ()
           ok: true,
           status: 0,
           stdout:
-            cwd === '/repo/linked'
+            cwd === resolve('/repo/linked')
               ? ' abc123def456abc123def456abc123def456abcd submodule (heads/main)\n'
               : '',
           stderr: '',
         };
       }
-      if (cwd === '/repo/linked/submodule' && argv[0] === 'for-each-ref') {
+      if (
+        cwd === resolve('/repo/linked/submodule') &&
+        argv[0] === 'for-each-ref'
+      ) {
         return {
           ok: true,
           status: 0,
@@ -8817,7 +8931,7 @@ test('retains a partial initialized-submodule admin copy and blocks removal', ()
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'stash' &&
         argv[1] === 'list'
       ) {
@@ -8829,21 +8943,21 @@ test('retains a partial initialized-submodule admin copy and blocks removal', ()
         };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-list' &&
         argv.includes('--not')
       ) {
         return { ok: true, status: 0, stdout: 'local-only-sha\n', stderr: '' };
       }
       if (
-        cwd === '/repo/linked/submodule' &&
+        cwd === resolve('/repo/linked/submodule') &&
         argv[0] === 'rev-parse' &&
         argv.includes('--absolute-git-dir')
       ) {
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/linked/.git/modules/submodule\n',
+          stdout: `${resolve('/repo/linked/.git/modules/submodule')}\n`,
           stderr: '',
         };
       }
@@ -8859,9 +8973,14 @@ test('retains a partial initialized-submodule admin copy and blocks removal', ()
     deps,
   );
   const entry = verdict.plan.submoduleAdminCopies[0];
-  assert.equal(entry?.copiedTo, '/tmp/preserve/submodule-gitdir/c3VibW9kdWxl');
+  assert.equal(
+    entry?.copiedTo,
+    resolve('/tmp/preserve/submodule-gitdir/c3VibW9kdWxl'),
+  );
   assert.equal(entry?.copyFailed, true);
-  assert.deepEqual(copied, ['/tmp/preserve/submodule-gitdir/c3VibW9kdWxl']);
+  assert.deepEqual(copied, [
+    resolve('/tmp/preserve/submodule-gitdir/c3VibW9kdWxl'),
+  ]);
   assert.equal(verdict.plan.removal, null);
   assert.equal(verdict.mutated, true);
 });
@@ -9223,7 +9342,7 @@ test('sandbox: clean worktree, no changes -- no stash, no backup ref, removal pr
       ['worktree', 'list', '--porcelain'],
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(!worktreeList.includes(sandbox.linked));
+    assert.ok(!gitPath(worktreeList).includes(gitPath(sandbox.linked)));
   } finally {
     restoreGh();
     sandbox.cleanup();
@@ -9279,7 +9398,7 @@ test('sandbox: removing the selected worktree leaves unrelated prunable admin da
       ['worktree', 'list', '--porcelain'],
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(!worktreeListAfter.includes(sandbox.linked));
+    assert.ok(!gitPath(worktreeListAfter).includes(gitPath(sandbox.linked)));
     assert.match(worktreeListAfter, /branch refs\/heads\/issue\/104-unrelated/);
     assert.match(worktreeListAfter, /prunable/);
     assert.equal(snapshotDirectoryTree(unrelatedAdminDir), adminSnapshotBefore);
@@ -9412,7 +9531,7 @@ test('sandbox: refusal without --operator-confirmed-no-live-session never mutate
       ['worktree', 'list', '--porcelain'],
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(worktreeList.includes(sandbox.linked));
+    assert.ok(gitPath(worktreeList).includes(gitPath(sandbox.linked)));
     const stashList = execFileSync('git', ['stash', 'list'], {
       cwd: sandbox.linked,
       encoding: 'utf8',
@@ -9448,7 +9567,7 @@ test('sandbox: default (no --apply) never mutates even with the operator flag', 
       ['worktree', 'list', '--porcelain'],
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(worktreeList.includes(sandbox.linked));
+    assert.ok(gitPath(worktreeList).includes(gitPath(sandbox.linked)));
   } finally {
     restoreGh();
     sandbox.cleanup();
@@ -9469,8 +9588,8 @@ type RecoveryIdentity = {
   ctimeNs?: string | null;
 };
 
-const SEAM_WORKTREE = '/repo/linked';
-const SEAM_ADMIN = '/repo/primary/.git/worktrees/linked';
+const SEAM_WORKTREE = resolve('/repo/linked');
+const SEAM_ADMIN = resolve('/repo/primary/.git/worktrees/linked');
 const SEAM_UNCHANGED: RecoveryIdentity = { dev: '9', ino: '9' };
 
 function seamReplacementRun(
@@ -9481,7 +9600,7 @@ function seamReplacementRun(
   let phase: 'before' | 'after' = 'before';
   let removeCalls = 0;
   const deps = fakeDeps({
-    checkLock: () => ({ path: '/x', present: false }),
+    checkLock: () => ({ path: resolve('/x'), present: false }),
     confirmBlock: () => ({
       ok: true,
       routing: {
@@ -9501,7 +9620,7 @@ function seamReplacementRun(
     }),
     acquireCloneLock: () => {
       phase = 'after';
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
     readDirectoryIdentity: (path) => {
       const which =
@@ -9824,7 +9943,14 @@ for (const testCase of PRODUCTION_BIRTH_CASES) {
         103,
         ['--apply', '--operator-confirmed-no-live-session'],
         {
-          NODE_OPTIONS: `--require ${shimPath}`,
+          // Quoted, so a profile path with a space stays one NODE_OPTIONS value;
+          // forward slashes keep the quoted value free of backslash escapes.
+          NODE_OPTIONS: [
+            process.env.NODE_OPTIONS,
+            `--require "${shimPath.replaceAll('\\', '/')}"`,
+          ]
+            .filter(Boolean)
+            .join(' '),
           IDD_LWR_SHIM_PLAN: JSON.stringify(plan),
           IDD_LWR_SHIM_REPORT: reportPath,
         },
@@ -9846,7 +9972,7 @@ for (const testCase of PRODUCTION_BIRTH_CASES) {
           ['worktree', 'list', '--porcelain'],
           { cwd: sandbox.primary, encoding: 'utf8' },
         );
-        assert.ok(!worktreeList.includes(sandbox.linked));
+        assert.ok(!gitPath(worktreeList).includes(gitPath(sandbox.linked)));
       }
     } finally {
       restoreGh();
@@ -9874,7 +10000,7 @@ function evidenceRouting(
     evidence: {
       local_worktree: {
         status: 'occupied',
-        paths: ['/repo/linked'],
+        paths: [resolve('/repo/linked')],
         reason: null,
       },
     },
@@ -9927,7 +10053,7 @@ function evidenceRecord(
     claim: 'claim-x',
     set: 'none',
     decision: 'dec-1',
-    subject: '/repo/linked',
+    subject: resolve('/repo/linked'),
     locationNote: false,
     failureNote: false,
     ...overrides,
@@ -9956,10 +10082,10 @@ function evidenceRead(
 }
 
 const EVIDENCE_REAL_PATHS = new Set([
-  '/repo/primary',
-  '/repo/primary/.git',
-  '/repo/linked',
-  '/repo/primary/.git/worktrees/linked',
+  resolve('/repo/primary'),
+  resolve('/repo/primary/.git'),
+  resolve('/repo/linked'),
+  resolve('/repo/primary/.git/worktrees/linked'),
 ]);
 
 /** An in-memory state root for the #4957 guards. */
@@ -9973,7 +10099,7 @@ function virtualStateRoot(
     mkdirFails?: string;
   } = {},
 ) {
-  const stateRoot = options.stateRoot ?? '/state';
+  const stateRoot = options.stateRoot ?? resolve('/state');
   const dirs = new Set<string>([stateRoot, ...(options.dirs ?? [])]);
   const reads = new Map<string, number>();
   const made: string[] = [];
@@ -10006,8 +10132,9 @@ function virtualStateRoot(
   return { guards, made, dirs };
 }
 
-const EVIDENCE_DESTINATION =
-  '/state/idd-skill/lwr-preserved/1-20261110T010203Z';
+const EVIDENCE_DESTINATION = resolve(
+  '/state/idd-skill/lwr-preserved/1-20261110T010203Z',
+);
 
 function oldEntry(overrides: Partial<WalkEntry> = {}): WalkEntry {
   return { isDirectory: false, nlink: 1, mtimeMs: 0, ctimeMs: 0, ...overrides };
@@ -10017,10 +10144,12 @@ function quietTree(
   extra: Record<string, WalkEntry & { children?: string[] }> = {},
 ): Record<string, WalkEntry & { children?: string[] }> {
   return {
-    '/repo/linked': oldEntry({ isDirectory: true }) as WalkEntry & {
+    [resolve('/repo/linked')]: oldEntry({ isDirectory: true }) as WalkEntry & {
       children?: string[];
     },
-    '/repo/primary/.git/worktrees/linked': oldEntry({ isDirectory: true }),
+    [resolve('/repo/primary/.git/worktrees/linked')]: oldEntry({
+      isDirectory: true,
+    }),
     ...extra,
   };
 }
@@ -10043,7 +10172,9 @@ function walkPortsOf(
 }
 
 function procPortsOf(
-  workDirs: Record<string, string | { code: string }> = { '1': '/elsewhere' },
+  workDirs: Record<string, string | { code: string }> = {
+    '1': resolve('/elsewhere'),
+  },
   platform: NodeJS.Platform = 'linux',
 ): ProcPorts {
   return {
@@ -10116,7 +10247,7 @@ function evidenceFixture(
         return {
           ok: true,
           status: 0,
-          stdout: '/repo/primary/.git\n',
+          stdout: `${resolve('/repo/primary/.git')}\n`,
           stderr: '',
         };
       }
@@ -10129,16 +10260,15 @@ function evidenceFixture(
       }
       return inner(argv, cwd);
     },
-    copyPath: (from, to) => {
+    copyPath: (from, _to) => {
       mutations.push(`copy:${from}`);
-      void to;
     },
     removePath: (path) => {
       mutations.push(`remove:${path}`);
     },
     acquireCloneLock: () => {
       events.push('acquire');
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      return { path: resolve('/repo/.idd-clone.lock'), token: 'tok' };
     },
     releaseCloneLock: () => {
       events.push('release');
@@ -10196,8 +10326,8 @@ test('evidence: every condition holds, so steps 3 and 4 run with the durable pre
   );
   assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
   assert.deepEqual(fixture.state.made, [
-    '/state/idd-skill',
-    '/state/idd-skill/lwr-preserved',
+    resolve('/state/idd-skill'),
+    resolve('/state/idd-skill/lwr-preserved'),
     EVIDENCE_DESTINATION,
   ]);
   assert.ok(fixture.state.dirs.has(EVIDENCE_DESTINATION));
@@ -10362,7 +10492,7 @@ test('evidence: a released claim needs no stale age', () => {
     evidence: {
       local_worktree: {
         status: 'occupied',
-        paths: ['/repo/linked'],
+        paths: [resolve('/repo/linked')],
         reason: null,
       },
       released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
@@ -10385,7 +10515,7 @@ test('evidence: both the evidence flag and the operator flag is a usage error, a
         '--issue',
         '1',
         '--worktree',
-        '/repo/linked',
+        resolve('/repo/linked'),
         '--mechanical-evidence',
         '--operator-confirmed-no-live-session',
       ]),
@@ -10407,17 +10537,17 @@ test('evidence: --preserve-dir is a usage error and a refusal', () => {
         '--issue',
         '1',
         '--worktree',
-        '/repo/linked',
+        resolve('/repo/linked'),
         '--mechanical-evidence',
         '--preserve-dir',
-        '/tmp/x',
+        resolve('/tmp/x'),
       ]),
     /--preserve-dir is refused with --mechanical-evidence/,
   );
   for (const apply of [false, true]) {
     const fixture = evidenceFixture();
     const verdict = runLocalWorktreeRecovery(
-      evidenceArgs({ apply, preserveDir: '/tmp/x' }),
+      evidenceArgs({ apply, preserveDir: resolve('/tmp/x') }),
       fixture.deps,
     );
     assertRefusedBeforeMutation(fixture, verdict, /--preserve-dir is refused/);
@@ -10436,7 +10566,7 @@ test('evidence: missing ports refuse before anything runs', () => {
 });
 
 test('evidence: the flags parse, and their combinations are usage errors', () => {
-  const base = ['--issue', '1', '--worktree', '/repo/linked'];
+  const base = ['--issue', '1', '--worktree', resolve('/repo/linked')];
   const parsed = parseArgs([
     ...base,
     '--mechanical-evidence',
@@ -10501,7 +10631,7 @@ test('evidence: the primary worktree is never in scope', () => {
     evidence: {
       local_worktree: {
         status: 'occupied',
-        paths: ['/repo/primary'],
+        paths: [resolve('/repo/primary')],
         reason: null,
       },
     },
@@ -10511,7 +10641,7 @@ test('evidence: the primary worktree is never in scope', () => {
       routing,
       deps: {
         checkLock: () => ({
-          path: '/repo/primary/.git/idd-claim.lock',
+          path: resolve('/repo/primary/.git/idd-claim.lock'),
           present: true,
           holder: {
             agentId: 'agent-x',
@@ -10522,7 +10652,7 @@ test('evidence: the primary worktree is never in scope', () => {
       },
     });
     const verdict = runLocalWorktreeRecovery(
-      evidenceArgs({ apply, worktree: '/repo/primary' }),
+      evidenceArgs({ apply, worktree: resolve('/repo/primary') }),
       fixture.deps,
     );
     assert.equal(verdict.primaryOrLinked, 'primary');
@@ -10542,7 +10672,7 @@ test('evidence: the primary worktree is never in scope', () => {
   });
   const planned = runLocalWorktreeRecovery(
     baseArgs({
-      worktree: '/repo/primary',
+      worktree: resolve('/repo/primary'),
       operatorConfirmedNoLiveSession: true,
     }),
     operator.deps,
@@ -10577,7 +10707,7 @@ test('evidence: a primary-recovery resume is never in scope', () => {
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -10586,7 +10716,7 @@ test('evidence: a primary-recovery resume is never in scope', () => {
         },
       ],
       checkLock: () => ({
-        path: '/repo/primary/.git/idd-claim.lock',
+        path: resolve('/repo/primary/.git/idd-claim.lock'),
         present: true,
         holder: {
           agentId: 'agent-x',
@@ -10594,7 +10724,7 @@ test('evidence: a primary-recovery resume is never in scope', () => {
           acquiredAt: '2026-09-24T00:00:00Z',
           primaryRecovery: {
             phase: 'primary-checkout',
-            worktree: '/repo/primary',
+            worktree: resolve('/repo/primary'),
             claimId: 'claim-x',
             branch: 'issue/1-task',
             developmentBranch: 'main',
@@ -10607,7 +10737,7 @@ test('evidence: a primary-recovery resume is never in scope', () => {
     },
   });
   const verdict = runLocalWorktreeRecovery(
-    evidenceArgs({ apply: true, worktree: '/repo/primary' }),
+    evidenceArgs({ apply: true, worktree: resolve('/repo/primary') }),
     fixture.deps,
   );
   assert.equal(verdict.step1.outcome, 'blocked-primary-resume');
@@ -10642,7 +10772,7 @@ test('evidence: step 1 not confirming a stale or released claim, or a failing lo
       name: 'a lock held by another claim',
       deps: {
         checkLock: () => ({
-          path: '/repo/linked/.git/idd-claim.lock',
+          path: resolve('/repo/linked/.git/idd-claim.lock'),
           present: true,
           holder: {
             agentId: 'agent-y',
@@ -10657,7 +10787,7 @@ test('evidence: step 1 not confirming a stale or released claim, or a failing lo
       name: 'a malformed lock',
       deps: {
         checkLock: () => ({
-          path: '/repo/linked/.git/idd-claim.lock',
+          path: resolve('/repo/linked/.git/idd-claim.lock'),
           present: true,
           malformed: true,
         }),
@@ -10701,14 +10831,14 @@ test('evidence: a legacy release has no claim ID, so only the attestation procee
     evidence: {
       local_worktree: {
         status: 'occupied',
-        paths: ['/repo/linked'],
+        paths: [resolve('/repo/linked')],
         reason: null,
       },
       released_claim: { claim_id: null, branch: 'issue/1-task' },
     },
   });
   const noLock = {
-    path: '/repo/linked/.git/idd-claim.lock',
+    path: resolve('/repo/linked/.git/idd-claim.lock'),
     present: false,
   };
   const evidence = evidenceFixture({
@@ -10746,7 +10876,7 @@ test('evidence: an explicit-absence routing keeps the attestation path', () => {
   } satisfies ConfirmBlockRouting;
   const records = [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -10754,7 +10884,7 @@ test('evidence: an explicit-absence routing keeps the attestation path', () => {
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -10764,7 +10894,7 @@ test('evidence: an explicit-absence routing keeps the attestation path', () => {
   ];
   const overrides = {
     listWorktreeRecords: () => records,
-    pathExists: (path: string) => path !== '/repo/linked',
+    pathExists: (path: string) => path !== resolve('/repo/linked'),
   };
   const evidence = evidenceFixture({ routing, deps: overrides });
   const refused = runLocalWorktreeRecovery(
@@ -10787,11 +10917,13 @@ test('evidence: an explicit-absence routing keeps the attestation path', () => {
 
 test('evidence: an entry changed within the quiet window refuses', () => {
   const tree = quietTree({
-    '/repo/linked': {
+    [resolve('/repo/linked')]: {
       ...oldEntry({ isDirectory: true }),
       children: ['hot.txt'],
     },
-    '/repo/linked/hot.txt': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 60_000 }),
+    [resolve('/repo/linked/hot.txt')]: oldEntry({
+      mtimeMs: 10 * EVIDENCE_HOUR - 60_000,
+    }),
   });
   for (const apply of [false, true]) {
     const fixture = evidenceFixture({ tree });
@@ -10802,7 +10934,9 @@ test('evidence: an entry changed within the quiet window refuses', () => {
     assertRefusedBeforeMutation(
       fixture,
       verdict,
-      /condition 4 \(quiet-window\).*\/repo\/linked\/hot\.txt changed 60 s ago/,
+      rx(
+        `condition 4 (quiet-window): ${resolve('/repo/linked/hot.txt')} changed 60 s ago`,
+      ),
     );
     assert.deepEqual(fixture.events, []);
   }
@@ -10810,11 +10944,11 @@ test('evidence: an entry changed within the quiet window refuses', () => {
 
 test('evidence: a recent entry in the private git-admin directory refuses', () => {
   const tree = quietTree({
-    '/repo/primary/.git/worktrees/linked': {
+    [resolve('/repo/primary/.git/worktrees/linked')]: {
       ...oldEntry({ isDirectory: true }),
       children: ['index'],
     },
-    '/repo/primary/.git/worktrees/linked/index': oldEntry({
+    [resolve('/repo/primary/.git/worktrees/linked/index')]: oldEntry({
       mtimeMs: 10 * EVIDENCE_HOUR - 1000,
     }),
   });
@@ -10826,15 +10960,18 @@ test('evidence: a recent entry in the private git-admin directory refuses', () =
   assertRefusedBeforeMutation(
     fixture,
     verdict,
-    /condition 4.*worktrees\/linked\/index changed/,
+    rx(`${join('.git', 'worktrees', 'linked', 'index')} changed`),
   );
 });
 
 test('evidence: a time in the future and an unreadable entry refuse', () => {
   const future = evidenceFixture({
     tree: quietTree({
-      '/repo/linked': { ...oldEntry({ isDirectory: true }), children: ['f'] },
-      '/repo/linked/f': oldEntry({ mtimeMs: 11 * EVIDENCE_HOUR }),
+      [resolve('/repo/linked')]: {
+        ...oldEntry({ isDirectory: true }),
+        children: ['f'],
+      },
+      [resolve('/repo/linked/f')]: oldEntry({ mtimeMs: 11 * EVIDENCE_HOUR }),
     }),
   });
   assertRefusedBeforeMutation(
@@ -10844,7 +10981,7 @@ test('evidence: a time in the future and an unreadable entry refuse', () => {
   );
   const unreadable = evidenceFixture({
     tree: quietTree({
-      '/repo/linked': {
+      [resolve('/repo/linked')]: {
         ...oldEntry({ isDirectory: true }),
         children: ['gone'],
       },
@@ -10860,11 +10997,11 @@ test('evidence: a time in the future and an unreadable entry refuse', () => {
 test('evidence: a multiply linked file with a recent change time does not refuse', () => {
   const fixture = evidenceFixture({
     tree: quietTree({
-      '/repo/linked': {
+      [resolve('/repo/linked')]: {
         ...oldEntry({ isDirectory: true }),
         children: ['store'],
       },
-      '/repo/linked/store': oldEntry({
+      [resolve('/repo/linked/store')]: oldEntry({
         nlink: 4,
         ctimeMs: 10 * EVIDENCE_HOUR - 1000,
       }),
@@ -10879,8 +11016,13 @@ test('evidence: a multiply linked file with a recent change time does not refuse
 
 test('evidence: the quiet window uses its own clock, never the helper clock or --now', () => {
   const tree = quietTree({
-    '/repo/linked': { ...oldEntry({ isDirectory: true }), children: ['f'] },
-    '/repo/linked/f': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 60_000 }),
+    [resolve('/repo/linked')]: {
+      ...oldEntry({ isDirectory: true }),
+      children: ['f'],
+    },
+    [resolve('/repo/linked/f')]: oldEntry({
+      mtimeMs: 10 * EVIDENCE_HOUR - 60_000,
+    }),
   });
   const fixture = evidenceFixture({
     tree,
@@ -10898,7 +11040,10 @@ test('evidence: the quiet window uses its own clock, never the helper clock or -
 test('evidence: a process working directory inside the worktree refuses', () => {
   for (const apply of [false, true]) {
     const fixture = evidenceFixture({
-      procs: { '10': '/elsewhere', '4242': '/repo/linked/src' },
+      procs: {
+        '10': resolve('/elsewhere'),
+        '4242': resolve('/repo/linked/src'),
+      },
     });
     const verdict = runLocalWorktreeRecovery(
       evidenceArgs({ apply }),
@@ -10907,7 +11052,9 @@ test('evidence: a process working directory inside the worktree refuses', () => 
     assertRefusedBeforeMutation(
       fixture,
       verdict,
-      /condition 5 \(no-process-cwd\).*process 4242 has its working directory at \/repo\/linked\/src/,
+      rx(
+        `condition 5 (no-process-cwd): process 4242 has its working directory at ${resolve('/repo/linked/src')}`,
+      ),
     );
     assert.deepEqual(fixture.events, []);
   }
@@ -10915,7 +11062,7 @@ test('evidence: a process working directory inside the worktree refuses', () => 
 
 test('evidence: a process that denies its /proc read is listed and does not refuse', () => {
   const fixture = evidenceFixture({
-    procs: { '10': { code: 'EACCES' }, '11': '/elsewhere' },
+    procs: { '10': { code: 'EACCES' }, '11': resolve('/elsewhere') },
   });
   const verdict = runLocalWorktreeRecovery(
     evidenceArgs({ apply: true }),
@@ -10936,7 +11083,7 @@ test('evidence: another working-directory read error, or a platform without /pro
     /condition 5.*EIO/,
   );
   const platform = evidenceFixture({
-    ports: { proc: procPortsOf({ '1': '/elsewhere' }, 'darwin') },
+    ports: { proc: procPortsOf({ '1': resolve('/elsewhere') }, 'darwin') },
   });
   assertRefusedBeforeMutation(
     platform,
@@ -10985,7 +11132,7 @@ test('evidence: a missing, closed, unlabeled, held, or mismatched record refuses
     {
       name: 'another subject',
       read: evidenceRead({
-        records: [evidenceRecord({ subject: '/repo/other' })],
+        records: [evidenceRecord({ subject: resolve('/repo/other') })],
       }),
       pattern: /matches no record/,
     },
@@ -11051,7 +11198,7 @@ test('evidence: a missing, closed, unlabeled, held, or mismatched record refuses
 test('evidence: the record subject is the canonical path of the target, parent resolved', () => {
   // The target's parent is a link: the real parent is /real/repo.
   const realpathOrNull = (path: string): string | null =>
-    path === '/repo' ? '/real/repo' : path;
+    path === resolve('/repo') ? resolve('/real/repo') : path;
   const withSubject = (subject: string) =>
     evidenceFixture({
       deps: { realpathOrNull },
@@ -11060,14 +11207,17 @@ test('evidence: the record subject is the canonical path of the target, parent r
           evidenceRead({ records: [evidenceRecord({ subject })] }),
       },
     });
-  const matching = withSubject('/real/repo/linked');
+  const matching = withSubject(resolve('/real/repo/linked'));
   const met = runLocalWorktreeRecovery(evidenceArgs(), matching.deps);
   assert.equal(condition(met, 6).status, 'met', condition(met, 6).detail);
   // The path as the operator typed it is not the canonical form.
-  const typed = withSubject('/repo/linked');
+  const typed = withSubject(resolve('/repo/linked'));
   const unmet = runLocalWorktreeRecovery(evidenceArgs(), typed.deps);
   assert.equal(condition(unmet, 6).status, 'unmet');
-  assert.match(condition(unmet, 6).detail, /subject \/real\/repo\/linked/);
+  assert.match(
+    condition(unmet, 6).detail,
+    rx(`subject ${resolve('/real/repo/linked')}`),
+  );
 });
 
 test('evidence: the record is read from the named issue with the trusted label', () => {
@@ -11089,11 +11239,13 @@ test('evidence: the record is read from the named issue with the trusted label',
 test('evidence: conditions that held before the clone lock but not at the recheck refuse before step 3 and create nothing', () => {
   let walks = 0;
   const hot = quietTree({
-    '/repo/linked': {
+    [resolve('/repo/linked')]: {
       ...oldEntry({ isDirectory: true }),
       children: ['late.txt'],
     },
-    '/repo/linked/late.txt': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 1000 }),
+    [resolve('/repo/linked/late.txt')]: oldEntry({
+      mtimeMs: 10 * EVIDENCE_HOUR - 1000,
+    }),
   });
   const quiet = quietTree();
   const fixture = evidenceFixture({
@@ -11102,7 +11254,7 @@ test('evidence: conditions that held before the clone lock but not at the rechec
         lstat: (path) => {
           // The first evaluation sees the quiet tree; the recheck, under the
           // clone lock, sees a write that landed in between.
-          if (path === '/repo/linked') walks += 1;
+          if (path === resolve('/repo/linked')) walks += 1;
           const tree = walks >= 2 ? hot : quiet;
           const entry = tree[path];
           if (entry === undefined) {
@@ -11140,7 +11292,8 @@ test('evidence: a process that appears under the clone lock refuses before step 
           reads += 1;
           return ['7'];
         },
-        readCwd: () => (reads >= 2 ? '/repo/linked/src' : '/elsewhere'),
+        readCwd: () =>
+          reads >= 2 ? resolve('/repo/linked/src') : resolve('/elsewhere'),
         ownerUid: () => 1000,
         currentUid: 1000,
         realpath: (path) => path,
@@ -11239,7 +11392,7 @@ test('evidence: an unsafe state root refuses in a dry run and before the clone l
   for (const apply of [false, true]) {
     const fixture = evidenceFixture({
       state: {
-        privacy: (path) => (path === '/state' ? 'unsafe' : 'private'),
+        privacy: (path) => (path === resolve('/state') ? 'unsafe' : 'private'),
       },
     });
     const verdict = runLocalWorktreeRecovery(
@@ -11293,10 +11446,13 @@ test('evidence: a state root that is missing refuses', () => {
 
 test('evidence: a destination inside the target, the primary worktree, or the Git common directory refuses', () => {
   for (const [stateRoot, label] of [
-    ['/repo/linked/state', 'target'],
-    ['/repo/primary/state', 'primary worktree'],
-    ['/repo/primary/.git/state', 'Git common directory'],
-    ['/repo/primary/.git/worktrees/linked/state', 'target admin directory'],
+    [resolve('/repo/linked/state'), 'target'],
+    [resolve('/repo/primary/state'), 'primary worktree'],
+    [resolve('/repo/primary/.git/state'), 'Git common directory'],
+    [
+      resolve('/repo/primary/.git/worktrees/linked/state'),
+      'target admin directory',
+    ],
   ] as const) {
     const fixture = evidenceFixture({ state: { stateRoot } });
     const verdict = runLocalWorktreeRecovery(
@@ -11329,7 +11485,7 @@ test('evidence: a created destination that fails the privacy check stops before 
   assert.match(
     verdict.result,
     new RegExp(
-      `${EVIDENCE_DESTINATION.replaceAll('/', '\\/')} was not prepared:.*not owned and private; it stays in place and nothing is written into it; the creation step had already changed: created \\/state\\/idd-skill, created \\/state\\/idd-skill\\/lwr-preserved; step 3 did not start`,
+      `${escText(resolve(EVIDENCE_DESTINATION))} was not prepared:.*not owned and private; it stays in place and nothing is written into it; the creation step had already changed: created ${escText(resolve('/state/idd-skill'))}, created ${escText(resolve('/state/idd-skill/lwr-preserved'))}; step 3 did not start`,
     ),
   );
   assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
@@ -11382,7 +11538,7 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
       evidence: {
         local_worktree: {
           status: 'unreadable',
-          paths: ['/repo/linked'],
+          paths: [resolve('/repo/linked')],
           reason: 'prunable',
         },
       },
@@ -11390,7 +11546,7 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
     ports: {
       walk: walkPortsOf(
         {
-          '/repo/primary/.git/worktrees/linked': oldEntry({
+          [resolve('/repo/primary/.git/worktrees/linked')]: oldEntry({
             isDirectory: true,
           }),
         },
@@ -11400,7 +11556,7 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -11408,7 +11564,7 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
           prunable: false,
         },
         {
-          path: '/repo/linked',
+          path: resolve('/repo/linked'),
           branchRef: 'refs/heads/issue/1-task',
           detached: false,
           bare: false,
@@ -11416,15 +11572,15 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
           prunable: true,
         },
       ],
-      pathExists: (path) => path !== '/repo/linked',
+      pathExists: (path) => path !== resolve('/repo/linked'),
       findWorktreeAdminDir: () => ({
-        path: '/repo/primary/.git/worktrees/linked',
+        path: resolve('/repo/primary/.git/worktrees/linked'),
         error: null,
       }),
       // The lock check is skipped for the shortcut, so even a missing lock
       // does not stop it.
       checkLock: () => ({
-        path: '/repo/linked/.git/idd-claim.lock',
+        path: resolve('/repo/linked/.git/idd-claim.lock'),
         present: false,
       }),
     },
@@ -11437,17 +11593,19 @@ test('evidence: the prunable shortcut through an unreadable reason walks only th
   assert.equal(verdict.plan.removal?.ran, true, verdict.result);
   assert.deepEqual(
     [...new Set(calls)],
-    ['lstat:/repo/primary/.git/worktrees/linked'],
+    [`lstat:${resolve('/repo/primary/.git/worktrees/linked')}`],
     'the vanished worktree itself is never walked',
   );
   assert.equal(verdict.evidence?.met, true);
   assert.equal(
     verdict.plan.prunableAdminCopy?.plannedTo,
-    `${EVIDENCE_DESTINATION}/prunable-gitdir`,
+    join(resolve(EVIDENCE_DESTINATION), 'prunable-gitdir'),
   );
   assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
   assert.ok(
-    fixture.mutations.includes('copy:/repo/primary/.git/worktrees/linked'),
+    fixture.mutations.includes(
+      `copy:${resolve('/repo/primary/.git/worktrees/linked')}`,
+    ),
   );
 });
 
@@ -11461,14 +11619,14 @@ test('evidence: the prunable shortcut refuses when its admin directory changed w
       evidence: {
         local_worktree: {
           status: 'unreadable',
-          paths: ['/repo/linked'],
+          paths: [resolve('/repo/linked')],
           reason: 'prunable',
         },
       },
     },
     ports: {
       walk: walkPortsOf({
-        '/repo/primary/.git/worktrees/linked': oldEntry({
+        [resolve('/repo/primary/.git/worktrees/linked')]: oldEntry({
           isDirectory: true,
           mtimeMs: 10 * EVIDENCE_HOUR - 1000,
         }),
@@ -11477,7 +11635,7 @@ test('evidence: the prunable shortcut refuses when its admin directory changed w
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -11485,7 +11643,7 @@ test('evidence: the prunable shortcut refuses when its admin directory changed w
           prunable: false,
         },
         {
-          path: '/repo/linked',
+          path: resolve('/repo/linked'),
           branchRef: 'refs/heads/issue/1-task',
           detached: false,
           bare: false,
@@ -11493,9 +11651,9 @@ test('evidence: the prunable shortcut refuses when its admin directory changed w
           prunable: true,
         },
       ],
-      pathExists: (path) => path !== '/repo/linked',
+      pathExists: (path) => path !== resolve('/repo/linked'),
       findWorktreeAdminDir: () => ({
-        path: '/repo/primary/.git/worktrees/linked',
+        path: resolve('/repo/primary/.git/worktrees/linked'),
         error: null,
       }),
     },
@@ -11517,7 +11675,7 @@ test('evidence: an admin directory that cannot be located refuses the shortcut',
       evidence: {
         local_worktree: {
           status: 'unreadable',
-          paths: ['/repo/linked'],
+          paths: [resolve('/repo/linked')],
           reason: 'prunable',
         },
       },
@@ -11525,7 +11683,7 @@ test('evidence: an admin directory that cannot be located refuses the shortcut',
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -11533,7 +11691,7 @@ test('evidence: an admin directory that cannot be located refuses the shortcut',
           prunable: false,
         },
         {
-          path: '/repo/linked',
+          path: resolve('/repo/linked'),
           branchRef: 'refs/heads/issue/1-task',
           detached: false,
           bare: false,
@@ -11541,7 +11699,7 @@ test('evidence: an admin directory that cannot be located refuses the shortcut',
           prunable: true,
         },
       ],
-      pathExists: (path) => path !== '/repo/linked',
+      pathExists: (path) => path !== resolve('/repo/linked'),
       findWorktreeAdminDir: () => ({ path: null, error: 'no pointer matched' }),
     },
   });
@@ -11706,7 +11864,7 @@ function realEvidenceSandbox(issue: number): RealEvidenceRun {
           ],
         }),
       nowMs: () => options.nowMs ?? Date.now(),
-      proc: options.procs ?? procPortsOf({ '1': '/elsewhere' }),
+      proc: options.procs ?? procPortsOf({ '1': resolve('/elsewhere') }),
       // The destination name carries the time to the second, so each run's
       // clock names its own directory.
       guards: {
@@ -11844,7 +12002,7 @@ test('sandbox evidence: every condition holds, so the worktree is stashed, remov
       ['worktree', 'list', '--porcelain'],
       { cwd: fixture.sandbox.primary, encoding: 'utf8' },
     );
-    assert.ok(!worktreeList.includes(fixture.sandbox.linked));
+    assert.ok(!gitPath(worktreeList).includes(gitPath(fixture.sandbox.linked)));
   } finally {
     fixture.sandbox.cleanup();
   }
@@ -12027,7 +12185,7 @@ test('sandbox evidence: a dry run through the CLI changes no entry the quiet-win
 test('evidence: a routing read that loses the basis stops the run before removal, whichever read it is', () => {
   const shortcutRecords = [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -12035,7 +12193,7 @@ test('evidence: a routing read that loses the basis stops the run before removal
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -12059,16 +12217,16 @@ test('evidence: a routing read that loses the basis stops the run before removal
         evidence: {
           local_worktree: {
             status: 'unreadable',
-            paths: ['/repo/linked'],
+            paths: [resolve('/repo/linked')],
             reason: 'prunable',
           },
         },
       },
       deps: {
         listWorktreeRecords: () => shortcutRecords,
-        pathExists: (path) => path !== '/repo/linked',
+        pathExists: (path) => path !== resolve('/repo/linked'),
         findWorktreeAdminDir: () => ({
-          path: '/repo/primary/.git/worktrees/linked',
+          path: resolve('/repo/primary/.git/worktrees/linked'),
           error: null,
         }),
       },
@@ -12171,7 +12329,7 @@ test('sandbox evidence: the CLI refuses --mechanical-evidence while GH_REPO is s
 
 test('evidence: a process inside the private git-admin directory is outside condition 5', () => {
   const fixture = evidenceFixture({
-    procs: { '7': '/repo/primary/.git/worktrees/linked/sub' },
+    procs: { '7': resolve('/repo/primary/.git/worktrees/linked/sub') },
   });
   const verdict = runLocalWorktreeRecovery(
     evidenceArgs({ apply: true }),
@@ -12191,16 +12349,16 @@ test('evidence: for the prunable shortcut the process check covers the admin dir
       evidence: {
         local_worktree: {
           status: 'unreadable',
-          paths: ['/repo/linked'],
+          paths: [resolve('/repo/linked')],
           reason: 'prunable',
         },
       },
     },
-    procs: { '7': '/repo/primary/.git/worktrees/linked/sub' },
+    procs: { '7': resolve('/repo/primary/.git/worktrees/linked/sub') },
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -12208,7 +12366,7 @@ test('evidence: for the prunable shortcut the process check covers the admin dir
           prunable: false,
         },
         {
-          path: '/repo/linked',
+          path: resolve('/repo/linked'),
           branchRef: 'refs/heads/issue/1-task',
           detached: false,
           bare: false,
@@ -12216,9 +12374,9 @@ test('evidence: for the prunable shortcut the process check covers the admin dir
           prunable: true,
         },
       ],
-      pathExists: (path) => path !== '/repo/linked',
+      pathExists: (path) => path !== resolve('/repo/linked'),
       findWorktreeAdminDir: () => ({
-        path: '/repo/primary/.git/worktrees/linked',
+        path: resolve('/repo/primary/.git/worktrees/linked'),
         error: null,
       }),
     },
@@ -12234,7 +12392,7 @@ test('evidence: a process of another user inside the worktree does not refuse', 
   const fixture = evidenceFixture({
     ports: {
       proc: {
-        ...procPortsOf({ '7': '/repo/linked/src' }),
+        ...procPortsOf({ '7': resolve('/repo/linked/src') }),
         ownerUid: () => 2000,
       },
     },
@@ -12301,7 +12459,7 @@ test('evidence: a decision voided while the clone lock is awaited refuses before
 
 const SHORTCUT_RECORDS = [
   {
-    path: '/repo/primary',
+    path: resolve('/repo/primary'),
     branchRef: 'refs/heads/main',
     detached: false,
     bare: false,
@@ -12309,7 +12467,7 @@ const SHORTCUT_RECORDS = [
     prunable: false,
   },
   {
-    path: '/repo/linked',
+    path: resolve('/repo/linked'),
     branchRef: 'refs/heads/issue/1-task',
     detached: false,
     bare: false,
@@ -12329,7 +12487,7 @@ function shortcutRouting(
     evidence: {
       local_worktree: {
         status: 'unreadable',
-        paths: ['/repo/linked'],
+        paths: [resolve('/repo/linked')],
         reason: 'prunable',
       },
     },
@@ -12342,7 +12500,7 @@ test('evidence: the prunable shortcut without an admin-directory locator refuses
     routing: shortcutRouting(),
     deps: {
       listWorktreeRecords: () => SHORTCUT_RECORDS,
-      pathExists: (path) => path !== '/repo/linked',
+      pathExists: (path) => path !== resolve('/repo/linked'),
       findWorktreeAdminDir: undefined,
     },
   });
@@ -12372,9 +12530,9 @@ test('evidence: routing JSON with no claim ID never passes condition 3', () => {
       routing,
       deps: {
         listWorktreeRecords: () => SHORTCUT_RECORDS,
-        pathExists: (path) => path !== '/repo/linked',
+        pathExists: (path) => path !== resolve('/repo/linked'),
         findWorktreeAdminDir: () => ({
-          path: '/repo/primary/.git/worktrees/linked',
+          path: resolve('/repo/primary/.git/worktrees/linked'),
           error: null,
         }),
       },
@@ -12396,7 +12554,7 @@ test('evidence: the worktree records are read again under the clone lock', () =>
   let listings = 0;
   const base = [
     {
-      path: '/repo/primary',
+      path: resolve('/repo/primary'),
       branchRef: 'refs/heads/main',
       detached: false,
       bare: false,
@@ -12404,7 +12562,7 @@ test('evidence: the worktree records are read again under the clone lock', () =>
       prunable: false,
     },
     {
-      path: '/repo/linked',
+      path: resolve('/repo/linked'),
       branchRef: 'refs/heads/issue/1-task',
       detached: false,
       bare: false,
@@ -12422,7 +12580,7 @@ test('evidence: the worktree records are read again under the clone lock', () =>
           : [
               ...base,
               {
-                path: '/state',
+                path: resolve('/state'),
                 branchRef: 'refs/heads/issue/9-other',
                 detached: false,
                 bare: false,
@@ -12457,7 +12615,7 @@ test('evidence: a worktree list that fails under the clone lock refuses before a
         return listings === 1
           ? [
               {
-                path: '/repo/primary',
+                path: resolve('/repo/primary'),
                 branchRef: 'refs/heads/main',
                 detached: false,
                 bare: false,
@@ -12465,7 +12623,7 @@ test('evidence: a worktree list that fails under the clone lock refuses before a
                 prunable: false,
               },
               {
-                path: '/repo/linked',
+                path: resolve('/repo/linked'),
                 branchRef: 'refs/heads/issue/1-task',
                 detached: false,
                 bare: false,
@@ -12491,7 +12649,7 @@ test('evidence: a registered worktree path that does not exist yet still protect
     deps: {
       listWorktreeRecords: () => [
         {
-          path: '/repo/primary',
+          path: resolve('/repo/primary'),
           branchRef: 'refs/heads/main',
           detached: false,
           bare: false,
@@ -12499,7 +12657,7 @@ test('evidence: a registered worktree path that does not exist yet still protect
           prunable: false,
         },
         {
-          path: '/repo/linked',
+          path: resolve('/repo/linked'),
           branchRef: 'refs/heads/issue/1-task',
           detached: false,
           bare: false,
@@ -12508,7 +12666,7 @@ test('evidence: a registered worktree path that does not exist yet still protect
         },
         // Registered, and absent on disk: the destination lies beneath it.
         {
-          path: '/state/idd-skill',
+          path: resolve('/state/idd-skill'),
           branchRef: 'refs/heads/issue/9-other',
           detached: false,
           bare: false,
@@ -12526,7 +12684,9 @@ test('evidence: a registered worktree path that does not exist yet still protect
     assertRefusedBeforeMutation(
       fixture,
       verdict,
-      /durable preserve destination: the destination .* is inside \/state\/idd-skill/,
+      new RegExp(
+        `durable preserve destination: the destination .* is inside ${escText(resolve('/state/idd-skill'))}`,
+      ),
     );
   }
   assert.equal(fixture.state.made.length, 0);
@@ -12534,7 +12694,7 @@ test('evidence: a registered worktree path that does not exist yet still protect
 
 test('evidence: a creation step that fails after making a parent still reports the run as mutated', () => {
   const fixture = evidenceFixture({
-    state: { mkdirFails: '/state/idd-skill/lwr-preserved' },
+    state: { mkdirFails: resolve('/state/idd-skill/lwr-preserved') },
   });
   const verdict = runLocalWorktreeRecovery(
     evidenceArgs({ apply: true }),
@@ -12544,13 +12704,15 @@ test('evidence: a creation step that fails after making a parent still reports t
   assert.equal(verdict.plan.removal?.ran, false);
   // The first parent was made before the second mkdir failed; the destination
   // itself does not exist.
-  assert.deepEqual(fixture.state.made, ['/state/idd-skill']);
+  assert.deepEqual(fixture.state.made, [resolve('/state/idd-skill')]);
   assert.equal(verdict.mutated, true);
   assert.equal(verdict.preserveDir, null);
   assert.equal(verdict.evidence?.preserveDestination.created, false);
   assert.match(
     verdict.result,
-    /was not prepared: could not prepare .*ENOSPC.*the creation step had already changed: created \/state\/idd-skill; step 3 did not start/,
+    new RegExp(
+      `was not prepared: could not prepare .*ENOSPC.*the creation step had already changed: created ${escText(resolve('/state/idd-skill'))}; step 3 did not start`,
+    ),
   );
   assert.deepEqual(
     fixture.mutations.filter((entry) => !entry.startsWith('mkdir:')),
@@ -12561,11 +12723,11 @@ test('evidence: a creation step that fails after making a parent still reports t
 test('evidence: a creation step that restricts a parent before failing reports it', () => {
   const fixture = evidenceFixture({
     state: {
-      dirs: ['/state/idd-skill'],
+      dirs: [resolve('/state/idd-skill')],
       // The parent lets others in until the creation step restricts it.
       privacy: (path) =>
-        path === '/state/idd-skill' ? 'tightenable' : 'private',
-      mkdirFails: '/state/idd-skill/lwr-preserved',
+        path === resolve('/state/idd-skill') ? 'tightenable' : 'private',
+      mkdirFails: resolve('/state/idd-skill/lwr-preserved'),
     },
   });
   const verdict = runLocalWorktreeRecovery(
@@ -12576,7 +12738,9 @@ test('evidence: a creation step that restricts a parent before failing reports i
   assert.equal(verdict.preserveDir, null);
   assert.match(
     verdict.result,
-    /the creation step had already changed: restricted \/state\/idd-skill to its owner/,
+    new RegExp(
+      `the creation step had already changed: restricted ${escText(resolve('/state/idd-skill'))} to its owner`,
+    ),
   );
 });
 
@@ -12588,7 +12752,7 @@ test('evidence: a claim lock that stops matching under the clone lock turns cond
         locks += 1;
         // Step 1 sees the recovered claim's lock; the recheck sees another.
         return {
-          path: '/repo/linked/.git/idd-claim.lock',
+          path: resolve('/repo/linked/.git/idd-claim.lock'),
           present: true,
           holder: {
             agentId: 'agent-x',
@@ -13096,10 +13260,14 @@ function fakeCleanDeps(
             )
           : null;
         const listed = [...stage.present]
-          .filter((path) => path.startsWith(`${cwd}/`))
-          .map((path) => path.slice(cwd.length + 1))
+          .map((path) => relative(cwd, path))
+          .filter(
+            (path) =>
+              path !== '' && !path.startsWith('..') && !isAbsolute(path),
+          )
+          .map((path) => path.split(sep).join('/'))
           .filter((path) => specs === null || specs.has(path))
-          .filter((path) => !stage.notIgnored.has(`${cwd}/${path}`));
+          .filter((path) => !stage.notIgnored.has(join(cwd, path)));
         return {
           ok: true,
           status: 0,
@@ -13112,7 +13280,7 @@ function fakeCleanDeps(
         const injected = stage.onClean(argv, stage);
         if (injected !== null) return injected;
         for (const spec of argv.slice(argv.indexOf('--') + 1)) {
-          stage.present.delete(`${cwd}/${spec.replace(':(literal)', '')}`);
+          stage.present.delete(join(cwd, spec.replace(':(literal)', '')));
         }
         return { ok: true, status: 0, stdout: '', stderr: '' };
       }
@@ -13156,7 +13324,7 @@ function sixPathStage(): {
   entries: IgnoredFileEntry[];
 } {
   return {
-    stage: fakeCleanStage(SIX_PATHS.map((path) => `/t/${path}`)),
+    stage: fakeCleanStage(SIX_PATHS.map((path) => join(resolve('/t'), path))),
     entries: SIX_PATHS.map((path) => fakeEntry('.', path)),
   };
 }
@@ -13205,11 +13373,11 @@ test('splitPreservedCleanPaths charges UTF-8 bytes, not characters', () => {
 });
 
 test('every scope is checked before the first clean, so a later scope failure removes nothing', () => {
-  const stage = fakeCleanStage(['/t/a', '/t/sub/b']);
-  stage.notIgnored.add('/t/sub/b');
+  const stage = fakeCleanStage([resolve('/t/a'), resolve('/t/sub/b')]);
+  stage.notIgnored.add(resolve('/t/sub/b'));
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     [fakeEntry('.', 'a'), fakeEntry('sub', 'b')],
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
   );
   assert.equal(
@@ -13217,15 +13385,15 @@ test('every scope is checked before the first clean, so a later scope failure re
     'preserved ignored path sub/b changed status before cleanup',
   );
   assert.deepEqual(stage.cleanRuns, []);
-  assert.equal(stage.present.has('/t/a'), true);
+  assert.equal(stage.present.has(resolve('/t/a')), true);
 });
 
 test('a preserved path that names the scope root is refused before any git call', () => {
-  const stage = fakeCleanStage(['/t/a']);
+  const stage = fakeCleanStage([resolve('/t/a')]);
   for (const path of ['.', './']) {
     const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       [fakeEntry('.', 'a'), fakeEntry('.', path)],
-      '/t',
+      resolve('/t'),
       fakeCleanDeps(stage),
     );
     assert.equal(error, `ignored path ./${path} is unsafe`);
@@ -13238,7 +13406,7 @@ test('each batch is rechecked with its own pathspecs and cleaned with only those
   const { stage, entries } = sixPathStage();
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13266,11 +13434,11 @@ test('each batch is rechecked with its own pathspecs and cleaned with only those
 test('a failed first-batch recheck returns the plain hold string and starts no clean', () => {
   const { stage, entries } = sixPathStage();
   stage.onBatchStatus = (current) => {
-    current.notIgnored.add('/t/p1');
+    current.notIgnored.add(resolve('/t/p1'));
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13287,12 +13455,12 @@ test('a path changed between batches names the removed and the still-present pat
   // p1..p4 are already preserved and cleaned when p5 changes under batch 3.
   stage.onClean = (_argv, current) => {
     if (current.cleanRuns.length === 2)
-      current.fingerprints.set('/t/p5', 'changed');
+      current.fingerprints.set(resolve('/t/p5'), 'changed');
     return null;
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13301,19 +13469,22 @@ test('a path changed between batches names the removed and the still-present pat
     `preserved ignored path ./p5 changed contents or identity before cleanup; removed so far: ${JSON.stringify(['./p1', './p2', './p3', './p4'])}; still present: ${JSON.stringify(['./p5', './p6'])}`,
   );
   assert.equal(stage.cleanRuns.length, 2, 'the changed batch is never cleaned');
-  assert.deepEqual([...stage.present].sort(), ['/t/p5', '/t/p6']);
+  assert.deepEqual([...stage.present].sort(), [
+    resolve('/t/p5'),
+    resolve('/t/p6'),
+  ]);
 });
 
 test('a path already absent before the run is not reported as removed', () => {
-  const stage = fakeCleanStage(['/t/p2', '/t/p3']);
+  const stage = fakeCleanStage([resolve('/t/p2'), resolve('/t/p3')]);
   stage.onClean = (_argv, current) => {
     if (current.cleanRuns.length === 1)
-      current.fingerprints.set('/t/p3', 'changed');
+      current.fingerprints.set(resolve('/t/p3'), 'changed');
     return null;
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     ['p1', 'p2', 'p3'].map((path) => fakeEntry('.', path)),
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13326,7 +13497,7 @@ test('a path already absent before the run is not reported as removed', () => {
 test('git clean returning not ok after removing some paths names both sets', () => {
   const { stage, entries } = sixPathStage();
   stage.onClean = (argv, current) => {
-    current.present.delete('/t/p1');
+    current.present.delete(resolve('/t/p1'));
     return {
       ok: false,
       status: 1,
@@ -13336,7 +13507,7 @@ test('git clean returning not ok after removing some paths names both sets', () 
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13350,7 +13521,7 @@ test('git clean returning not ok after removing some paths names both sets', () 
 test('a spawn that fails without a status is not assumed to have changed nothing', () => {
   const { stage, entries } = sixPathStage();
   stage.onClean = (_argv, current) => {
-    current.present.delete('/t/p1');
+    current.present.delete(resolve('/t/p1'));
     return {
       ok: false,
       status: null,
@@ -13360,7 +13531,7 @@ test('a spawn that fails without a status is not assumed to have changed nothing
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13378,12 +13549,15 @@ test('git clean returning ok with paths remaining names every remaining path', (
     if (current.cleanRuns.length === 2)
       return { ok: true, status: 0, stdout: '', stderr: '' };
     for (const spec of argv.slice(3))
-      current.present.delete(`/t/${spec.replace(':(literal)', '')}`);
+      current.present.delete(
+        join(resolve('/t'), spec.replace(':(literal)', '')),
+      );
+
     return { ok: true, status: 0, stdout: '', stderr: '' };
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13396,12 +13570,12 @@ test('git clean returning ok with paths remaining names every remaining path', (
 
 test('a later run treats already-removed preserved paths as safe and rechecks the rest', () => {
   const { stage, entries } = sixPathStage();
-  stage.present.delete('/t/p1');
-  stage.present.delete('/t/p2');
-  stage.fingerprints.set('/t/p4', 'changed');
+  stage.present.delete(resolve('/t/p1'));
+  stage.present.delete(resolve('/t/p2'));
+  stage.fingerprints.set(resolve('/t/p4'), 'changed');
   const first = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13410,10 +13584,10 @@ test('a later run treats already-removed preserved paths as safe and rechecks th
     'preserved ignored path ./p4 changed contents or identity before cleanup',
   );
   assert.deepEqual(stage.cleanRuns, []);
-  stage.fingerprints.delete('/t/p4');
+  stage.fingerprints.delete(resolve('/t/p4'));
   const second = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13556,15 +13730,15 @@ test('batched cleanup tolerates a hard link and a symlink target removed by earl
 });
 
 test('a preserved path recreated after pass 1 is refused before its batch is cleaned', () => {
-  const stage = fakeCleanStage(['/t/p1', '/t/p2']);
+  const stage = fakeCleanStage([resolve('/t/p1'), resolve('/t/p2')]);
   // p3 is a preserved path that was already absent when pass 1 ran; it shows
   // up again while the first batch is rechecked.
   stage.onBatchStatus = (current) => {
-    current.present.add('/t/p3');
+    current.present.add(resolve('/t/p3'));
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     ['p1', 'p2', 'p3'].map((path) => fakeEntry('.', path)),
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
@@ -13573,20 +13747,20 @@ test('a preserved path recreated after pass 1 is refused before its batch is cle
     `preserved ignored path ./p3 changed contents or identity before cleanup; removed so far: ${JSON.stringify(['./p1', './p2'])}; still present: ${JSON.stringify(['./p3'])}`,
   );
   assert.equal(stage.cleanRuns.length, 1);
-  assert.equal(stage.present.has('/t/p3'), true);
+  assert.equal(stage.present.has(resolve('/t/p3')), true);
 });
 
 test('a path that cannot be read after the clean is not treated as removed', () => {
   const { stage, entries } = sixPathStage();
   stage.onClean = (_argv, current) => {
-    current.present.delete('/t/p1');
+    current.present.delete(resolve('/t/p1'));
     // After a successful clean p2 cannot be inspected (for example EACCES).
-    current.unreadable.add('/t/p2');
+    current.unreadable.add(resolve('/t/p2'));
     return { ok: true, status: 0, stdout: '', stderr: '' };
   };
   const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     entries,
-    '/t',
+    resolve('/t'),
     fakeCleanDeps(stage),
     TWO_PER_BATCH,
   );
