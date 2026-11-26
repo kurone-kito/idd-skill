@@ -949,13 +949,14 @@ for (const operationCase of [
   { kind: 'cherry-pick', marker: 'CHERRY_PICK_HEAD' },
 ] as const) {
   test(`detectInProgressOperation fails closed when ${operationCase.kind} metadata is present but unreadable`, () => {
+    const markerPath = join(resolve('/repo/.git'), operationCase.marker);
     const runGit = (argv: string[]): LocalGitCommandResult => {
       if (argv[0] === 'rev-parse' && argv.includes(operationCase.marker)) {
         if (argv.includes('--git-path')) {
           return {
             ok: true,
             status: 0,
-            stdout: `/repo/.git/${operationCase.marker}\n`,
+            stdout: `${markerPath}\n`,
             stderr: '',
           };
         }
@@ -971,7 +972,7 @@ for (const operationCase of [
       runGit,
       () => false,
       () => null,
-      () => 'unknown',
+      (candidate) => (candidate === markerPath ? 'unknown' : 'absent'),
     );
     assert.deepEqual(result, { kind: operationCase.kind, tipSha: null });
   });
